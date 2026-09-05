@@ -4,7 +4,7 @@
 >
 > 검토일: 2026-09-05 · 기준 프로젝트: PRJ-007 「의부증의 늪」
 >
-> 상태: 자료 분석과 첫 완성본 구현, 합성 범용 사례의 Codex App 생성 흐름 검증 완료. 실제 제작 사례의 시각·낭독 품질 검토가 남아 있음.
+> 상태: 자료 분석·Design·첫 완성본 구현과 자동 검증 완료. 합성 범용 사례 및 PRJ-007 `SEG-008`의 Codex App 컷·이미지·가이드 음성 흐름을 검증했으며, 다른 대표 예외와 전체 분량의 제작 품질 검토가 남아 있음.
 
 ## 1. 결론과 목표
 
@@ -345,9 +345,9 @@ flowchart LR
 | 화면비·스타일 | 아직 확정하지 않음 | 그림 기준과 PDF 프레임 배치 |
 | 사용 환경 | 단일 사용자 로컬 작업 우선 | 저장, API 연결, 향후 공유 기능 |
 
-다음 PDCA 작업은 `$pdca design storyboard-generator`다. 첫 Design 산출물은 **입력 패키지 계약, 컷·트랙 스키마, 대표 3구간의 기대 결과, 수정 화면, 검증 조건**을 포함해야 한다.
+다음 PDCA 작업은 [구현 일치 분석](../../03-analysis/storyboard-generator.analysis.md)의 남은 제작 품질 검토를 계획서 9.3절의 대표 예외로 확대하는 것이다.
 
-PDCA 기록: Plan 문서 작성 완료 → Design 미착수 → Do 미착수 → Check/Act 미착수. 적용한 [pdca 스킬][SKILL]의 `bkit_pdca_plan`, `bkit_complete_phase` MCP 도구는 현재 사용 가능한 도구 목록에 없으므로 호출·상태 등록은 수행하지 않았다. 스킬의 계획 템플릿 구조를 사용했으며 구현 완료율이나 Match Rate는 산정하지 않는다.
+PDCA 상태: Plan·Design·Do·코드 기준 Check/Act 완료. 기능 요구사항 일치 결과와 검증 근거는 분석 문서, 첫 완성본 결과와 남은 제작 검토는 [완료 보고서](../../04-report/storyboard-generator.report.md)에 기록한다. 적용한 [pdca 스킬][SKILL]의 MCP 상태 도구는 현재 사용 가능한 도구 목록에 없어 외부 상태 등록은 수행하지 않았다.
 
 [S01]: </Users/beatlefeed/Documents/ChatGPT/유튜브_V2/PROJECTS/PRJ-007/09_PRODUCTION/broadcast_readable_script.md>
 [S02]: </Users/beatlefeed/Documents/ChatGPT/유튜브_V2/PROJECTS/PRJ-007/09_PRODUCTION/reenactment_character_script.md>

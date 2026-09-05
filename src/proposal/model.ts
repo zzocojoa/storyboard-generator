@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { contractError } from '../domain/errors.js';
 import type { Project, Segment, Shot, StoryboardFrame } from '../domain/schema.js';
-import { PresenceSchema, ProjectSchema } from '../domain/schema.js';
+import { PresenceSchema, ProjectSchema, TransitionSchema } from '../domain/schema.js';
 import { validateProject } from '../domain/validation.js';
 import { assertNoErrors } from '../domain/errors.js';
 
@@ -11,7 +11,7 @@ export const ShotProposalSchema = z.strictObject({
   camera: z.strictObject({ size: z.string().min(1), angle: z.string().min(1), move: z.string().min(1) }),
   presence: z.array(PresenceSchema), propIds: z.array(z.string().min(1)),
   cameraAxis: z.string().min(1).nullable(), screenDirection: z.string().min(1).nullable(),
-  informationIds: z.array(z.string().min(1)), frameDescription: z.string().min(1),
+  informationIds: z.array(z.string().min(1)), transitionOut: TransitionSchema, frameDescription: z.string().min(1),
 });
 export const SegmentProposalSchema = z.strictObject({ shots: z.array(ShotProposalSchema).min(1).max(64) });
 export type SegmentProposal = z.infer<typeof SegmentProposalSchema>;
@@ -46,7 +46,8 @@ export function applySegmentProposal(project: Project, segmentId: string, input:
     return { id: `${proposalId}:shot:${index + 1}`, segmentId, startMs, endMs: startMs + (durations[index] as number),
       sourceUnitIds: [...shot.sourceUnitIds], visualLocationId: shot.visualLocationId, action: shot.action, camera: shot.camera,
       presence: shot.presence, propIds: shot.propIds, continuityBefore: [], continuityAfter: [], cameraAxis: shot.cameraAxis,
-      screenDirection: shot.screenDirection, informationIds: shot.informationIds, proposalOrigin: 'model', approvalStatus: 'proposed', lockedFields: [] };
+      screenDirection: shot.screenDirection, informationIds: shot.informationIds, transitionOut: shot.transitionOut,
+      proposalOrigin: 'model', approvalStatus: 'proposed', lockedFields: [] };
   });
   const frames: StoryboardFrame[] = proposal.shots.map((shot, index): StoryboardFrame => ({ id: `${proposalId}:frame:${index + 1}`,
     shotId: `${proposalId}:shot:${index + 1}`, offsetMs: 0, role: 'start', description: shot.frameDescription, imageAssetId: null, visualReview: 'pending' }));

@@ -100,7 +100,12 @@ export const PresenceSchema = z.strictObject({
   mode: z.enum(['VISIBLE', 'HAND_ONLY', 'SILHOUETTE', 'OFFSCREEN_VOICE', 'VOICE_OVER', 'IMPLIED', 'ARCHIVE_IMAGE']),
 });
 export const ContinuitySchema = z.strictObject({ assetId: IdSchema, state: z.string().min(1) });
-export const LockedFieldSchema = z.enum(['timing', 'sources', 'action', 'camera', 'location', 'presence', 'continuity', 'frames']);
+export const TransitionSchema = z.strictObject({
+  kind: z.enum(['cut', 'dissolve', 'fade', 'wipe', 'match-cut', 'custom']),
+  durationMs: MillisecondsSchema,
+  note: z.string(),
+});
+export const LockedFieldSchema = z.enum(['timing', 'sources', 'action', 'camera', 'location', 'presence', 'continuity', 'transition', 'frames']);
 export const ShotSchema = z.strictObject({
   id: IdSchema, segmentId: IdSchema, startMs: MillisecondsSchema, endMs: MillisecondsSchema,
   sourceUnitIds: z.array(IdSchema), visualLocationId: IdSchema.nullable(), action: z.string(),
@@ -108,10 +113,11 @@ export const ShotSchema = z.strictObject({
   presence: z.array(PresenceSchema), propIds: z.array(IdSchema),
   continuityBefore: z.array(ContinuitySchema), continuityAfter: z.array(ContinuitySchema),
   cameraAxis: z.string().nullable(), screenDirection: z.string().nullable(), informationIds: z.array(IdSchema),
+  transitionOut: TransitionSchema,
   proposalOrigin: z.enum(['manual', 'source-outline', 'model']), approvalStatus: z.enum(['proposed', 'approved']),
   lockedFields: z.array(LockedFieldSchema),
 });
-export const ShotContentSchema = ShotSchema.pick({ action: true, camera: true, visualLocationId: true, presence: true, propIds: true, continuityBefore: true, continuityAfter: true, cameraAxis: true, screenDirection: true, informationIds: true });
+export const ShotContentSchema = ShotSchema.pick({ action: true, camera: true, visualLocationId: true, presence: true, propIds: true, continuityBefore: true, continuityAfter: true, cameraAxis: true, screenDirection: true, informationIds: true, transitionOut: true });
 export const FrameSchema = z.strictObject({
   id: IdSchema, shotId: IdSchema, offsetMs: MillisecondsSchema, role: z.enum(['start', 'end', 'key']),
   description: z.string(), imageAssetId: IdSchema.nullable(), visualReview: z.enum(['pending', 'accepted', 'rejected']),
@@ -137,7 +143,7 @@ export const GenerationSchema = z.strictObject({
   referenceHashes: z.array(HashSchema), resultAssetIds: z.array(IdSchema), shotIds: z.array(IdSchema), createdAt: z.iso.datetime(),
 });
 export const ProjectSchema = z.strictObject({
-  schemaVersion: z.literal('1.0.0'), projectId: IdSchema, title: z.string().min(1), revision: z.number().int().nonnegative(),
+  schemaVersion: z.literal('1.1.0'), projectId: IdSchema, title: z.string().min(1), revision: z.number().int().nonnegative(),
   profile: ProfileSchema,
   handoff: HandoffSchema, sources: z.array(SnapshotSchema), dataset: DatasetSchema, importIssues: z.array(IssueSchema),
   shots: z.array(ShotSchema), frames: z.array(FrameSchema), audioCues: z.array(AudioCueSchema), textCues: z.array(TextCueSchema),
@@ -164,6 +170,7 @@ export type TextPlacement = z.infer<typeof TextPlacementSchema>;
 export type Issue = z.infer<typeof IssueSchema>;
 export type Dataset = z.infer<typeof DatasetSchema>;
 export type NativeDataset = z.infer<typeof NativeDatasetSchema>;
+export type Transition = z.infer<typeof TransitionSchema>;
 export type Shot = z.infer<typeof ShotSchema>;
 export type ShotContent = z.infer<typeof ShotContentSchema>;
 export type LockedField = z.infer<typeof LockedFieldSchema>;

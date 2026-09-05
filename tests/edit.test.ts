@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { approveShot, mergeShots, reorderShots, requireShot, setShotLocks, shotContent, splitShot, updateShotContent } from '../src/domain/edit.js';
-import type { Project } from '../src/domain/schema.js';
+import type { Asset, Project } from '../src/domain/schema.js';
 import { validateProject } from '../src/domain/validation.js';
 import { importPackage } from '../src/importers/import-package.js';
 import { createSourceOutline } from '../src/proposal/outline.js';
@@ -78,5 +78,37 @@ describe('원문 뼈대와 편집', (): void => {
     const shot = requireShot(project, 'shot-1');
     const forged = { ...shotContent(shot), startMs: 100, lockedFields: [] };
     expect(() => updateShotContent(project, shot.id, forged)).toThrow();
+  });
+
+  it('전환을 컷 콘텐츠로 편집하고 분할·병합 경계에서 보존한다', async (): Promise<void> => {
+    const project = await nativeOutline();
+    const shot = requireShot(project, 'shot-2');
+    const transitioned = updateShotContent(project, shot.id, { ...shotContent(shot), transitionOut: { kind: 'dissolve', durationMs: 500, note: '시간 경과' } });
+    const split = splitShot(transitioned, shot.id, 8000, 'transition-shot', 'transition-frame');
+    expect(requireShot(split, shot.id).transitionOut).toEqual({ kind: 'cut', durationMs: 0, note: '' });
+    expect(requireShot(split, 'transition-shot').transitionOut).toEqual({ kind: 'dissolve', durationMs: 500, note: '시간 경과' });
+    const merged = mergeShots(split, shot.id, 'transition-shot');
+    expect(requireShot(merged, shot.id).transitionOut).toEqual({ kind: 'dissolve', durationMs: 500, note: '시간 경과' });
+    expect(() => updateShotContent(project, shot.id, { ...shotContent(shot), transitionOut: { kind: 'cut', durationMs: 100, note: '' } })).toThrowError(expect.objectContaining({ code: 'INVALID_EDIT' }));
+  });
+
+  it('키 프레임 위치에서 분할할 때 그 프레임을 새 컷의 시작으로 재사용한다', async (): Promise<void> => {
+    const project = await nativeOutline();
+    const shot = requireShot(project, 'shot-2');
+    const withBoundary: Project = { ...project, frames: [...project.frames, { id: 'boundary-key', shotId: shot.id, offsetMs: 3000, role: 'key', description: '분할 경계', imageAssetId: null, visualReview: 'pending' }] };
+    const split = splitShot(withBoundary, shot.id, shot.startMs + 3000, 'boundary-shot', 'unused-frame');
+    const starts = split.frames.filter((frame): boolean => frame.shotId === 'boundary-shot' && frame.role === 'start');
+    expect(starts).toEqual([expect.objectContaining({ id: 'boundary-key', offsetMs: 0 })]);
+    expect(split.frames.some((frame): boolean => frame.id === 'unused-frame')).toBe(false);
+  });
+
+  it('인접 컷의 자산 상태가 다르면 연속성 오류로 저장을 거부한다', async (): Promise<void> => {
+    const project = await nativeOutline();
+    const asset: Asset = { id: 'continuity-prop', kind: 'prop', subjectId: null, path: 'assets/continuity.png', mimeType: 'image/png', sha256: '1'.repeat(64), description: '연속성 소품', durationMs: null, version: 1 };
+    const withAsset: Project = { ...project, assets: [asset] };
+    const first = requireShot(withAsset, 'shot-1');
+    const second = requireShot(withAsset, 'shot-2');
+    const outgoing = updateShotContent(withAsset, first.id, { ...shotContent(first), continuityAfter: [{ assetId: asset.id, state: '닫힘' }] });
+    expect(() => updateShotContent(outgoing, second.id, { ...shotContent(requireShot(outgoing, second.id)), continuityBefore: [{ assetId: asset.id, state: '열림' }] })).toThrowError(expect.objectContaining({ code: 'INVALID_EDIT', issues: expect.arrayContaining([expect.objectContaining({ code: 'CONTINUITY_STATE_MISMATCH' })]) }));
   });
 });

@@ -118,7 +118,8 @@ export function applyGeneratedSpeech(
   if (segment === undefined) throw contractError('SEGMENT_NOT_FOUND', `원문의 구간을 찾을 수 없습니다: ${unit.segmentId}`, []);
   const durationMs: number = wavDurationMs(result.bytes);
   const endMs: number = cue.startMs + durationMs;
-  if (endMs > segment.endMs) throw contractError('GENERATED_SPEECH_TOO_LONG', `${cueId}: 생성 음성이 구간 종료를 ${endMs - segment.endMs}ms 초과합니다. 큐 시작점이나 원문 구간을 조정하세요.`, []);
+  const totalEndMs: number = project.dataset.segments.at(-1)?.endMs ?? 0;
+  if (endMs > totalEndMs) throw contractError('GENERATED_SPEECH_TOO_LONG', `${cueId}: 생성 음성이 전체 타임라인 종료를 ${endMs - totalEndMs}ms 초과합니다. 큐 시작점이나 원본 구간을 조정하세요.`, []);
   const assetId: string = `${generationId}:audio`;
   if (project.assets.some((asset: Asset): boolean => asset.id === assetId)) throw contractError('DUPLICATE_ASSET_ID', `자산 ID가 이미 존재합니다: ${assetId}`, []);
   const prior: Asset | undefined = cue.assetId === null ? undefined : project.assets.find((asset: Asset): boolean => asset.id === cue.assetId);

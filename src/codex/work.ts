@@ -39,7 +39,7 @@ export function codexRequestBasis(project: Project, kind: CodexRequestKind, targ
 }
 
 function proposalPrompt(context: SegmentContext): string {
-  return `현재 구간의 원문과 제작 지시만 사용해 촬영 가능한 컷 제안을 작성하세요. sourceUnitIds로 모든 원문 단위를 빠짐없이 한 번 이상 연결하고 원문을 바꾸지 마세요. 미래 정보나 다른 구간의 내용을 넣지 마세요. 결과는 SegmentProposal 스키마에 맞는 JSON이어야 합니다.\n\n${JSON.stringify(context, null, 2)}`;
+  return `현재 구간의 원문과 제작 지시만 사용해 촬영 가능한 컷 제안을 작성하세요. sourceUnitIds로 모든 원문 단위를 빠짐없이 한 번 이상 연결하고 원문을 바꾸지 마세요. 미래 정보나 다른 구간의 내용을 넣지 마세요. 각 컷의 transitionOut을 지정하세요. CUT은 durationMs 0, 그 밖의 전환은 컷 길이 안의 양수 밀리초로 작성하세요. 결과는 SegmentProposal 스키마에 맞는 JSON이어야 합니다.\n\n${JSON.stringify(context, null, 2)}`;
 }
 
 function imagePrompt(context: ImageContext): string {

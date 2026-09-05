@@ -55,7 +55,7 @@ function drawCard(document: PDFKit.PDFDocument, item: FramePageItem, index: numb
   const time: string = `${formatMilliseconds(item.shot.startMs)} – ${formatMilliseconds(item.shot.endMs)}`;
   document.fillColor('#d34b2e').fontSize(8).text(time, x + 228, y + 10, { width: 143 });
   document.fillColor('#101820').fontSize(10).text(item.shot.id, x + 228, y + 28, { width: 143, height: 27, ellipsis: true });
-  document.fillColor('#59636d').fontSize(8).text(`${item.shot.camera.size} · ${item.shot.camera.angle} · ${item.shot.camera.move}`, x + 228, y + 59, { width: 143, height: 31, ellipsis: true });
+  document.fillColor('#59636d').fontSize(8).text(`${item.shot.camera.size} · ${item.shot.camera.angle} · ${item.shot.camera.move}\n${item.shot.transitionOut.kind.toUpperCase()} ${item.shot.transitionOut.durationMs}ms`, x + 228, y + 59, { width: 143, height: 31, ellipsis: true });
   document.fillColor('#101820').fontSize(8.5).text(item.shot.action, x + 228, y + 95, { width: 143, height: 61, ellipsis: true });
   document.moveTo(x + 8, y + 166).lineTo(x + width - 8, y + 166).lineWidth(0.5).strokeColor('#d8dce0').stroke();
   document.fillColor('#59636d').fontSize(7).text('SOURCE', x + 8, y + 174, { width: 50 });

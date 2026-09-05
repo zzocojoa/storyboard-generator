@@ -1,18 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, FormEvent, ReactElement } from 'react';
+import { activeStoryboardFrame } from '../../src/domain/playback.js';
+import type { StoryboardFrameInput } from '../../src/domain/frame.js';
 import type { Asset, AudioCue, LockedField, Profile, Project, Segment, Shot, ShotContent, StoryboardFrame, TextCue } from '../../src/domain/schema.js';
+import type { AudioCueTimingInput, TextCueTimingInput } from '../../src/domain/tracks.js';
 import { fetchProject, fetchStatus, importProject, listProjects, mutateProject, previewSourceUpdate, queueCodexRequest, updateProjectSource } from './api.js';
 import type { AppStatus, CodexRequest, ProjectSummary, SourceImpact } from './api.js';
 
 type Notice = { tone: 'info' | 'error'; text: string };
 type ReferenceDraft = { kind: 'character' | 'location' | 'prop'; subjectId: string; description: string; file: File | null };
 
-const allLockedFields: LockedField[] = ['timing', 'sources', 'action', 'camera', 'location', 'presence', 'continuity', 'frames'];
+const allLockedFields: LockedField[] = ['timing', 'sources', 'action', 'camera', 'location', 'presence', 'continuity', 'transition', 'frames'];
 
 function contentFromShot(shot: Shot): ShotContent {
   return { action: shot.action, camera: { ...shot.camera }, visualLocationId: shot.visualLocationId, presence: [...shot.presence],
     propIds: [...shot.propIds], continuityBefore: [...shot.continuityBefore], continuityAfter: [...shot.continuityAfter],
-    cameraAxis: shot.cameraAxis, screenDirection: shot.screenDirection, informationIds: [...shot.informationIds] };
+    cameraAxis: shot.cameraAxis, screenDirection: shot.screenDirection, informationIds: [...shot.informationIds], transitionOut: { ...shot.transitionOut } };
 }
 
 function readableError(error: unknown): string {
@@ -37,6 +40,24 @@ function aspectRatio(project: Project): string {
 
 function isSpeechCue(cue: AudioCue): boolean {
   return ['dialogue', 'voiceover', 'panel'].includes(cue.kind);
+}
+
+function updateContinuityState(states: ShotContent['continuityBefore'], assetId: string, state: string): ShotContent['continuityBefore'] {
+  if (state.trim() === '') return states.filter((entry): boolean => entry.assetId !== assetId);
+  return states.some((entry): boolean => entry.assetId === assetId)
+    ? states.map((entry) => entry.assetId === assetId ? { ...entry, state } : entry)
+    : [...states, { assetId, state }];
+}
+
+function continuityNotices(left: ShotContent['continuityAfter'], right: ShotContent['continuityBefore'], assets: readonly Asset[]): string[] {
+  const ids: string[] = [...new Set([...left.map((entry): string => entry.assetId), ...right.map((entry): string => entry.assetId)])];
+  return ids.flatMap((id: string): string[] => {
+    const before: string | undefined = left.find((entry): boolean => entry.assetId === id)?.state;
+    const after: string | undefined = right.find((entry): boolean => entry.assetId === id)?.state;
+    const label: string = assets.find((asset: Asset): boolean => asset.id === id)?.description ?? id;
+    if (before === after) return [];
+    return [`${label}: ${before ?? '앞 컷 미기록'} → ${after ?? '뒤 컷 미기록'}`];
+  });
 }
 
 async function fileBase64(file: File): Promise<string> {
@@ -131,36 +152,92 @@ function Timeline(props: { project: Project; playhead: number; playing: boolean;
 
 function PlaybackMonitor(props: { project: Project; playhead: number; onClose: () => void }): ReactElement {
   const shot: Shot | undefined = props.project.shots.find((candidate: Shot): boolean => candidate.startMs <= props.playhead && candidate.endMs > props.playhead) ?? props.project.shots.at(-1);
-  const frame: StoryboardFrame | null = shot === undefined ? null : props.project.frames.find((candidate: StoryboardFrame): boolean => candidate.shotId === shot.id && candidate.imageAssetId !== null) ?? props.project.frames.find((candidate: StoryboardFrame): boolean => candidate.shotId === shot.id) ?? null;
+  const frame: StoryboardFrame | null = shot === undefined ? null : activeStoryboardFrame(props.project, shot.id, props.playhead);
+  const shotIndex: number = shot === undefined ? -1 : props.project.shots.findIndex((candidate: Shot): boolean => candidate.id === shot.id);
+  const nextShot: Shot | undefined = shotIndex < 0 ? undefined : props.project.shots[shotIndex + 1];
+  const transitionStart: number = shot === undefined ? 0 : shot.endMs - shot.transitionOut.durationMs;
+  const transitionActive: boolean = shot !== undefined && shot.transitionOut.kind !== 'cut' && shot.transitionOut.durationMs > 0 && props.playhead >= transitionStart && props.playhead < shot.endMs;
+  const transitionProgress: number = transitionActive && shot !== undefined ? (props.playhead - transitionStart) / shot.transitionOut.durationMs : 0;
+  const nextFrame: StoryboardFrame | null = nextShot === undefined ? null : activeStoryboardFrame(props.project, nextShot.id, nextShot.startMs);
+  const currentOpacity: number = transitionActive && shot?.transitionOut.kind !== 'wipe' ? 1 - transitionProgress : 1;
+  const nextOpacity: number = shot?.transitionOut.kind === 'match-cut' ? (transitionProgress >= .5 ? 1 : 0) : transitionProgress;
+  const nextClip: string = shot?.transitionOut.kind === 'wipe' ? `inset(0 ${100 - transitionProgress * 100}% 0 0)` : 'none';
   const cues: TextCue[] = props.project.textCues.filter((cue: TextCue): boolean => cue.startMs <= props.playhead && cue.endMs > props.playhead);
   return <div className="monitor" role="dialog" aria-label="콘티 시간순 재생"><div className="monitor-bar"><span>PROGRAM MONITOR</span><time>{clock(props.playhead)}</time><button onClick={props.onClose}>CLOSE</button></div>
-    <div className="monitor-frame"><FrameImage project={props.project} frame={frame} alt="현재 재생 프레임" />{cues.map((cue: TextCue): ReactElement => <div className="monitor-text" key={cue.id}>{cue.text}</div>)}</div>
-    <div className="monitor-caption"><b>{shot?.id ?? 'END'}</b><span>{shot?.action ?? '재생 종료'}</span></div></div>;
+    <div className="monitor-frame"><div className="monitor-layer" style={{ opacity: currentOpacity }}><FrameImage project={props.project} frame={frame} alt="현재 재생 프레임" /></div>{transitionActive && nextShot !== undefined && shot?.transitionOut.kind !== 'fade' && <div className="monitor-layer next" style={{ opacity: nextOpacity, clipPath: nextClip }}><FrameImage project={props.project} frame={nextFrame} alt="다음 재생 프레임" /></div>}{transitionActive && <span className="transition-indicator">{shot?.transitionOut.kind.toUpperCase()} · {Math.round(transitionProgress * 100)}%</span>}{cues.map((cue: TextCue): ReactElement => <div className="monitor-text" key={cue.id}>{cue.text}</div>)}</div>
+    <div className="monitor-caption"><b>{shot?.id ?? 'END'}</b><span>{shot?.action ?? '재생 종료'}</span><em>{shot === undefined ? '' : `${shot.transitionOut.kind.toUpperCase()} ${shot.transitionOut.durationMs}ms`}</em></div></div>;
+}
+
+function FrameEditor(props: { frame: StoryboardFrame; working: boolean;
+  onEdit: (frameId: string, input: StoryboardFrameInput) => Promise<void>; onReview: (frameId: string, review: StoryboardFrame['visualReview']) => Promise<void>;
+  onGenerate: (frameId: string) => Promise<void>; }): ReactElement {
+  const [draft, setDraft] = useState<StoryboardFrameInput>({ offsetMs: props.frame.offsetMs, role: props.frame.role, description: props.frame.description });
+  useEffect((): void => { setDraft({ offsetMs: props.frame.offsetMs, role: props.frame.role, description: props.frame.description }); }, [props.frame]);
+  return <article className="frame-editor">
+    <header><b>{props.frame.role.toUpperCase()}</b><span>+{props.frame.offsetMs}ms · {props.frame.visualReview.toUpperCase()}</span></header>
+    <div className="pair"><label className="field">ROLE<select disabled={props.frame.role === 'start'} value={draft.role} onChange={(event): void => { setDraft({ ...draft, role: event.target.value as StoryboardFrame['role'] }); }}><option value="start">시작</option><option value="key">키</option><option value="end">끝</option></select></label>
+      <label className="field">OFFSET MS<input type="number" min="0" value={draft.offsetMs} onChange={(event): void => { setDraft({ ...draft, offsetMs: Number(event.target.value) }); }} /></label></div>
+    <label className="field wide">FRAME DESCRIPTION<textarea value={draft.description} onChange={(event): void => { setDraft({ ...draft, description: event.target.value }); }} /></label>
+    <div className="frame-actions"><button disabled={props.working} onClick={(): void => { void props.onEdit(props.frame.id, draft); }}>프레임 저장</button><button disabled={props.working} onClick={(): void => { void props.onGenerate(props.frame.id); }}>{props.frame.imageAssetId === null ? 'CODEX IMAGE' : 'RETAKE'}</button><button disabled={props.working || props.frame.imageAssetId === null} onClick={(): void => { void props.onReview(props.frame.id, 'accepted'); }}>이미지 승인</button><button disabled={props.working || props.frame.imageAssetId === null} onClick={(): void => { void props.onReview(props.frame.id, 'rejected'); }}>재생성 표시</button></div>
+  </article>;
+}
+
+function AudioCueEditor(props: { cue: AudioCue; text: string; working: boolean; disclosure: string;
+  onTiming: (cueId: string, input: AudioCueTimingInput) => Promise<void>; onSpeech: (cueId: string) => Promise<void>; }): ReactElement {
+  const [draft, setDraft] = useState<AudioCueTimingInput>({ startMs: props.cue.startMs, endMs: props.cue.endMs });
+  useEffect((): void => { setDraft({ startMs: props.cue.startMs, endMs: props.cue.endMs }); }, [props.cue]);
+  return <article className="track-editor"><header><b>{props.cue.kind.toUpperCase()}</b><span>{props.cue.timingStatus.toUpperCase()}</span></header><p>{props.text}</p>
+    <div className="pair"><label className="field">START MS<input type="number" min="0" value={draft.startMs} onChange={(event): void => { setDraft({ ...draft, startMs: Number(event.target.value) }); }} /></label><label className="field">END MS<input type="number" min="0" value={draft.endMs} onChange={(event): void => { setDraft({ ...draft, endMs: Number(event.target.value) }); }} /></label></div>
+    <div className="track-actions"><button disabled={props.working} onClick={(): void => { void props.onTiming(props.cue.id, draft); }}>타이밍 저장</button>{isSpeechCue(props.cue) && <button disabled={props.working} title={props.disclosure} onClick={(): void => { void props.onSpeech(props.cue.id); }}>{props.cue.assetId === null ? 'CODEX VOICE' : 'RETAKE'}</button>}</div>
+  </article>;
+}
+
+function TextCueEditor(props: { cue: TextCue; working: boolean; placementEndMs: number | null | undefined;
+  onTiming: (cueId: string, input: TextCueTimingInput) => Promise<void>; }): ReactElement {
+  const [draft, setDraft] = useState<TextCueTimingInput>({ startMs: props.cue.startMs, endMs: props.cue.endMs, kind: props.cue.kind });
+  useEffect((): void => { setDraft({ startMs: props.cue.startMs, endMs: props.cue.endMs, kind: props.cue.kind }); }, [props.cue]);
+  return <article className="track-editor"><header><b>{props.cue.kind.toUpperCase()}</b><span>{props.cue.timingStatus.toUpperCase()}</span></header><p>{props.cue.text}</p>
+    <label className="field">TYPE<select value={draft.kind} onChange={(event): void => { setDraft({ ...draft, kind: event.target.value as TextCue['kind'] }); }}><option value="overlay">오버레이</option><option value="prop-text">화면 속 글자</option><option value="dialogue-subtitle">대사 자막</option></select></label>
+    <div className="pair"><label className="field">START MS<input disabled={props.cue.placementId !== null} type="number" min="0" value={draft.startMs} onChange={(event): void => { setDraft({ ...draft, startMs: Number(event.target.value) }); }} /></label><label className="field">END MS<input disabled={props.placementEndMs !== null && props.placementEndMs !== undefined} type="number" min="0" value={draft.endMs} onChange={(event): void => { setDraft({ ...draft, endMs: Number(event.target.value) }); }} /></label></div>
+    <div className="track-actions"><button disabled={props.working} onClick={(): void => { void props.onTiming(props.cue.id, draft); }}>글자 트랙 저장</button></div>
+  </article>;
 }
 
 function Inspector(props: { project: Project; segment: Segment; shot: Shot | null; draft: ShotContent | null; working: boolean; status: AppStatus | null;
   onDraft: (draft: ShotContent) => void; onSave: () => Promise<void>; onSplit: () => Promise<void>; onMerge: () => Promise<void>;
   onMove: (direction: -1 | 1) => Promise<void>; onLocks: (fields: LockedField[]) => Promise<void>; onApprove: () => Promise<void>;
   onSpeech: (cueId: string) => Promise<void>; onReference: (draft: ReferenceDraft) => Promise<void>;
-  onFrameDescription: (frameId: string, description: string) => Promise<void>; onFrameReview: (frameId: string, review: StoryboardFrame['visualReview']) => Promise<void>;
+  onFrameEdit: (frameId: string, input: StoryboardFrameInput) => Promise<void>; onFrameAdd: (shotId: string, input: StoryboardFrameInput) => Promise<void>;
+  onFrameGenerate: (frameId: string) => Promise<void>; onFrameReview: (frameId: string, review: StoryboardFrame['visualReview']) => Promise<void>;
+  onAudioTiming: (cueId: string, input: AudioCueTimingInput) => Promise<void>; onTextTiming: (cueId: string, input: TextCueTimingInput) => Promise<void>;
   onProfile: (profile: Profile) => Promise<void>; sourceImpact: SourceImpact | null;
   onSourcePreview: (path: string, holdMs: number) => Promise<void>; onSourceApply: (path: string, holdMs: number) => Promise<void>; }): ReactElement {
   const [reference, setReference] = useState<ReferenceDraft>({ kind: 'character', subjectId: '', description: '', file: null });
   const [profileDraft, setProfileDraft] = useState<Profile>(props.project.profile);
-  const [frameDescription, setFrameDescription] = useState<string>('');
   const [sourcePath, setSourcePath] = useState<string>('');
   const [sourceHold, setSourceHold] = useState<string>('2000');
   const shot: Shot | null = props.shot;
   const sourceUnits = shot === null ? [] : props.project.dataset.units.filter((unit): boolean => shot.sourceUnitIds.includes(unit.id));
-  const frame: StoryboardFrame | null = shot === null ? null : props.project.frames.filter((candidate: StoryboardFrame): boolean => candidate.shotId === shot.id).sort((left, right): number => left.offsetMs - right.offsetMs)[0] ?? null;
+  const frames: StoryboardFrame[] = shot === null ? [] : props.project.frames.filter((candidate: StoryboardFrame): boolean => candidate.shotId === shot.id).sort((left, right): number => left.offsetMs - right.offsetMs);
   const audio: AudioCue[] = props.project.audioCues.filter((cue: AudioCue): boolean => {
     const unit = props.project.dataset.units.find((candidate): boolean => candidate.id === cue.unitId);
-    return unit?.segmentId === props.segment.id && isSpeechCue(cue);
+    return unit?.segmentId === props.segment.id;
   });
+  const text: TextCue[] = props.project.textCues.filter((cue: TextCue): boolean => cue.segmentId === props.segment.id);
+  const duration: number = shot === null ? 0 : shot.endMs - shot.startMs;
+  const frameOffsets: Set<number> = new Set(frames.map((frame: StoryboardFrame): number => frame.offsetMs));
+  const keyOffset: number = Math.floor(duration / 2);
+  const continuityAssets: Asset[] = props.project.assets.filter((asset: Asset): boolean => ['character', 'location', 'prop'].includes(asset.kind));
+  const shotIndex: number = shot === null ? -1 : props.project.shots.findIndex((candidate: Shot): boolean => candidate.id === shot.id);
+  const previousShot: Shot | undefined = shotIndex <= 0 ? undefined : props.project.shots[shotIndex - 1];
+  const nextShot: Shot | undefined = shotIndex < 0 ? undefined : props.project.shots[shotIndex + 1];
+  const continuityReview: string[] = props.draft === null ? [] : [
+    ...(previousShot === undefined ? [] : continuityNotices(previousShot.continuityAfter, props.draft.continuityBefore, continuityAssets)),
+    ...(nextShot === undefined ? [] : continuityNotices(props.draft.continuityAfter, nextShot.continuityBefore, continuityAssets)),
+  ];
   const referenceSubjects = reference.kind === 'character' ? props.project.dataset.people : reference.kind === 'location' ? props.project.dataset.locations : [];
   const upload = (event: FormEvent<HTMLFormElement>): void => { event.preventDefault(); void props.onReference(reference); };
   useEffect((): void => { setProfileDraft(props.project.profile); }, [props.project.profile]);
-  useEffect((): void => { setFrameDescription(frame?.description ?? ''); }, [frame]);
   return <aside className="inspector"><div className="column-head"><span>SHOT INSPECTOR</span><b>{shot === null ? '—' : shot.approvalStatus.toUpperCase()}</b></div>
     {shot !== null && props.draft !== null && <div className="inspector-scroll">
       <div className="inspector-title"><span>{shot.id}</span><time>{clock(shot.startMs)} — {clock(shot.endMs)}</time></div>
@@ -171,18 +248,23 @@ function Inspector(props: { project: Project; segment: Segment; shot: Shot | nul
         <label className="field wide">MOVE<input value={props.draft.camera.move} onChange={(event): void => { props.onDraft({ ...props.draft as ShotContent, camera: { ...(props.draft as ShotContent).camera, move: event.target.value } }); }} /></label>
       </div>
       <label className="field wide">VISUAL LOCATION<select value={props.draft.visualLocationId ?? ''} onChange={(event): void => { props.onDraft({ ...props.draft as ShotContent, visualLocationId: event.target.value || null }); }}><option value="">미정</option>{props.project.dataset.locations.map((location): ReactElement => <option key={location.id} value={location.id}>{location.name}</option>)}</select></label>
-      {frame !== null && <section className="frame-edit"><label className="field wide">FRAME DESCRIPTION<textarea value={frameDescription} onChange={(event): void => { setFrameDescription(event.target.value); }} /></label><div><button disabled={props.working} onClick={(): void => { void props.onFrameDescription(frame.id, frameDescription); }}>설명 저장</button><button disabled={props.working || frame.imageAssetId === null} onClick={(): void => { void props.onFrameReview(frame.id, 'accepted'); }}>이미지 승인</button><button disabled={props.working || frame.imageAssetId === null} onClick={(): void => { void props.onFrameReview(frame.id, 'rejected'); }}>재생성 표시</button></div></section>}
+      <section className="inspector-section frame-list"><header>STORYBOARD FRAMES <span>{frames.length}</span></header>{frames.map((frame: StoryboardFrame): ReactElement => <FrameEditor key={frame.id} frame={frame} working={props.working} onEdit={props.onFrameEdit} onReview={props.onFrameReview} onGenerate={props.onFrameGenerate} />)}
+        <div className="frame-add-actions">{keyOffset > 0 && keyOffset < duration && !frameOffsets.has(keyOffset) && <button disabled={props.working} onClick={(): void => { void props.onFrameAdd(shot.id, { offsetMs: keyOffset, role: 'key', description: `${shot.action} 중간 동작` }); }}>＋ 키 프레임</button>}{!frames.some((frame: StoryboardFrame): boolean => frame.role === 'end') && !frameOffsets.has(duration) && <button disabled={props.working} onClick={(): void => { void props.onFrameAdd(shot.id, { offsetMs: duration, role: 'end', description: `${shot.action} 종료 상태` }); }}>＋ 끝 프레임</button>}</div>
+      </section>
       <div className="pair"><label className="field">CAMERA AXIS<input value={props.draft.cameraAxis ?? ''} onChange={(event): void => { props.onDraft({ ...props.draft as ShotContent, cameraAxis: event.target.value || null }); }} /></label><label className="field">DIRECTION<input value={props.draft.screenDirection ?? ''} onChange={(event): void => { props.onDraft({ ...props.draft as ShotContent, screenDirection: event.target.value || null }); }} /></label></div>
+      <section className="inspector-section transition-edit"><header>TRANSITION OUT <span>{props.draft.transitionOut.kind.toUpperCase()}</span></header><div className="pair"><label className="field">TYPE<select value={props.draft.transitionOut.kind} onChange={(event): void => { const kind = event.target.value as ShotContent['transitionOut']['kind']; const currentDuration: number = (props.draft as ShotContent).transitionOut.durationMs; props.onDraft({ ...props.draft as ShotContent, transitionOut: { ...(props.draft as ShotContent).transitionOut, kind, durationMs: kind === 'cut' ? 0 : currentDuration > 0 ? currentDuration : Math.min(500, duration) } }); }}><option value="cut">CUT</option><option value="dissolve">DISSOLVE</option><option value="fade">FADE</option><option value="wipe">WIPE</option><option value="match-cut">MATCH CUT</option><option value="custom">CUSTOM</option></select></label><label className="field">DURATION MS<input disabled={props.draft.transitionOut.kind === 'cut'} type="number" min="0" value={props.draft.transitionOut.durationMs} onChange={(event): void => { props.onDraft({ ...props.draft as ShotContent, transitionOut: { ...(props.draft as ShotContent).transitionOut, durationMs: Number(event.target.value) } }); }} /></label></div><label className="field wide">NOTE<input value={props.draft.transitionOut.note} onChange={(event): void => { props.onDraft({ ...props.draft as ShotContent, transitionOut: { ...(props.draft as ShotContent).transitionOut, note: event.target.value } }); }} /></label></section>
       <section className="inspector-section"><header>ON FRAME <span>{props.draft.presence.length}</span></header>{props.project.dataset.people.map((person): ReactElement => {
         const current = props.draft?.presence.find((presence): boolean => presence.personId === person.id);
         return <div className="presence-row" key={person.id}><label><input type="checkbox" checked={current !== undefined} onChange={(event): void => { const next = event.target.checked ? [...(props.draft as ShotContent).presence, { personId: person.id, mode: 'VISIBLE' as const }] : (props.draft as ShotContent).presence.filter((presence): boolean => presence.personId !== person.id); props.onDraft({ ...props.draft as ShotContent, presence: next }); }} />{person.name}</label>
           {current !== undefined && <select value={current.mode} onChange={(event): void => { props.onDraft({ ...props.draft as ShotContent, presence: (props.draft as ShotContent).presence.map((presence) => presence.personId === person.id ? { ...presence, mode: event.target.value as typeof presence.mode } : presence) }); }}>{['VISIBLE', 'HAND_ONLY', 'SILHOUETTE', 'OFFSCREEN_VOICE', 'VOICE_OVER', 'IMPLIED', 'ARCHIVE_IMAGE'].map((mode: string): ReactElement => <option key={mode}>{mode}</option>)}</select>}</div>;
       })}</section>
       <section className="inspector-section"><header>PROP REFERENCES</header>{props.project.assets.filter((asset: Asset): boolean => asset.kind === 'prop').map((asset: Asset): ReactElement => <label className="check-row" key={asset.id}><input type="checkbox" checked={props.draft?.propIds.includes(asset.id) ?? false} onChange={(event): void => { const propIds: string[] = event.target.checked ? [...(props.draft as ShotContent).propIds, asset.id] : (props.draft as ShotContent).propIds.filter((id: string): boolean => id !== asset.id); props.onDraft({ ...props.draft as ShotContent, propIds }); }} />{asset.description} <small>v{asset.version}</small></label>)}</section>
+      <section className="inspector-section continuity-block"><header>CONTINUITY STATES <span>{continuityReview.length} REVIEW</span></header>{continuityAssets.length === 0 && <p className="empty-note">인물·장소·소품 기준 자산을 등록하면 전후 상태를 기록할 수 있습니다.</p>}{continuityAssets.map((asset: Asset): ReactElement => <article key={asset.id}><b>{asset.description}</b><div className="pair"><label className="field">BEFORE<input value={props.draft?.continuityBefore.find((entry): boolean => entry.assetId === asset.id)?.state ?? ''} onChange={(event): void => { props.onDraft({ ...props.draft as ShotContent, continuityBefore: updateContinuityState((props.draft as ShotContent).continuityBefore, asset.id, event.target.value) }); }} /></label><label className="field">AFTER<input value={props.draft?.continuityAfter.find((entry): boolean => entry.assetId === asset.id)?.state ?? ''} onChange={(event): void => { props.onDraft({ ...props.draft as ShotContent, continuityAfter: updateContinuityState((props.draft as ShotContent).continuityAfter, asset.id, event.target.value) }); }} /></label></div></article>)}{continuityReview.length > 0 && <div className="continuity-review">{continuityReview.map((message: string): ReactElement => <p key={message}>{message}</p>)}</div>}</section>
       <div className="edit-actions"><button className="primary" disabled={props.working} onClick={(): void => { void props.onSave(); }}>컷 저장</button><button disabled={props.working} onClick={(): void => { void props.onSplit(); }}>중간 분할</button><button disabled={props.working} onClick={(): void => { void props.onMerge(); }}>다음 컷과 병합</button><button disabled={props.working} onClick={(): void => { void props.onMove(-1); }}>← 이동</button><button disabled={props.working} onClick={(): void => { void props.onMove(1); }}>이동 →</button></div>
       <div className="approval-actions"><button disabled={props.working} onClick={(): void => { void props.onLocks(shot.lockedFields.length === 0 ? allLockedFields : []); }}>{shot.lockedFields.length === 0 ? '전체 잠금' : '잠금 해제'}</button><button className="approve" disabled={props.working} onClick={(): void => { void props.onApprove(); }}>컷 확정</button></div>
       <section className="inspector-section source-block"><header>SOURCE ANCHORS <span>{sourceUnits.length}</span></header>{sourceUnits.map((unit): ReactElement => <article key={unit.id}><small>{unit.kind} · {unit.speakerId ?? '—'}</small><p>{unit.text}</p></article>)}</section>
-      <section className="inspector-section audio-block"><header>GUIDE AUDIO <span>{audio.filter((cue: AudioCue): boolean => cue.assetId !== null).length}/{audio.length}</span></header><p className="disclosure">{props.status?.aiVoiceDisclosure ?? '가이드 음성은 Codex App 작업에서 생성합니다.'}</p>{audio.map((cue: AudioCue): ReactElement => { const unit = props.project.dataset.units.find((candidate): boolean => candidate.id === cue.unitId); return <article key={cue.id}><div><small>{cue.kind} · {clock(cue.startMs)}</small><p>{unit?.text}</p></div><button disabled={props.working} onClick={(): void => { void props.onSpeech(cue.id); }}>{cue.assetId === null ? 'CODEX VOICE' : 'RETAKE'}</button></article>; })}</section>
+      <section className="inspector-section audio-block"><header>AUDIO TRACK <span>{audio.filter((cue: AudioCue): boolean => cue.assetId !== null).length}/{audio.length}</span></header><p className="disclosure">{props.status?.aiVoiceDisclosure ?? '가이드 음성은 Codex App 작업에서 생성합니다.'}</p>{audio.map((cue: AudioCue): ReactElement => <AudioCueEditor key={cue.id} cue={cue} text={props.project.dataset.units.find((candidate): boolean => candidate.id === cue.unitId)?.text ?? cue.unitId} working={props.working} disclosure={props.status?.aiVoiceDisclosure ?? 'Codex App 가이드 음성'} onTiming={props.onAudioTiming} onSpeech={props.onSpeech} />)}</section>
+      <section className="inspector-section text-block"><header>TEXT TRACK <span>{text.length}</span></header>{text.map((cue: TextCue): ReactElement => <TextCueEditor key={cue.id} cue={cue} working={props.working} placementEndMs={props.project.dataset.textPlacements.find((placement): boolean => placement.id === cue.placementId)?.endMs} onTiming={props.onTextTiming} />)}</section>
       <form className="reference-form" onSubmit={upload}><header>VISUAL REFERENCE</header><select value={reference.kind} onChange={(event): void => { const kind = event.target.value as ReferenceDraft['kind']; setReference({ ...reference, kind, subjectId: '' }); }}><option value="character">인물</option><option value="location">장소</option><option value="prop">소품</option></select>
         {reference.kind !== 'prop' && <select required value={reference.subjectId} onChange={(event): void => { setReference({ ...reference, subjectId: event.target.value }); }}><option value="">대상 선택</option>{referenceSubjects.map((subject): ReactElement => <option key={subject.id} value={subject.id}>{subject.name}</option>)}</select>}
         <input required placeholder="외형·상태 설명" value={reference.description} onChange={(event): void => { setReference({ ...reference, description: event.target.value }); }} />
@@ -367,10 +449,11 @@ export default function App(): ReactElement {
     <div className="welcome"><div className="welcome-number">01</div><div className="eyebrow">SOURCE TO SEQUENCE</div><h1>원문에서<br/><em>촬영 가능한 콘티</em>까지.</h1><p>입력 계약을 검증하고, 컷·그림·가이드 음성·자막을 하나의 시간축에서 편집합니다.</p><ImportPanel working={working} onImport={importHandoff} /></div>{notice !== null && <div className={`notice ${notice.tone}`}>{notice.text}</div>}</main>;
 
   const exportBase: string = `/api/projects/${encodeURIComponent(project.projectId)}`;
+  const providerLabel: string = status === null ? 'Codex App 상태를 불러오는 중입니다.' : `Codex App 대기 ${status.pendingRequests}건, 실패 ${status.failedRequests}건${status.recentFailures.map((failure): string => `, 최근 실패 ${failure.error?.code ?? 'UNKNOWN'}: ${failure.error?.message ?? '오류 설명이 없습니다.'}`).join('')}`;
   return <main className="app-shell">
     <ProjectRail summaries={summaries} currentId={project.projectId} working={working} onSelect={openProject} onImport={importHandoff} />
     <section className="workspace"><header className="topbar"><div><span className="eyebrow">ACTIVE PRODUCTION</span><h1>{project.title}</h1></div><div className="project-facts"><span>REV <b>{project.revision}</b></span><span>{project.profile.aspectWidth}:{project.profile.aspectHeight}</span><span>{project.profile.medium.toUpperCase()}</span></div>
-      <div className="top-actions"><a href={`${exportBase}/export.json`}>JSON</a><a href={`${exportBase}/export.csv`}>CSV</a><a href={`${exportBase}/export.pdf`}>PDF</a><button onClick={(): void => { void refreshWorkspace(); }}>REFRESH</button><span className="provider ready">CODEX APP · {status?.pendingRequests ?? 0} QUEUED</span></div></header>
+      <div className="top-actions"><a href={`${exportBase}/export.json`}>JSON</a><a href={`${exportBase}/export.csv`}>CSV</a><a href={`${exportBase}/export.pdf`}>PDF</a><button onClick={(): void => { void refreshWorkspace(); }}>REFRESH</button><details className={status !== null && status.failedRequests > 0 ? 'provider-status failed' : 'provider-status'}><summary className="provider ready" aria-label={providerLabel}>CODEX APP · {status?.pendingRequests ?? 0} QUEUED · {status?.failedRequests ?? 0} FAILED</summary>{status !== null && status.recentFailures.length > 0 && <div className="failure-list">{status.recentFailures.map((failure): ReactElement => <article key={failure.id}><b>{failure.error?.code ?? 'UNKNOWN'}</b><span>{failure.kind} · {failure.targetId}</span><p>{failure.error?.message ?? '오류 설명이 없습니다.'}</p></article>)}</div>}</details></div></header>
       <div className="edit-grid">{segment !== null && <SceneRail project={project} segmentId={segment.id} onSelect={(id: string): void => { setSegmentId(id); setShotId(''); }} />}
         <section className="board-area">{segment !== null && <><header className="segment-header"><div><span>{segment.mode}</span><h2>{project.dataset.scenes.find((scene): boolean => scene.id === segment.sceneId)?.title}</h2><p>{clock(segment.startMs)} — {clock(segment.endMs)} · {shots.length} CUTS</p></div><button className="propose" disabled={working} onClick={(): void => { void queueGeneration(`/segments/${encodeURIComponent(segment.id)}/propose`); }}>◇ CODEX CUT PROPOSAL</button></header>
           <div className="board-grid">{shots.map((candidate: Shot): ReactElement => <ShotBoard key={candidate.id} project={project} shot={candidate} selected={candidate.id === shot?.id} onSelect={setShotId} busy={working} onGenerate={async (frameId: string): Promise<void> => { await queueGeneration(`/frames/${encodeURIComponent(frameId)}/generate`); }} />)}</div></>}
@@ -381,8 +464,12 @@ export default function App(): ReactElement {
           onMerge={merge} onMove={reorder} onLocks={async (fields: LockedField[]): Promise<void> => { if (shot !== null) await mutate(`/shots/${encodeURIComponent(shot.id)}/locks`, 'POST', { expectedRevision: project.revision, fields }); }}
           onApprove={async (): Promise<void> => { if (shot !== null) await mutate(`/shots/${encodeURIComponent(shot.id)}/approve`, 'POST', { expectedRevision: project.revision }); }}
           onSpeech={async (cueId: string): Promise<void> => { await queueGeneration(`/audio/${encodeURIComponent(cueId)}/generate`); }} onReference={addReference}
-          onFrameDescription={async (frameId: string, description: string): Promise<void> => { await mutate(`/frames/${encodeURIComponent(frameId)}`, 'PATCH', { expectedRevision: project.revision, description }); }}
+          onFrameEdit={async (frameId: string, frame: StoryboardFrameInput): Promise<void> => { await mutate(`/frames/${encodeURIComponent(frameId)}`, 'PATCH', { expectedRevision: project.revision, frame }); }}
+          onFrameAdd={async (targetShotId: string, frame: StoryboardFrameInput): Promise<void> => { await mutate(`/shots/${encodeURIComponent(targetShotId)}/frames`, 'POST', { expectedRevision: project.revision, frame }); }}
+          onFrameGenerate={async (frameId: string): Promise<void> => { await queueGeneration(`/frames/${encodeURIComponent(frameId)}/generate`); }}
           onFrameReview={async (frameId: string, review: StoryboardFrame['visualReview']): Promise<void> => { await mutate(`/frames/${encodeURIComponent(frameId)}/review`, 'POST', { expectedRevision: project.revision, review }); }}
+          onAudioTiming={async (cueId: string, timing: AudioCueTimingInput): Promise<void> => { await mutate(`/audio/${encodeURIComponent(cueId)}`, 'PATCH', { expectedRevision: project.revision, timing }); }}
+          onTextTiming={async (cueId: string, timing: TextCueTimingInput): Promise<void> => { await mutate(`/text/${encodeURIComponent(cueId)}`, 'PATCH', { expectedRevision: project.revision, timing }); }}
           onProfile={async (profile: Profile): Promise<void> => { await mutate('/profile', 'PATCH', { expectedRevision: project.revision, profile }); }} sourceImpact={sourceImpactReport}
           onSourcePreview={inspectSourceUpdate} onSourceApply={applySource} />}
       </div>

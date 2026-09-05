@@ -4,7 +4,7 @@
   "properties": {
     "schemaVersion": {
       "type": "string",
-      "const": "1.0.0"
+      "const": "1.1.0"
     },
     "projectId": {
       "$ref": "#/$defs/__schema0"
@@ -653,6 +653,34 @@
               "$ref": "#/$defs/__schema0"
             }
           },
+          "transitionOut": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "cut",
+                  "dissolve",
+                  "fade",
+                  "wipe",
+                  "match-cut",
+                  "custom"
+                ]
+              },
+              "durationMs": {
+                "$ref": "#/$defs/__schema12"
+              },
+              "note": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "durationMs",
+              "note"
+            ],
+            "additionalProperties": false
+          },
           "proposalOrigin": {
             "type": "string",
             "enum": [
@@ -680,6 +708,7 @@
                 "location",
                 "presence",
                 "continuity",
+                "transition",
                 "frames"
               ]
             }
@@ -701,6 +730,7 @@
           "cameraAxis",
           "screenDirection",
           "informationIds",
+          "transitionOut",
           "proposalOrigin",
           "approvalStatus",
           "lockedFields"

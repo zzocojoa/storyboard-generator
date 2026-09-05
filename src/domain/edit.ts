@@ -5,7 +5,8 @@ import { validateProject } from './validation.js';
 
 export function shotContent(shot: Shot): ShotContent {
   return { action: shot.action, camera: shot.camera, visualLocationId: shot.visualLocationId, presence: shot.presence, propIds: shot.propIds,
-    continuityBefore: shot.continuityBefore, continuityAfter: shot.continuityAfter, cameraAxis: shot.cameraAxis, screenDirection: shot.screenDirection, informationIds: shot.informationIds };
+    continuityBefore: shot.continuityBefore, continuityAfter: shot.continuityAfter, cameraAxis: shot.cameraAxis, screenDirection: shot.screenDirection,
+    informationIds: shot.informationIds, transitionOut: shot.transitionOut };
 }
 
 export function requireShot(project: Project, shotId: string): Shot {
@@ -30,6 +31,7 @@ function changedContentFields(before: Shot, after: ShotContent): LockedField[] {
     { field: 'action', keys: ['action', 'informationIds'] }, { field: 'camera', keys: ['camera', 'cameraAxis', 'screenDirection'] },
     { field: 'location', keys: ['visualLocationId'] }, { field: 'presence', keys: ['presence'] },
     { field: 'continuity', keys: ['propIds', 'continuityBefore', 'continuityAfter'] },
+    { field: 'transition', keys: ['transitionOut'] },
   ];
   return mappings.filter((mapping): boolean => mapping.keys.some((key: keyof ShotContent): boolean => JSON.stringify(before[key]) !== JSON.stringify(after[key]))).map((mapping): LockedField => mapping.field);
 }
@@ -53,22 +55,22 @@ export function setShotLocks(project: Project, shotId: string, fields: readonly 
 
 export function approveShot(project: Project, shotId: string): Project {
   requireShot(project, shotId);
-  const fields: LockedField[] = ['timing', 'sources', 'action', 'camera', 'location', 'presence', 'continuity', 'frames'];
+  const fields: LockedField[] = ['timing', 'sources', 'action', 'camera', 'location', 'presence', 'continuity', 'transition', 'frames'];
   return finishEdit(project, { ...project, shots: project.shots.map((shot: Shot): Shot => shot.id === shotId ? { ...shot, lockedFields: fields, approvalStatus: 'approved' } : shot) });
 }
 
 export function splitShot(project: Project, shotId: string, atMs: number, newShotId: string, newFrameId: string): Project {
   const original: Shot = requireShot(project, shotId);
-  requireUnlocked(original, ['timing', 'sources', 'frames']);
+  requireUnlocked(original, ['timing', 'sources', 'transition', 'frames']);
   if (atMs <= original.startMs || atMs >= original.endMs || !Number.isSafeInteger(atMs)) throw contractError('INVALID_SPLIT_TIME', `${shotId}: 컷 안의 정수 밀리초로 분할 위치를 지정하세요.`, []);
   if (project.shots.some((shot: Shot): boolean => shot.id === newShotId) || project.frames.some((frame: StoryboardFrame): boolean => frame.id === newFrameId)) throw contractError('DUPLICATE_EDIT_ID', '새 컷과 프레임 ID가 이미 존재합니다.', []);
   const offset: number = atMs - original.startMs;
-  const first: Shot = { ...original, endMs: atMs, proposalOrigin: 'manual', approvalStatus: 'proposed' };
+  const first: Shot = { ...original, endMs: atMs, transitionOut: { kind: 'cut', durationMs: 0, note: '' }, proposalOrigin: 'manual', approvalStatus: 'proposed' };
   const second: Shot = { ...original, id: newShotId, startMs: atMs, proposalOrigin: 'manual', approvalStatus: 'proposed' };
   const movedFrames: StoryboardFrame[] = project.frames.map((frame: StoryboardFrame): StoryboardFrame => {
     if (frame.shotId !== shotId) return frame;
     if (frame.offsetMs < offset) return { ...frame, visualReview: 'pending' };
-    return { ...frame, shotId: newShotId, offsetMs: frame.offsetMs - offset, visualReview: 'pending' };
+    return { ...frame, shotId: newShotId, offsetMs: frame.offsetMs - offset, role: frame.offsetMs === offset ? 'start' : frame.role, visualReview: 'pending' };
   });
   const secondStart: StoryboardFrame = { id: newFrameId, shotId: newShotId, offsetMs: 0, role: 'start', description: original.action, imageAssetId: null, visualReview: 'pending' };
   return finishEdit(project, { ...project, shots: project.shots.flatMap((shot: Shot): Shot[] => shot.id === shotId ? [first, second] : [shot]),
@@ -79,8 +81,8 @@ export function splitShot(project: Project, shotId: string, atMs: number, newSho
 export function mergeShots(project: Project, firstId: string, secondId: string): Project {
   const first: Shot = requireShot(project, firstId);
   const second: Shot = requireShot(project, secondId);
-  requireUnlocked(first, ['timing', 'sources', 'action', 'continuity', 'frames']);
-  requireUnlocked(second, ['timing', 'sources', 'action', 'continuity', 'frames']);
+  requireUnlocked(first, ['timing', 'sources', 'action', 'continuity', 'transition', 'frames']);
+  requireUnlocked(second, ['timing', 'sources', 'action', 'continuity', 'transition', 'frames']);
   if (first.segmentId !== second.segmentId || first.endMs !== second.startMs || project.shots.indexOf(second) !== project.shots.indexOf(first) + 1) throw contractError('NON_ADJACENT_MERGE', '같은 구간에서 이웃한 두 컷을 시간순으로 선택하세요.', []);
   for (const field of ['camera', 'visualLocationId', 'presence', 'cameraAxis', 'screenDirection'] as const) {
     if (JSON.stringify(first[field]) !== JSON.stringify(second[field])) throw contractError('MERGE_CONTENT_CONFLICT', `${field}: 두 컷의 연출이 다릅니다. 합칠 연출을 먼저 정하세요.`, []);
@@ -89,15 +91,18 @@ export function mergeShots(project: Project, firstId: string, secondId: string):
   const merged: Shot = { ...first, endMs: second.endMs, action: [...new Set([first.action, second.action])].filter(Boolean).join('\n'),
     sourceUnitIds: project.dataset.units.filter((unit): boolean => first.sourceUnitIds.includes(unit.id) || second.sourceUnitIds.includes(unit.id)).map((unit): string => unit.id),
     propIds: [...new Set([...first.propIds, ...second.propIds])], informationIds: [...new Set([...first.informationIds, ...second.informationIds])],
-    continuityAfter: second.continuityAfter, proposalOrigin: 'manual', approvalStatus: 'proposed', lockedFields: [...new Set([...first.lockedFields, ...second.lockedFields])],
+    continuityAfter: second.continuityAfter, transitionOut: second.transitionOut, proposalOrigin: 'manual', approvalStatus: 'proposed', lockedFields: [...new Set([...first.lockedFields, ...second.lockedFields])],
   };
-  return finishEdit(project, { ...project, shots: project.shots.filter((shot: Shot): boolean => shot.id !== secondId).map((shot: Shot): Shot => shot.id === firstId ? merged : shot),
-    frames: project.frames.map((frame: StoryboardFrame): StoryboardFrame => {
-      if (frame.shotId === firstId) return { ...frame, role: frame.role === 'end' ? 'key' : frame.role, visualReview: 'pending' };
-      if (frame.shotId === secondId) return { ...frame, shotId: firstId, offsetMs: frame.offsetMs + offset, role: frame.role === 'start' ? 'key' : frame.role, visualReview: 'pending' };
-      return frame;
-    }),
+  const boundaryFrame: StoryboardFrame | undefined = project.frames.find((frame: StoryboardFrame): boolean => frame.shotId === firstId && frame.role === 'end')
+    ?? project.frames.find((frame: StoryboardFrame): boolean => frame.shotId === secondId && frame.role === 'start');
+  const frames: StoryboardFrame[] = project.frames.flatMap((frame: StoryboardFrame): StoryboardFrame[] => {
+    if (frame.shotId === firstId && frame.role === 'end') return boundaryFrame?.id === frame.id ? [{ ...frame, role: 'key', visualReview: 'pending' }] : [];
+    if (frame.shotId === firstId) return [{ ...frame, visualReview: 'pending' }];
+    if (frame.shotId === secondId && frame.role === 'start') return boundaryFrame?.id === frame.id ? [{ ...frame, shotId: firstId, offsetMs: offset, role: 'key', visualReview: 'pending' }] : [];
+    if (frame.shotId === secondId) return [{ ...frame, shotId: firstId, offsetMs: frame.offsetMs + offset, visualReview: 'pending' }];
+    return [frame];
   });
+  return finishEdit(project, { ...project, shots: project.shots.filter((shot: Shot): boolean => shot.id !== secondId).map((shot: Shot): Shot => shot.id === firstId ? merged : shot), frames });
 }
 
 export function reorderShots(project: Project, segmentId: string, orderedIds: readonly string[]): Project {

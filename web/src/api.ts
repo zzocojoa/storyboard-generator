@@ -2,8 +2,10 @@ import { z } from 'zod';
 import { ProjectSchema } from '../../src/domain/schema.js';
 import type { Project } from '../../src/domain/schema.js';
 
-const StatusSchema = z.strictObject({ provider: z.literal('codex-app'), pendingRequests: z.number().int().nonnegative(),
-  generationInstruction: z.string(), aiVoiceDisclosure: z.string() });
+const RequestFailureSchema = z.strictObject({ id: z.uuid(), kind: z.enum(['proposal', 'image', 'speech']), targetId: z.string(),
+  error: z.strictObject({ code: z.string(), message: z.string() }).nullable() });
+const StatusSchema = z.strictObject({ provider: z.literal('codex-app'), pendingRequests: z.number().int().nonnegative(), failedRequests: z.number().int().nonnegative(),
+  recentFailures: z.array(RequestFailureSchema), generationInstruction: z.string(), aiVoiceDisclosure: z.string() });
 const SummarySchema = z.strictObject({ projectId: z.string(), title: z.string(), revision: z.number(), durationMs: z.number(), shots: z.number(),
   framesReady: z.number(), framesTotal: z.number(), audioReady: z.number(), audioTotal: z.number(), issues: z.number(), updatedAt: z.string() });
 const CodexRequestSchema = z.strictObject({ id: z.uuid(), kind: z.enum(['proposal', 'image', 'speech']), projectId: z.string(), targetId: z.string(),

@@ -1,7 +1,10 @@
 import { assertNoErrors, contractError } from './errors.js';
-import type { Project, StoryboardFrame } from './schema.js';
-import { ProjectSchema } from './schema.js';
+import type { Project, Shot, StoryboardFrame } from './schema.js';
+import { FrameSchema, ProjectSchema } from './schema.js';
 import { validateProject } from './validation.js';
+
+export const StoryboardFrameInputSchema = FrameSchema.pick({ offsetMs: true, role: true, description: true });
+export type StoryboardFrameInput = Pick<StoryboardFrame, 'offsetMs' | 'role' | 'description'>;
 
 function finish(before: Project, input: Project): Project {
   const project: Project = ProjectSchema.parse(input);
@@ -15,11 +18,27 @@ function requireFrame(project: Project, frameId: string): StoryboardFrame {
   return frame;
 }
 
-export function updateFrameDescription(project: Project, frameId: string, description: string): Project {
+function requireEditableShot(project: Project, shotId: string): Shot {
+  const shot: Shot | undefined = project.shots.find((candidate: Shot): boolean => candidate.id === shotId);
+  if (shot === undefined) throw contractError('SHOT_NOT_FOUND', `컷을 찾을 수 없습니다: ${shotId}`, []);
+  if (shot.lockedFields.includes('frames')) throw contractError('SHOT_FIELD_LOCKED', `${shotId}: frames 필드를 먼저 잠금 해제하세요.`, []);
+  return shot;
+}
+
+export function addStoryboardFrame(project: Project, shotId: string, frameId: string, input: StoryboardFrameInput): Project {
+  const frameInput: StoryboardFrameInput = StoryboardFrameInputSchema.parse(input);
+  requireEditableShot(project, shotId);
+  if (project.frames.some((frame: StoryboardFrame): boolean => frame.id === frameId)) throw contractError('DUPLICATE_FRAME_ID', `프레임 ID가 이미 존재합니다: ${frameId}`, []);
+  const frame: StoryboardFrame = { id: frameId, shotId, ...frameInput, imageAssetId: null, visualReview: 'pending' };
+  return finish(project, { ...project, frames: [...project.frames, frame] });
+}
+
+export function updateStoryboardFrame(project: Project, frameId: string, input: StoryboardFrameInput): Project {
+  const frameInput: StoryboardFrameInput = StoryboardFrameInputSchema.parse(input);
   const frame: StoryboardFrame = requireFrame(project, frameId);
-  const shot = project.shots.find((candidate): boolean => candidate.id === frame.shotId);
-  if (shot?.lockedFields.includes('frames') === true) throw contractError('SHOT_FIELD_LOCKED', `${frame.shotId}: frames 필드를 먼저 잠금 해제하세요.`, []);
-  return finish(project, { ...project, frames: project.frames.map((candidate: StoryboardFrame): StoryboardFrame => candidate.id === frameId ? { ...candidate, description, visualReview: 'pending' } : candidate) });
+  requireEditableShot(project, frame.shotId);
+  if (frame.offsetMs === frameInput.offsetMs && frame.role === frameInput.role && frame.description === frameInput.description) return project;
+  return finish(project, { ...project, frames: project.frames.map((candidate: StoryboardFrame): StoryboardFrame => candidate.id === frameId ? { ...candidate, ...frameInput, visualReview: 'pending' } : candidate) });
 }
 
 export function setFrameReview(project: Project, frameId: string, review: StoryboardFrame['visualReview']): Project {

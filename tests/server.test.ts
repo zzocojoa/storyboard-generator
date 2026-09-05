@@ -10,7 +10,7 @@ import { ProjectStore } from '../src/server/store.js';
 
 const roots: string[] = [];
 
-async function fixtureApp(): Promise<{ app: FastifyInstance; root: string }> {
+async function fixtureApp(): Promise<{ app: FastifyInstance; root: string; requests: CodexRequestStore }> {
   const root: string = await mkdtemp(join(tmpdir(), 'storyboard-server-'));
   roots.push(root);
   const webRoot: string = join(root, 'web');
@@ -20,7 +20,8 @@ async function fixtureApp(): Promise<{ app: FastifyInstance; root: string }> {
   await writeFile(join(webRoot, 'assets', 'app.js'), 'document.body.dataset.ready="true";', 'utf8');
   const config: AppConfig = { host: '127.0.0.1', port: 4317, dataRoot: join(root, 'data'), webRoot,
     pdfFontPath: '/System/Library/Fonts/Supplemental/AppleGothic.ttf', codex: { requestRoot: join(root, 'requests'), speechVoice: 'Yuna' } };
-  return { app: await createApp(config, new ProjectStore(config.dataRoot), new CodexRequestStore(config.codex.requestRoot)), root };
+  const requests: CodexRequestStore = new CodexRequestStore(config.codex.requestRoot);
+  return { app: await createApp(config, new ProjectStore(config.dataRoot), requests), root, requests };
 }
 
 afterEach(async (): Promise<void> => {
@@ -79,6 +80,39 @@ describe('로컬 작업 API', (): void => {
       const started = await app.inject({ method: 'POST', url: `/api/projects/plant-care-demo/audio/${encodeURIComponent(sfx.id)}/generate`, payload: { expectedRevision: 0 } });
       expect(started.statusCode).toBe(400);
       expect(started.json().error).toEqual(expect.objectContaining({ code: 'SPEECH_CUE_REQUIRED' }));
+    } finally { await app.close(); }
+  });
+
+  it('프레임 추가와 독립 오디오·글자 트랙 편집을 revision 순서로 저장한다', async (): Promise<void> => {
+    const { app } = await fixtureApp();
+    try {
+      const imported = await app.inject({ method: 'POST', url: '/api/projects/import', payload: { handoffPath: 'tests/fixtures/native/storyboard_handoff.json', proposedTextHoldMs: 2000 } });
+      const initial = imported.json<{ project: { audioCues: Array<{ id: string; startMs: number; endMs: number }>; textCues: Array<{ id: string; startMs: number; endMs: number; kind: string }> } }>().project;
+      const audio = initial.audioCues[0];
+      const text = initial.textCues[0];
+      if (audio === undefined || text === undefined) throw new Error('트랙 API 검증 자료가 없습니다.');
+      const audioEdit = await app.inject({ method: 'PATCH', url: `/api/projects/plant-care-demo/audio/${encodeURIComponent(audio.id)}`,
+        payload: { expectedRevision: 0, timing: { startMs: audio.startMs + 1, endMs: audio.endMs + 1 } } });
+      expect(audioEdit.statusCode).toBe(200);
+      expect(audioEdit.json().project.revision).toBe(1);
+      const frameAdd = await app.inject({ method: 'POST', url: '/api/projects/plant-care-demo/shots/shot-1/frames',
+        payload: { expectedRevision: 1, frame: { offsetMs: 1000, role: 'key', description: '동작 중간' } } });
+      expect(frameAdd.statusCode).toBe(201);
+      expect(frameAdd.json().project.frames.filter((frame: { shotId: string }) => frame.shotId === 'shot-1')).toHaveLength(2);
+      const textEdit = await app.inject({ method: 'PATCH', url: `/api/projects/plant-care-demo/text/${encodeURIComponent(text.id)}`,
+        payload: { expectedRevision: 2, timing: { startMs: text.startMs, endMs: text.endMs, kind: 'dialogue-subtitle' } } });
+      expect(textEdit.statusCode).toBe(200);
+      expect(textEdit.json().project).toEqual(expect.objectContaining({ revision: 3, schemaVersion: '1.1.0' }));
+    } finally { await app.close(); }
+  });
+
+  it('최근 Codex 실패 원인을 상태 API에 노출한다', async (): Promise<void> => {
+    const { app, requests } = await fixtureApp();
+    try {
+      const queued = await requests.create('image', 'project', 'frame', '0'.repeat(64), '2026-09-06T00:00:00.000Z');
+      await requests.fail(queued.id, 'IMAGE_TOOL_FAILED', '이미지 생성 도구가 결과를 반환하지 않았습니다.', '2026-09-06T00:00:01.000Z');
+      const status = await app.inject({ method: 'GET', url: '/api/status' });
+      expect(status.json()).toEqual(expect.objectContaining({ failedRequests: 1, recentFailures: [expect.objectContaining({ id: queued.id, error: { code: 'IMAGE_TOOL_FAILED', message: '이미지 생성 도구가 결과를 반환하지 않았습니다.' } })] }));
     } finally { await app.close(); }
   });
 });

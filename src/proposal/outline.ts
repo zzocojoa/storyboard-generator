@@ -65,7 +65,8 @@ export function createSourceOutline(project: Project, settings: OutlineSettings)
       sourceUnitIds: units.map((unit): string => unit.id), visualLocationId: null,
       action: units.filter((unit): boolean => unit.kind === 'ACTION').map((unit): string => unit.text).join('\n'),
       camera: { size: '', angle: '', move: '' }, presence: [], propIds: [], continuityBefore: [], continuityAfter: [], cameraAxis: null, screenDirection: null,
-      informationIds: [...new Set(units.flatMap((unit): string[] => unit.informationIds))], proposalOrigin: 'source-outline', approvalStatus: 'proposed', lockedFields: [],
+      informationIds: [...new Set(units.flatMap((unit): string[] => unit.informationIds))], transitionOut: { kind: 'cut', durationMs: 0, note: '' },
+      proposalOrigin: 'source-outline', approvalStatus: 'proposed', lockedFields: [],
     };
   });
   const frames: StoryboardFrame[] = shots.map((shot: Shot, index: number): StoryboardFrame => ({ id: `frame-${index + 1}`, shotId: shot.id, offsetMs: 0, role: 'start', description: shot.action, imageAssetId: null, visualReview: 'pending' }));

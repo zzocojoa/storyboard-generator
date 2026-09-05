@@ -9,9 +9,24 @@ import { recoverSourceProject } from '../importers/import-package.js';
 import { isSafePackagePath, parseJson } from '../importers/integrity.js';
 import { readUtf8 } from './package.js';
 
+type JsonObject = { [key: string]: unknown };
+
+function isJsonObject(input: unknown): input is JsonObject {
+  return typeof input === 'object' && input !== null && !Array.isArray(input);
+}
+
+/** 1.0 프로젝트에 없던 컷 전환을 명시적 CUT으로 채우고 1.1 형식으로 올린다. */
+export function migrateProjectInput(input: unknown): unknown {
+  if (!isJsonObject(input) || input.schemaVersion !== '1.0.0' || !Array.isArray(input.shots)) return input;
+  return { ...input, schemaVersion: '1.1.0', shots: input.shots.map((shot: unknown): unknown => {
+    if (!isJsonObject(shot) || 'transitionOut' in shot) return shot;
+    return { ...shot, transitionOut: { kind: 'cut', durationMs: 0, note: '' } };
+  }) };
+}
+
 /** 저장된 원본 스냅샷에서 데이터를 다시 계산해 편집 가능한 값과 원문을 구분한다. */
 export function parseProject(input: unknown): Project {
-  const project: Project = ProjectSchema.parse(input);
+  const project: Project = ProjectSchema.parse(migrateProjectInput(input));
   const source: Project = recoverSourceProject(project);
   if (JSON.stringify(project.sources) !== JSON.stringify(source.sources)) throw contractError('SOURCE_SNAPSHOT_MODIFIED', '입력 계약과 저장된 원본 스냅샷의 메타데이터가 다릅니다.', []);
   if (JSON.stringify(project.importIssues) !== JSON.stringify(source.importIssues)) throw contractError('IMPORT_ISSUES_MODIFIED', '원본 검토 항목을 덮어쓸 수 없습니다. 별도의 검토 결정으로 처리하세요.', []);

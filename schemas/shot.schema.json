@@ -117,6 +117,34 @@
         "$ref": "#/$defs/__schema0"
       }
     },
+    "transitionOut": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "cut",
+            "dissolve",
+            "fade",
+            "wipe",
+            "match-cut",
+            "custom"
+          ]
+        },
+        "durationMs": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "durationMs",
+        "note"
+      ],
+      "additionalProperties": false
+    },
     "proposalOrigin": {
       "type": "string",
       "enum": [
@@ -144,6 +172,7 @@
           "location",
           "presence",
           "continuity",
+          "transition",
           "frames"
         ]
       }
@@ -165,6 +194,7 @@
     "cameraAxis",
     "screenDirection",
     "informationIds",
+    "transitionOut",
     "proposalOrigin",
     "approvalStatus",
     "lockedFields"

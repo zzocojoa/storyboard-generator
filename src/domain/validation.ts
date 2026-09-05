@@ -98,6 +98,8 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
       ...duplicateIssues(shot.propIds, `${shot.id}.propIds`),
       ...duplicateIssues(shot.informationIds, `${shot.id}.informationIds`),
       ...duplicateIssues(shot.lockedFields, `${shot.id}.lockedFields`),
+      ...duplicateIssues(shot.continuityBefore.map((state): string => state.assetId), `${shot.id}.continuityBefore`),
+      ...duplicateIssues(shot.continuityAfter.map((state): string => state.assetId), `${shot.id}.continuityAfter`),
       ...(segment === undefined ? [] : intervalIssues(shot.id, shot.startMs, shot.endMs, segment.startMs, segment.endMs)),
       ...shot.sourceUnitIds.flatMap((id: string): Issue[] => referenceIssue(dataset.units.some((unit): boolean => unit.id === id && unit.segmentId === shot.segmentId), shot.id, 'sourceUnitIds', id, [])),
       ...(shot.visualLocationId === null ? [] : referenceIssue(dataset.locations.some((location): boolean => location.id === shot.visualLocationId), shot.id, 'visualLocationId', shot.visualLocationId, [])),
@@ -105,6 +107,8 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
       ...shot.propIds.flatMap((id: string): Issue[] => referenceIssue(project.assets.some((asset): boolean => asset.id === id && asset.kind === 'prop'), shot.id, 'propIds', id, [])),
       ...[...shot.continuityBefore, ...shot.continuityAfter].flatMap((state): Issue[] => referenceIssue(project.assets.some((asset): boolean => asset.id === state.assetId && ['character', 'location', 'prop'].includes(asset.kind)), shot.id, 'continuity', state.assetId, [])),
       ...(project.frames.some((frame): boolean => frame.shotId === shot.id) ? [] : [issue('SHOT_WITHOUT_FRAME', 'error', shot.id, 'frames', '컷에는 검토용 프레임이 하나 이상 필요합니다.', null, null, [])]),
+      ...((shot.transitionOut.kind === 'cut' && shot.transitionOut.durationMs !== 0) || (shot.transitionOut.kind !== 'cut' && (shot.transitionOut.durationMs <= 0 || shot.transitionOut.durationMs > shot.endMs - shot.startMs)) ? [issue('INVALID_TRANSITION_DURATION', 'error', shot.id, 'transitionOut', 'CUT은 0ms, 그 밖의 전환은 컷 길이 안의 양수 밀리초여야 합니다.', `0..${shot.endMs - shot.startMs}`, String(shot.transitionOut.durationMs), [])] : []),
+      ...(shot.transitionOut.kind === 'custom' && shot.transitionOut.note.trim() === '' ? [issue('MISSING_CUSTOM_TRANSITION_NOTE', 'error', shot.id, 'transitionOut.note', '사용자 정의 전환에는 구현 메모가 필요합니다.', '설명', '', [])] : []),
       ...shot.informationIds.flatMap((id: string): Issue[] => {
         const rule = dataset.informationRules.find((value): boolean => value.id === id);
         if (rule === undefined) return [issue('UNKNOWN_SHOT_INFORMATION', 'error', shot.id, 'informationIds', '정의되지 않은 정보를 컷에 추가할 수 없습니다.', null, id, [])];
@@ -140,21 +144,35 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
     return [
       ...referenceIssue(shot !== undefined, frame.id, 'shotId', frame.shotId, []),
       ...(shot !== undefined && frame.offsetMs > shot.endMs - shot.startMs ? [issue('FRAME_OUTSIDE_SHOT', 'error', frame.id, 'offsetMs', '프레임 위치가 컷 범위를 벗어났습니다.', String(shot.endMs - shot.startMs), String(frame.offsetMs), [])] : []),
-      ...(shot !== undefined && ((frame.role === 'start' && frame.offsetMs !== 0) || (frame.role === 'end' && frame.offsetMs !== shot.endMs - shot.startMs) || (frame.role === 'key' && frame.offsetMs >= shot.endMs - shot.startMs)) ? [issue('FRAME_ROLE_TIME', 'error', frame.id, 'role', '시작·종료·중간 프레임의 위치가 역할과 다릅니다.', null, frame.role, [])] : []),
+      ...(shot !== undefined && ((frame.role === 'start' && frame.offsetMs !== 0) || (frame.role === 'end' && frame.offsetMs !== shot.endMs - shot.startMs) || (frame.role === 'key' && (frame.offsetMs <= 0 || frame.offsetMs >= shot.endMs - shot.startMs))) ? [issue('FRAME_ROLE_TIME', 'error', frame.id, 'role', '시작·종료·중간 프레임의 위치가 역할과 다릅니다.', null, frame.role, [])] : []),
       ...(frame.visualReview === 'accepted' && frame.imageAssetId === null ? [issue('MISSING_REVIEWED_IMAGE', 'error', frame.id, 'visualReview', '실제 그림이 없는 프레임은 시각 검토 완료로 표시할 수 없습니다.', null, null, [])] : []),
       ...(frame.imageAssetId === null ? [] : referenceIssue(project.assets.some((asset): boolean => asset.id === frame.imageAssetId && asset.kind === 'image'), frame.id, 'imageAssetId', frame.imageAssetId, [])),
+    ];
+  });
+  const frameGroupIssues: Issue[] = project.shots.flatMap((shot): Issue[] => {
+    const frames = project.frames.filter((frame): boolean => frame.shotId === shot.id);
+    const starts: number = frames.filter((frame): boolean => frame.role === 'start').length;
+    const ends: number = frames.filter((frame): boolean => frame.role === 'end').length;
+    return [
+      ...(starts === 1 ? [] : [issue('FRAME_START_COUNT', 'error', shot.id, 'frames', '컷마다 시작 프레임이 정확히 하나 필요합니다.', '1', String(starts), [])]),
+      ...(ends <= 1 ? [] : [issue('FRAME_END_COUNT', 'error', shot.id, 'frames', '컷마다 종료 프레임은 하나만 둘 수 있습니다.', '0..1', String(ends), [])]),
+      ...duplicateIssues(frames.map((frame): string => String(frame.offsetMs)), `${shot.id}.frameOffsets`),
     ];
   });
   const audioKinds: { unit: SourceUnit['kind']; cue: Project['audioCues'][number]['kind'] }[] = [
     { unit: 'DIALOGUE', cue: 'dialogue' }, { unit: 'NARRATION', cue: 'voiceover' }, { unit: 'PANEL', cue: 'panel' }, { unit: 'SOUND', cue: 'sfx' }, { unit: 'MUSIC', cue: 'music' },
   ];
-  const audioIssues: Issue[] = project.audioCues.flatMap((cue): Issue[] => [
-    ...referenceIssue(dataset.units.some((unit): boolean => unit.id === cue.unitId), cue.id, 'unitId', cue.unitId, []),
-    ...intervalIssues(cue.id, cue.startMs, cue.endMs, 0, totalEnd),
-    ...(cue.assetId === null ? [] : referenceIssue(project.assets.some((asset): boolean => asset.id === cue.assetId && asset.kind === 'audio'), cue.id, 'assetId', cue.assetId, [])),
-    ...(audioKinds.some((mapping): boolean => mapping.cue === cue.kind && dataset.units.some((unit): boolean => unit.id === cue.unitId && unit.kind === mapping.unit)) ? [] : [issue('AUDIO_KIND_MISMATCH', 'error', cue.id, 'kind', '원문 유형과 음성 트랙의 유형이 다릅니다.', null, cue.kind, [])]),
-    ...(cue.timingStatus === 'measured' && cue.assetId === null ? [issue('MISSING_MEASURED_AUDIO', 'error', cue.id, 'timingStatus', '실제 음성 자산 없이 측정 완료로 표시할 수 없습니다.', null, null, [])] : []),
-  ]);
+  const audioIssues: Issue[] = project.audioCues.flatMap((cue): Issue[] => {
+    const asset = cue.assetId === null ? undefined : project.assets.find((candidate): boolean => candidate.id === cue.assetId && candidate.kind === 'audio');
+    return [
+      ...referenceIssue(dataset.units.some((unit): boolean => unit.id === cue.unitId), cue.id, 'unitId', cue.unitId, []),
+      ...intervalIssues(cue.id, cue.startMs, cue.endMs, 0, totalEnd),
+      ...(cue.assetId === null ? [] : referenceIssue(asset !== undefined, cue.id, 'assetId', cue.assetId, [])),
+      ...(audioKinds.some((mapping): boolean => mapping.cue === cue.kind && dataset.units.some((unit): boolean => unit.id === cue.unitId && unit.kind === mapping.unit)) ? [] : [issue('AUDIO_KIND_MISMATCH', 'error', cue.id, 'kind', '원문 유형과 음성 트랙의 유형이 다릅니다.', null, cue.kind, [])]),
+      ...(cue.timingStatus === 'measured' && cue.assetId === null ? [issue('MISSING_MEASURED_AUDIO', 'error', cue.id, 'timingStatus', '실제 음성 자산 없이 측정 완료로 표시할 수 없습니다.', null, null, [])] : []),
+      ...(cue.timingStatus === 'measured' && asset?.durationMs !== cue.endMs - cue.startMs ? [issue('AUDIO_DURATION_MISMATCH', 'error', cue.id, 'timing', '측정된 큐 길이와 오디오 자산 길이가 다릅니다.', String(asset?.durationMs ?? 'null'), String(cue.endMs - cue.startMs), [])] : []),
+    ];
+  });
   const textIssues: Issue[] = project.textCues.flatMap((cue): Issue[] => {
     const unit = cue.unitId === null ? null : dataset.units.find((value): boolean => value.id === cue.unitId);
     const placement = cue.placementId === null ? null : dataset.textPlacements.find((value): boolean => value.id === cue.placementId);
@@ -176,6 +194,18 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
     const previous = project.shots[index - 1];
     return previous === undefined || previous.endMs === shot.startMs ? [] : [issue('PROJECT_SHOT_ORDER', 'error', shot.id, 'startMs', '프로젝트 컷 목록은 전체 방송 순서를 따라야 합니다.', String(previous.endMs), String(shot.startMs), [])];
   });
+  const continuityIssues: Issue[] = project.shots.flatMap((shot, index): Issue[] => {
+    const next = project.shots[index + 1];
+    if (next === undefined || shot.endMs !== next.startMs) return [];
+    const ids: string[] = [...new Set([...shot.continuityAfter.map((state): string => state.assetId), ...next.continuityBefore.map((state): string => state.assetId)])];
+    return ids.flatMap((id: string): Issue[] => {
+      const outgoing: string | undefined = shot.continuityAfter.find((state): boolean => state.assetId === id)?.state;
+      const incoming: string | undefined = next.continuityBefore.find((state): boolean => state.assetId === id)?.state;
+      if (outgoing === incoming) return [];
+      const severity: Issue['severity'] = outgoing === undefined || incoming === undefined ? 'warning' : 'error';
+      return [issue('CONTINUITY_STATE_MISMATCH', severity, next.id, 'continuityBefore', '인접 컷의 자산 전후 상태가 이어지지 않습니다.', outgoing ?? '미기록', incoming ?? '미기록', [])];
+    });
+  });
   const generationIssues: Issue[] = project.generationRecords.flatMap((record): Issue[] => record.resultAssetIds.flatMap((id: string): Issue[] => referenceIssue(project.assets.some((asset): boolean => asset.id === id), record.id, 'resultAssetIds', id, [])));
   const assetSubjectIssues: Issue[] = project.assets.flatMap((asset): Issue[] => {
     if (asset.subjectId === null) return ['character', 'location'].includes(asset.kind) ? [issue('MISSING_ASSET_SUBJECT', 'error', asset.id, 'subjectId', '인물·장소 기준 자산은 연결 대상을 지정해야 합니다.', null, null, [])] : [];
@@ -183,5 +213,5 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
       : asset.kind === 'location' ? dataset.locations.some((location): boolean => location.id === asset.subjectId) : true;
     return referenceIssue(exists, asset.id, 'subjectId', asset.subjectId, []);
   });
-  return [...sourceIssues, ...projectIssues, ...groups.flatMap((group): Issue[] => duplicateIssues(group.ids, group.name)), ...shotIssues, ...coverageIssues, ...unitCoverage, ...frameIssues, ...audioIssues, ...textIssues, ...placementCoverage, ...orderIssues, ...generationIssues, ...assetSubjectIssues];
+  return [...sourceIssues, ...projectIssues, ...groups.flatMap((group): Issue[] => duplicateIssues(group.ids, group.name)), ...shotIssues, ...coverageIssues, ...unitCoverage, ...frameIssues, ...frameGroupIssues, ...audioIssues, ...textIssues, ...placementCoverage, ...orderIssues, ...continuityIssues, ...generationIssues, ...assetSubjectIssues];
 }

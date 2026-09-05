@@ -9,11 +9,12 @@ import type { CodexRequest, CodexRequestKind } from '../codex/schema.js';
 import { codexRequestBasis } from '../codex/work.js';
 import { approveShot, mergeShots, reorderShots, setShotLocks, splitShot, updateShotContent } from '../domain/edit.js';
 import { contractError } from '../domain/errors.js';
-import { setFrameReview, updateFrameDescription, updateProjectProfile } from '../domain/frame.js';
+import { addStoryboardFrame, setFrameReview, StoryboardFrameInputSchema, updateProjectProfile, updateStoryboardFrame } from '../domain/frame.js';
 import { addReferenceAsset } from '../domain/media.js';
 import { IdSchema, LockedFieldSchema, ProfileSchema, ShotContentSchema } from '../domain/schema.js';
 import type { Project } from '../domain/schema.js';
 import { applySourceUpdate, sourceImpact } from '../domain/source-update.js';
+import { AudioCueTimingInputSchema, TextCueTimingInputSchema, updateAudioCueTiming, updateTextCueTiming } from '../domain/tracks.js';
 import { exportShotCsv } from '../exporters/csv.js';
 import { exportProjectJson } from '../exporters/json.js';
 import { exportProjectPdf } from '../exporters/pdf.js';
@@ -36,8 +37,11 @@ const MergeBodySchema = z.strictObject({ expectedRevision: z.number().int().nonn
 const ReorderBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), segmentId: IdSchema, orderedShotIds: z.array(IdSchema).min(1) });
 const LocksBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), fields: z.array(LockedFieldSchema) });
 const ProfileBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), profile: ProfileSchema });
-const FrameBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), description: z.string() });
+const FrameBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), frame: StoryboardFrameInputSchema });
+const CreateFrameBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), frame: StoryboardFrameInputSchema });
 const FrameReviewBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), review: z.enum(['pending', 'accepted', 'rejected']) });
+const AudioCueBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), timing: AudioCueTimingInputSchema });
+const TextCueBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), timing: TextCueTimingInputSchema });
 const ReferenceBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), kind: z.enum(['character', 'location', 'prop']),
   subjectId: IdSchema.nullable(), description: z.string().min(1), mimeType: z.enum(['image/png', 'image/jpeg', 'image/webp']), base64: z.string().min(1) });
 
@@ -88,8 +92,13 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
     reply.status(statusCode(error)).send(errorBody(error));
   });
 
-  app.get('/api/status', async (): Promise<object> => ({ provider: 'codex-app', pendingRequests: (await requests.list('pending')).length,
-    generationInstruction: 'Codex 앱에서 $storyboard-workbench 대기 요청 처리를 실행하세요.', aiVoiceDisclosure: `가이드 음성은 macOS ${config.codex.speechVoice} 합성 음성입니다.` }));
+  app.get('/api/status', async (): Promise<object> => {
+    const pending: CodexRequest[] = await requests.list('pending');
+    const failed: CodexRequest[] = await requests.list('failed');
+    return { provider: 'codex-app', pendingRequests: pending.length, failedRequests: failed.length,
+      recentFailures: failed.slice(-5).reverse().map((item: CodexRequest): object => ({ id: item.id, kind: item.kind, targetId: item.targetId, error: item.error })),
+      generationInstruction: 'Codex 앱에서 $storyboard-workbench 대기 요청 처리를 실행하세요.', aiVoiceDisclosure: `가이드 음성은 macOS ${config.codex.speechVoice} 합성 음성입니다.` };
+  });
   app.get('/api/projects', async (): Promise<object> => ({ projects: await store.list() }));
   app.get('/api/projects/:projectId', async (request: FastifyRequest): Promise<object> => {
     const { projectId } = ProjectParamsSchema.parse(request.params);
@@ -155,7 +164,15 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
   app.patch('/api/projects/:projectId/frames/:frameId', async (request: FastifyRequest): Promise<object> => {
     const { projectId, frameId } = FrameParamsSchema.parse(request.params);
     const body = FrameBodySchema.parse(request.body);
-    return { project: await store.update(projectId, body.expectedRevision, (project: Project): Project => updateFrameDescription(project, frameId, body.description), []) };
+    return { project: await store.update(projectId, body.expectedRevision, (project: Project): Project => updateStoryboardFrame(project, frameId, body.frame), []) };
+  });
+  app.post('/api/projects/:projectId/shots/:shotId/frames', async (request: FastifyRequest, reply: FastifyReply): Promise<object> => {
+    const { projectId, shotId } = ShotParamsSchema.parse(request.params);
+    const body = CreateFrameBodySchema.parse(request.body);
+    const frameId: string = `${randomUUID()}:frame`;
+    const project: Project = await store.update(projectId, body.expectedRevision, (current: Project): Project => addStoryboardFrame(current, shotId, frameId, body.frame), []);
+    reply.status(201);
+    return { project };
   });
   app.post('/api/projects/:projectId/frames/:frameId/review', async (request: FastifyRequest): Promise<object> => {
     const { projectId, frameId } = FrameParamsSchema.parse(request.params);
@@ -189,6 +206,16 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
     const body = RevisionSchema.parse(request.body);
     reply.status(202);
     return requestResponse(await queueRequest('speech', projectId, cueId, body.expectedRevision, store, requests));
+  });
+  app.patch('/api/projects/:projectId/audio/:cueId', async (request: FastifyRequest): Promise<object> => {
+    const { projectId, cueId } = CueParamsSchema.parse(request.params);
+    const body = AudioCueBodySchema.parse(request.body);
+    return { project: await store.update(projectId, body.expectedRevision, (project: Project): Project => updateAudioCueTiming(project, cueId, body.timing), []) };
+  });
+  app.patch('/api/projects/:projectId/text/:cueId', async (request: FastifyRequest): Promise<object> => {
+    const { projectId, cueId } = CueParamsSchema.parse(request.params);
+    const body = TextCueBodySchema.parse(request.body);
+    return { project: await store.update(projectId, body.expectedRevision, (project: Project): Project => updateTextCueTiming(project, cueId, body.timing), []) };
   });
   app.get('/api/codex/requests/:requestId', async (request: FastifyRequest): Promise<object> => {
     const { requestId } = CodexRequestParamsSchema.parse(request.params);

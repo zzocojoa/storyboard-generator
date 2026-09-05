@@ -18,6 +18,7 @@ function shotRow(project: Project, shot: Shot): string[] {
     project.projectId, project.title, shot.id, shot.segmentId, segment?.sceneId ?? '', segment?.mode ?? '',
     String(shot.startMs), String(shot.endMs), String(shot.endMs - shot.startMs), formatMilliseconds(shot.startMs), formatMilliseconds(shot.endMs),
     scene?.storyLocationId ?? '', shot.visualLocationId ?? '', shot.action, shot.camera.size, shot.camera.angle, shot.camera.move,
+    shot.transitionOut.kind, String(shot.transitionOut.durationMs), shot.transitionOut.note,
     JSON.stringify(shot.presence), JSON.stringify(shot.propIds), JSON.stringify(shot.sourceUnitIds),
     JSON.stringify(units.map((unit: SourceUnit) => ({ id: unit.id, kind: unit.kind, speakerId: unit.speakerId, text: unit.text, sourceRefs: unit.sourceRefs }))),
     JSON.stringify(audio), JSON.stringify(text), JSON.stringify(project.frames.filter((frame): boolean => frame.shotId === shot.id)),
@@ -28,6 +29,6 @@ function shotRow(project: Project, shot: Shot): string[] {
 
 export function exportShotCsv(input: Project): string {
   const project: Project = parseProject(input);
-  const header: string[] = ['project_id', 'title', 'shot_id', 'segment_id', 'scene_id', 'mode', 'start_ms', 'end_ms', 'duration_ms', 'start_time', 'end_time', 'story_location_id', 'visual_location_id', 'action', 'shot_size', 'camera_angle', 'camera_move', 'presence', 'prop_ids', 'source_unit_ids', 'source_units', 'audio_events', 'text_events', 'frames', 'proposal_origin', 'approval_status', 'locked_fields', 'continuity_before', 'continuity_after'];
+  const header: string[] = ['project_id', 'title', 'shot_id', 'segment_id', 'scene_id', 'mode', 'start_ms', 'end_ms', 'duration_ms', 'start_time', 'end_time', 'story_location_id', 'visual_location_id', 'action', 'shot_size', 'camera_angle', 'camera_move', 'transition_kind', 'transition_duration_ms', 'transition_note', 'presence', 'prop_ids', 'source_unit_ids', 'source_units', 'audio_events', 'text_events', 'frames', 'proposal_origin', 'approval_status', 'locked_fields', 'continuity_before', 'continuity_after'];
   return `\uFEFF${[header, ...project.shots.map((shot: Shot): string[] => shotRow(project, shot))].map((row: string[]): string => row.map(csvCell).join(',')).join('\r\n')}\r\n`;
 }

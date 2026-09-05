@@ -23,7 +23,7 @@ The context contains only the selected project's current target, source text, al
 
 ## Cut proposal
 
-Write one JSON file matching `SegmentProposalSchema` in `src/proposal/model.ts`. Cover every supplied `sourceUnitIds` entry at least once, keep every ID unchanged, and do not add events or facts from outside the context. Choose shot boundaries from changes in action, speaker, gaze, or revealed information. Save the result under `.local/codex-results/<UUID>.json`, then apply it:
+Write one JSON file matching `SegmentProposalSchema` in `src/proposal/model.ts`. Cover every supplied `sourceUnitIds` entry at least once, keep every ID unchanged, and do not add events or facts from outside the context. Choose shot boundaries from changes in action, speaker, gaze, or revealed information. Set every `transitionOut`; use `{"kind":"cut","durationMs":0,"note":""}` for a direct cut, and a positive in-shot duration for other transitions. Save the result under `.local/codex-results/<UUID>.json`, then apply it:
 
 ```bash
 npm run codex-workbench -- apply-proposal --request <UUID> --input .local/codex-results/<UUID>.json
