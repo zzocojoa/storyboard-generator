@@ -1,6 +1,6 @@
 import { mkdir, open, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { contractError } from '../domain/errors.js';
 import type { Project } from '../domain/schema.js';
 import { exportProjectJson } from '../exporters/json.js';
@@ -127,6 +127,16 @@ export class ProjectStore {
     const project: Project = await this.read(projectId);
     const asset = project.assets.find((value): boolean => value.id === assetId);
     if (asset === undefined) throw contractError('ASSET_NOT_FOUND', `${assetId}: 자산을 찾을 수 없습니다.`, []);
-    return { content: await readFile(join(this.#directory(projectId), asset.path)), mimeType: asset.mimeType };
+    return { content: await readFile(await this.assetPath(projectId, assetId)), mimeType: asset.mimeType };
+  }
+
+  async assetPath(projectId: string, assetId: string): Promise<string> {
+    const project: Project = await this.read(projectId);
+    const asset = project.assets.find((value): boolean => value.id === assetId);
+    if (asset === undefined) throw contractError('ASSET_NOT_FOUND', `${assetId}: 자산을 찾을 수 없습니다.`, []);
+    const directory: string = resolve(this.#directory(projectId));
+    const path: string = resolve(directory, asset.path);
+    if (path !== directory && !path.startsWith(`${directory}${sep}`)) throw contractError('UNSAFE_ASSET_PATH', `${assetId}: 프로젝트 밖의 자산 경로는 읽을 수 없습니다. path=${asset.path}`, []);
+    return path;
   }
 }

@@ -26,9 +26,9 @@ describe('생성 미디어 반영', (): void => {
     if (cue === undefined) throw new Error('오디오 검증 자료가 없습니다.');
     const bytes: Buffer = wav(500);
     expect(wavDurationMs(bytes)).toBe(500);
-    const mutation = applyGeneratedSpeech(project, cue.id, 'speech-generation', '2026-09-06T00:00:00.000Z', { bytes, prompt: '가이드', model: 'speech-model', requestId: 'request-1', mimeType: 'audio/wav' });
+    const mutation = applyGeneratedSpeech(project, cue.id, 'speech-generation', '2026-09-06T00:00:00.000Z', { bytes, provider: 'codex-app', prompt: '가이드', model: 'speech-model', requestId: 'request-1', mimeType: 'audio/wav' });
     expect(mutation.project.audioCues.find((candidate): boolean => candidate.id === cue.id)).toEqual(expect.objectContaining({ assetId: 'speech-generation:audio', timingStatus: 'measured', endMs: cue.startMs + 500 }));
-    expect(mutation.project.generationRecords[0]).toEqual(expect.objectContaining({ provider: 'openai', requestId: 'request-1', resultAssetIds: ['speech-generation:audio'] }));
+    expect(mutation.project.generationRecords[0]).toEqual(expect.objectContaining({ provider: 'codex-app', requestId: 'request-1', resultAssetIds: ['speech-generation:audio'] }));
     expect(project.audioCues.find((candidate): boolean => candidate.id === cue.id)?.assetId).toBeNull();
   });
 
@@ -36,7 +36,7 @@ describe('생성 미디어 반영', (): void => {
     const project: Project = await outline();
     const frame = project.frames[0];
     if (frame === undefined) throw new Error('프레임 검증 자료가 없습니다.');
-    const result = { bytes: Buffer.from('not-png'), prompt: 'frame', model: 'image-model', requestId: null, mimeType: 'image/png' as const, referenceHashes: [] };
+    const result = { bytes: Buffer.from('not-png'), provider: 'codex-app' as const, prompt: 'frame', model: 'image-model', requestId: 'request-1', mimeType: 'image/png' as const, referenceHashes: [] };
     expect(() => applyGeneratedImage(project, frame.id, 'image-generation', '2026-09-06T00:00:00.000Z', result)).toThrowError(expect.objectContaining({ code: 'INVALID_IMAGE_BYTES' }));
     const locked: Project = { ...project, shots: project.shots.map((shot) => shot.id === frame.shotId ? { ...shot, lockedFields: ['frames'] } : shot) };
     expect(() => applyGeneratedImage(locked, frame.id, 'image-generation', '2026-09-06T00:00:00.000Z', { ...result, bytes: Buffer.from('89504e470d0a1a0a', 'hex') })).toThrowError(expect.objectContaining({ code: 'SHOT_FIELD_LOCKED' }));

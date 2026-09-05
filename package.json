@@ -11,11 +11,12 @@
     "typecheck:web": "tsc -p tsconfig.web.json --noEmit",
     "test": "vitest run --config vitest.config.ts",
     "build:web": "vite build --logLevel warn",
-    "start": "node --env-file-if-exists=.env --import tsx src/server/main.ts storyboard.config.json",
+    "start": "node --import tsx src/server/main.ts storyboard.config.json",
     "dev:web": "vite",
     "schemas:write": "node --import tsx scripts/write-schemas.ts",
     "schemas:check": "node --import tsx scripts/check-schemas.ts",
     "cli": "node --import tsx src/cli.ts",
+    "codex-workbench": "node --import tsx src/codex/cli.ts storyboard.config.json",
     "check": "npm run typecheck && npm run typecheck:web && npm test && npm run schemas:check && npm run build:web"
   },
   "dependencies": {
@@ -23,7 +24,6 @@
     "@fontsource/ibm-plex-mono": "5.3.0",
     "@fontsource/noto-serif-kr": "5.3.0",
     "fastify": "5.12.3",
-    "openai": "7.10.0",
     "pdfkit": "0.20.2",
     "react": "19.2.8",
     "react-dom": "19.2.8",

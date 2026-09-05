@@ -2,19 +2,19 @@ import { z } from 'zod';
 import { ProjectSchema } from '../../src/domain/schema.js';
 import type { Project } from '../../src/domain/schema.js';
 
-const StatusSchema = z.strictObject({ provider: z.literal('openai'), configured: z.boolean(),
-  models: z.strictObject({ proposal: z.string(), image: z.string(), speech: z.string() }), aiVoiceDisclosure: z.string() });
+const StatusSchema = z.strictObject({ provider: z.literal('codex-app'), pendingRequests: z.number().int().nonnegative(),
+  generationInstruction: z.string(), aiVoiceDisclosure: z.string() });
 const SummarySchema = z.strictObject({ projectId: z.string(), title: z.string(), revision: z.number(), durationMs: z.number(), shots: z.number(),
   framesReady: z.number(), framesTotal: z.number(), audioReady: z.number(), audioTotal: z.number(), issues: z.number(), updatedAt: z.string() });
-const JobSchema = z.strictObject({ id: z.string(), kind: z.enum(['proposal', 'image', 'speech']), status: z.enum(['queued', 'running', 'succeeded', 'failed']),
-  createdAt: z.string(), updatedAt: z.string(), result: z.strictObject({ projectId: z.string(), revision: z.number() }).nullable(),
-  error: z.strictObject({ code: z.string(), message: z.string(), issues: z.array(z.unknown()) }).nullable() });
+const CodexRequestSchema = z.strictObject({ id: z.uuid(), kind: z.enum(['proposal', 'image', 'speech']), projectId: z.string(), targetId: z.string(),
+  basisHash: z.string(), status: z.enum(['pending', 'completed', 'failed']), createdAt: z.string(), updatedAt: z.string(), resultRevision: z.number().nullable(),
+  error: z.strictObject({ code: z.string(), message: z.string() }).nullable() });
 const SourceImpactSchema = z.strictObject({ changedSourceFileIds: z.array(z.string()), changedEntityIds: z.array(z.string()), impactedSegmentIds: z.array(z.string()),
   impactedShotIds: z.array(z.string()), lockedShotIds: z.array(z.string()), canApply: z.boolean() });
 
 export type AppStatus = z.infer<typeof StatusSchema>;
 export type ProjectSummary = z.infer<typeof SummarySchema>;
-export type JobRecord = z.infer<typeof JobSchema>;
+export type CodexRequest = z.infer<typeof CodexRequestSchema>;
 export type SourceImpact = z.infer<typeof SourceImpactSchema>;
 
 export class ApiError extends Error {
@@ -60,12 +60,8 @@ export async function mutateProject(projectId: string, path: string, method: 'PA
   return z.strictObject({ project: ProjectSchema }).parse(await request(`/api/projects/${encodeURIComponent(projectId)}${path}`, json(method, body))).project;
 }
 
-export async function startJob(projectId: string, path: string, expectedRevision: number): Promise<JobRecord> {
-  return z.strictObject({ job: JobSchema }).parse(await request(`/api/projects/${encodeURIComponent(projectId)}${path}`, json('POST', { expectedRevision }))).job;
-}
-
-export async function fetchJob(jobId: string): Promise<JobRecord> {
-  return z.strictObject({ job: JobSchema }).parse(await request(`/api/jobs/${encodeURIComponent(jobId)}`, {})).job;
+export async function queueCodexRequest(projectId: string, path: string, expectedRevision: number): Promise<CodexRequest> {
+  return z.strictObject({ request: CodexRequestSchema }).parse(await request(`/api/projects/${encodeURIComponent(projectId)}${path}`, json('POST', { expectedRevision }))).request;
 }
 
 export async function previewSourceUpdate(projectId: string, handoffPath: string, proposedTextHoldMs: number, expectedRevision: number): Promise<SourceImpact> {

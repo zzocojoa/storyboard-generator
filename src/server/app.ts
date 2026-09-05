@@ -4,31 +4,30 @@ import Fastify from 'fastify';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import fastifyStatic from '@fastify/static';
 import { z, ZodError } from 'zod';
-import type { GenerationConnector, ImageReference } from '../connectors/generation.js';
+import type { CodexRequestStore } from '../codex/requests.js';
+import type { CodexRequest, CodexRequestKind } from '../codex/schema.js';
+import { codexRequestBasis } from '../codex/work.js';
 import { approveShot, mergeShots, reorderShots, setShotLocks, splitShot, updateShotContent } from '../domain/edit.js';
 import { contractError } from '../domain/errors.js';
 import { setFrameReview, updateFrameDescription, updateProjectProfile } from '../domain/frame.js';
-import { addReferenceAsset, applyGeneratedImage, applyGeneratedProposal, applyGeneratedSpeech } from '../domain/media.js';
+import { addReferenceAsset } from '../domain/media.js';
 import { IdSchema, LockedFieldSchema, ProfileSchema, ShotContentSchema } from '../domain/schema.js';
-import type { AudioCue, Project } from '../domain/schema.js';
+import type { Project } from '../domain/schema.js';
 import { applySourceUpdate, sourceImpact } from '../domain/source-update.js';
 import { exportShotCsv } from '../exporters/csv.js';
 import { exportProjectJson } from '../exporters/json.js';
 import { exportProjectPdf } from '../exporters/pdf.js';
 import { importPackage } from '../importers/import-package.js';
 import { readPackage } from '../io/package.js';
-import { buildFrameImageContext, buildSegmentContext } from '../proposal/context.js';
 import { createSourceOutline } from '../proposal/outline.js';
 import type { AppConfig } from './config.js';
-import { createJobQueue } from './jobs.js';
-import type { JobQueue, JobRecord } from './jobs.js';
 import type { AssetWrite, ProjectStore } from './store.js';
 
 const ProjectParamsSchema = z.strictObject({ projectId: IdSchema });
 const ShotParamsSchema = ProjectParamsSchema.extend({ shotId: IdSchema });
 const FrameParamsSchema = ProjectParamsSchema.extend({ frameId: IdSchema });
 const CueParamsSchema = ProjectParamsSchema.extend({ cueId: IdSchema });
-const JobParamsSchema = z.strictObject({ jobId: IdSchema });
+const CodexRequestParamsSchema = z.strictObject({ requestId: z.uuid() });
 const RevisionSchema = z.strictObject({ expectedRevision: z.number().int().nonnegative() });
 const ImportBodySchema = z.strictObject({ handoffPath: z.string().min(1), proposedTextHoldMs: z.number().int().positive() });
 const UpdateShotBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), content: ShotContentSchema });
@@ -42,27 +41,24 @@ const FrameReviewBodySchema = z.strictObject({ expectedRevision: z.number().int(
 const ReferenceBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), kind: z.enum(['character', 'location', 'prop']),
   subjectId: IdSchema.nullable(), description: z.string().min(1), mimeType: z.enum(['image/png', 'image/jpeg', 'image/webp']), base64: z.string().min(1) });
 
-export type ConnectorFactory = () => GenerationConnector;
-
 function assets(mutation: { relativePath: string | null; content: Buffer | null }): AssetWrite[] {
   return mutation.relativePath === null || mutation.content === null ? [] : [{ relativePath: mutation.relativePath, content: mutation.content }];
 }
 
-function jobResponse(job: JobRecord): { job: JobRecord } {
-  return { job };
-}
+function requestResponse(request: CodexRequest): { request: CodexRequest } { return { request }; }
 
-function requireSpeechCue(cue: AudioCue): void {
-  if (!['dialogue', 'voiceover', 'panel'].includes(cue.kind)) {
-    throw contractError('SPEECH_CUE_REQUIRED', `${cue.id}: 대사·내레이션·패널 발화만 가이드 음성으로 만들 수 있습니다.`, []);
-  }
+async function queueRequest(kind: CodexRequestKind, projectId: string, targetId: string, expectedRevision: number,
+  store: ProjectStore, requests: CodexRequestStore): Promise<CodexRequest> {
+  const project: Project = await store.read(projectId);
+  if (project.revision !== expectedRevision) throw contractError('REVISION_CONFLICT', `${projectId}: expected=${expectedRevision}, actual=${project.revision}`, []);
+  return requests.create(kind, projectId, targetId, codexRequestBasis(project, kind, targetId), new Date().toISOString());
 }
 
 function statusCode(error: Error): number {
   const code: string = 'code' in error && typeof error.code === 'string' ? error.code : error.name;
   if (code.endsWith('_NOT_FOUND')) return 404;
   if (['REVISION_CONFLICT', 'PROJECT_ALREADY_EXISTS', 'PROJECT_BUSY'].includes(code)) return 409;
-  if (error instanceof ZodError || code.startsWith('INVALID_') || code.startsWith('MISSING_') || code.startsWith('DUPLICATE_') || code.startsWith('UNSAFE_') || code.startsWith('UNKNOWN_') || code.startsWith('FORBIDDEN_') || code.endsWith('_LOCKED')) return 400;
+  if (error instanceof ZodError || code.startsWith('INVALID_') || code.startsWith('MISSING_') || code.startsWith('DUPLICATE_') || code.startsWith('UNSAFE_') || code.startsWith('UNKNOWN_') || code.startsWith('FORBIDDEN_') || code.endsWith('_LOCKED') || code.endsWith('_REQUIRED')) return 400;
   return 500;
 }
 
@@ -82,18 +78,18 @@ async function ensureWebRoot(path: string): Promise<void> {
   }
 }
 
-export async function createApp(config: AppConfig, store: ProjectStore, connectorFactory: ConnectorFactory): Promise<FastifyInstance> {
+export async function createApp(config: AppConfig, store: ProjectStore, requests: CodexRequestStore): Promise<FastifyInstance> {
   await ensureWebRoot(config.webRoot);
   await store.initialize();
+  await requests.initialize();
   const app: FastifyInstance = Fastify({ logger: { level: 'info' }, bodyLimit: 28 * 1024 * 1024 });
-  const jobs: JobQueue = createJobQueue(randomUUID, (): string => new Date().toISOString());
 
   app.setErrorHandler((error: Error, _request: FastifyRequest, reply: FastifyReply): void => {
     reply.status(statusCode(error)).send(errorBody(error));
   });
 
-  app.get('/api/status', async (): Promise<object> => ({ provider: 'openai', configured: typeof process.env.OPENAI_API_KEY === 'string' && process.env.OPENAI_API_KEY.trim() !== '',
-    models: { proposal: config.generation.proposalModel, image: config.generation.imageModel, speech: config.generation.speechModel }, aiVoiceDisclosure: '가이드 음성은 AI가 생성합니다.' }));
+  app.get('/api/status', async (): Promise<object> => ({ provider: 'codex-app', pendingRequests: (await requests.list('pending')).length,
+    generationInstruction: 'Codex 앱에서 $storyboard-workbench 대기 요청 처리를 실행하세요.', aiVoiceDisclosure: `가이드 음성은 macOS ${config.codex.speechVoice} 합성 음성입니다.` }));
   app.get('/api/projects', async (): Promise<object> => ({ projects: await store.list() }));
   app.get('/api/projects/:projectId', async (request: FastifyRequest): Promise<object> => {
     const { projectId } = ProjectParamsSchema.parse(request.params);
@@ -179,60 +175,24 @@ export async function createApp(config: AppConfig, store: ProjectStore, connecto
   app.post('/api/projects/:projectId/segments/:segmentId/propose', async (request: FastifyRequest, reply: FastifyReply): Promise<object> => {
     const params = z.strictObject({ projectId: IdSchema, segmentId: IdSchema }).parse(request.params);
     const body = RevisionSchema.parse(request.body);
-    const generationId: string = randomUUID();
-    const job: JobRecord = jobs.start('proposal', async () => {
-      const current: Project = await store.read(params.projectId);
-      const result = await connectorFactory().propose(buildSegmentContext(current, params.segmentId));
-      const mutation = applyGeneratedProposal(current, params.segmentId, generationId, new Date().toISOString(), result);
-      const project: Project = await store.update(params.projectId, body.expectedRevision, (): Project => mutation.project, []);
-      return { projectId: project.projectId, revision: project.revision };
-    });
     reply.status(202);
-    return jobResponse(job);
+    return requestResponse(await queueRequest('proposal', params.projectId, params.segmentId, body.expectedRevision, store, requests));
   });
   app.post('/api/projects/:projectId/frames/:frameId/generate', async (request: FastifyRequest, reply: FastifyReply): Promise<object> => {
     const { projectId, frameId } = FrameParamsSchema.parse(request.params);
     const body = RevisionSchema.parse(request.body);
-    const generationId: string = randomUUID();
-    const job: JobRecord = jobs.start('image', async () => {
-      const current: Project = await store.read(projectId);
-      const context = buildFrameImageContext(current, frameId);
-      const references: ImageReference[] = await Promise.all(context.visualReferences.map(async (reference): Promise<ImageReference> => {
-        const file = await store.asset(projectId, reference.id);
-        return { id: reference.id, bytes: file.content, mimeType: file.mimeType, sha256: reference.sha256 };
-      }));
-      const result = await connectorFactory().image(context, references);
-      const mutation = applyGeneratedImage(current, frameId, generationId, new Date().toISOString(), result);
-      const project: Project = await store.update(projectId, body.expectedRevision, (): Project => mutation.project, assets(mutation));
-      return { projectId: project.projectId, revision: project.revision };
-    });
     reply.status(202);
-    return jobResponse(job);
+    return requestResponse(await queueRequest('image', projectId, frameId, body.expectedRevision, store, requests));
   });
   app.post('/api/projects/:projectId/audio/:cueId/generate', async (request: FastifyRequest, reply: FastifyReply): Promise<object> => {
     const { projectId, cueId } = CueParamsSchema.parse(request.params);
     const body = RevisionSchema.parse(request.body);
-    const generationId: string = randomUUID();
-    const job: JobRecord = jobs.start('speech', async () => {
-      const current: Project = await store.read(projectId);
-      const cue = current.audioCues.find((candidate): boolean => candidate.id === cueId);
-      if (cue === undefined) throw contractError('AUDIO_CUE_NOT_FOUND', `오디오 큐를 찾을 수 없습니다: ${cueId}`, []);
-      requireSpeechCue(cue);
-      const unit = current.dataset.units.find((candidate): boolean => candidate.id === cue.unitId);
-      if (unit === undefined) throw contractError('SOURCE_UNIT_NOT_FOUND', `오디오 큐의 원문을 찾을 수 없습니다: ${cue.unitId}`, []);
-      const result = await connectorFactory().speech(unit.text);
-      const mutation = applyGeneratedSpeech(current, cueId, generationId, new Date().toISOString(), result);
-      const project: Project = await store.update(projectId, body.expectedRevision, (): Project => mutation.project, assets(mutation));
-      return { projectId: project.projectId, revision: project.revision };
-    });
     reply.status(202);
-    return jobResponse(job);
+    return requestResponse(await queueRequest('speech', projectId, cueId, body.expectedRevision, store, requests));
   });
-  app.get('/api/jobs/:jobId', async (request: FastifyRequest): Promise<object> => {
-    const { jobId } = JobParamsSchema.parse(request.params);
-    const job: JobRecord | null = jobs.get(jobId);
-    if (job === null) throw contractError('JOB_NOT_FOUND', `생성 작업을 찾을 수 없습니다: ${jobId}`, []);
-    return jobResponse(job);
+  app.get('/api/codex/requests/:requestId', async (request: FastifyRequest): Promise<object> => {
+    const { requestId } = CodexRequestParamsSchema.parse(request.params);
+    return requestResponse(await requests.read(requestId));
   });
   app.get('/api/projects/:projectId/assets/:assetId', async (request: FastifyRequest, reply: FastifyReply): Promise<Buffer> => {
     const params = z.strictObject({ projectId: IdSchema, assetId: IdSchema }).parse(request.params);

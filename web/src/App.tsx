@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, FormEvent, ReactElement } from 'react';
 import type { Asset, AudioCue, LockedField, Profile, Project, Segment, Shot, ShotContent, StoryboardFrame, TextCue } from '../../src/domain/schema.js';
-import { fetchJob, fetchProject, fetchStatus, importProject, listProjects, mutateProject, previewSourceUpdate, startJob, updateProjectSource } from './api.js';
-import type { AppStatus, JobRecord, ProjectSummary, SourceImpact } from './api.js';
+import { fetchProject, fetchStatus, importProject, listProjects, mutateProject, previewSourceUpdate, queueCodexRequest, updateProjectSource } from './api.js';
+import type { AppStatus, CodexRequest, ProjectSummary, SourceImpact } from './api.js';
 
 type Notice = { tone: 'info' | 'error'; text: string };
 type ReferenceDraft = { kind: 'character' | 'location' | 'prop'; subjectId: string; description: string; file: File | null };
@@ -107,7 +107,7 @@ function ShotBoard(props: { project: Project; shot: Shot; selected: boolean; onS
   return <article className={props.selected ? 'shot-card selected' : 'shot-card'} onClick={(): void => { props.onSelect(props.shot.id); }}>
     <div className="shot-frame" style={{ aspectRatio: aspectRatio(props.project) }}><FrameImage project={props.project} frame={frame} alt={`${props.shot.id} 콘티 프레임`} />
       <span className="frame-time">{clock(props.shot.startMs)}</span><span className={`review-dot ${frame?.visualReview ?? 'pending'}`}></span>
-      {frame !== null && <button className="frame-generate" disabled={props.busy} onClick={(event): void => { event.stopPropagation(); void props.onGenerate(frame.id); }}>{frame.imageAssetId === null ? 'IMAGE' : 'RETAKE'}</button>}
+      {frame !== null && <button className="frame-generate" disabled={props.busy} onClick={(event): void => { event.stopPropagation(); void props.onGenerate(frame.id); }}>{frame.imageAssetId === null ? 'CODEX IMAGE' : 'RETAKE'}</button>}
     </div>
     <div className="shot-meta"><div><span>{props.shot.camera.size || 'SIZE TBD'}</span><span>{props.shot.camera.angle || 'ANGLE TBD'}</span></div><time>{((props.shot.endMs - props.shot.startMs) / 1000).toFixed(1)}s</time></div>
     <h3>{props.shot.action || '동작을 입력하세요'}</h3>
@@ -182,7 +182,7 @@ function Inspector(props: { project: Project; segment: Segment; shot: Shot | nul
       <div className="edit-actions"><button className="primary" disabled={props.working} onClick={(): void => { void props.onSave(); }}>컷 저장</button><button disabled={props.working} onClick={(): void => { void props.onSplit(); }}>중간 분할</button><button disabled={props.working} onClick={(): void => { void props.onMerge(); }}>다음 컷과 병합</button><button disabled={props.working} onClick={(): void => { void props.onMove(-1); }}>← 이동</button><button disabled={props.working} onClick={(): void => { void props.onMove(1); }}>이동 →</button></div>
       <div className="approval-actions"><button disabled={props.working} onClick={(): void => { void props.onLocks(shot.lockedFields.length === 0 ? allLockedFields : []); }}>{shot.lockedFields.length === 0 ? '전체 잠금' : '잠금 해제'}</button><button className="approve" disabled={props.working} onClick={(): void => { void props.onApprove(); }}>컷 확정</button></div>
       <section className="inspector-section source-block"><header>SOURCE ANCHORS <span>{sourceUnits.length}</span></header>{sourceUnits.map((unit): ReactElement => <article key={unit.id}><small>{unit.kind} · {unit.speakerId ?? '—'}</small><p>{unit.text}</p></article>)}</section>
-      <section className="inspector-section audio-block"><header>GUIDE AUDIO <span>{audio.filter((cue: AudioCue): boolean => cue.assetId !== null).length}/{audio.length}</span></header><p className="disclosure">{props.status?.aiVoiceDisclosure ?? '가이드 음성은 AI가 생성합니다.'}</p>{audio.map((cue: AudioCue): ReactElement => { const unit = props.project.dataset.units.find((candidate): boolean => candidate.id === cue.unitId); return <article key={cue.id}><div><small>{cue.kind} · {clock(cue.startMs)}</small><p>{unit?.text}</p></div><button disabled={props.working || !props.status?.configured} onClick={(): void => { void props.onSpeech(cue.id); }}>{cue.assetId === null ? 'VOICE' : 'RETAKE'}</button></article>; })}</section>
+      <section className="inspector-section audio-block"><header>GUIDE AUDIO <span>{audio.filter((cue: AudioCue): boolean => cue.assetId !== null).length}/{audio.length}</span></header><p className="disclosure">{props.status?.aiVoiceDisclosure ?? '가이드 음성은 Codex App 작업에서 생성합니다.'}</p>{audio.map((cue: AudioCue): ReactElement => { const unit = props.project.dataset.units.find((candidate): boolean => candidate.id === cue.unitId); return <article key={cue.id}><div><small>{cue.kind} · {clock(cue.startMs)}</small><p>{unit?.text}</p></div><button disabled={props.working} onClick={(): void => { void props.onSpeech(cue.id); }}>{cue.assetId === null ? 'CODEX VOICE' : 'RETAKE'}</button></article>; })}</section>
       <form className="reference-form" onSubmit={upload}><header>VISUAL REFERENCE</header><select value={reference.kind} onChange={(event): void => { const kind = event.target.value as ReferenceDraft['kind']; setReference({ ...reference, kind, subjectId: '' }); }}><option value="character">인물</option><option value="location">장소</option><option value="prop">소품</option></select>
         {reference.kind !== 'prop' && <select required value={reference.subjectId} onChange={(event): void => { setReference({ ...reference, subjectId: event.target.value }); }}><option value="">대상 선택</option>{referenceSubjects.map((subject): ReactElement => <option key={subject.id} value={subject.id}>{subject.name}</option>)}</select>}
         <input required placeholder="외형·상태 설명" value={reference.description} onChange={(event): void => { setReference({ ...reference, description: event.target.value }); }} />
@@ -205,7 +205,7 @@ export default function App(): ReactElement {
   const [shotId, setShotId] = useState<string>('');
   const [draft, setDraft] = useState<ShotContent | null>(null);
   const [working, setWorking] = useState<boolean>(false);
-  const [job, setJob] = useState<JobRecord | null>(null);
+  const [queuedRequest, setQueuedRequest] = useState<CodexRequest | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [playhead, setPlayhead] = useState<number>(0);
   const [playing, setPlaying] = useState<boolean>(false);
@@ -292,17 +292,23 @@ export default function App(): ReactElement {
     finally { setWorking(false); }
   };
 
-  const generate = async (path: string): Promise<void> => {
+  const queueGeneration = async (path: string): Promise<void> => {
     if (project === null) return;
     setWorking(true); setNotice(null);
     try {
-      let current: JobRecord = await startJob(project.projectId, path, project.revision); setJob(current);
-      while (current.status === 'queued' || current.status === 'running') {
-        await new Promise<void>((resolve): void => { window.setTimeout(resolve, 700); });
-        current = await fetchJob(current.id); setJob(current);
-      }
-      if (current.status === 'failed') throw new Error(`${current.error?.code ?? 'GENERATION_FAILED'}: ${current.error?.message ?? '생성 작업이 실패했습니다.'}`);
-      setProject(await fetchProject(project.projectId)); await refreshSummaries(); setNotice({ tone: 'info', text: '생성 결과를 새 프로젝트 버전으로 저장했습니다.' });
+      const current: CodexRequest = await queueCodexRequest(project.projectId, path, project.revision); setQueuedRequest(current);
+      const nextStatus: AppStatus = await fetchStatus(); setStatus(nextStatus);
+      setNotice({ tone: 'info', text: `Codex 요청을 저장했습니다. ${nextStatus.generationInstruction} 요청 ID: ${current.id}` });
+    } catch (error: unknown) { setNotice({ tone: 'error', text: readableError(error) }); }
+    finally { setWorking(false); }
+  };
+
+  const refreshWorkspace = async (): Promise<void> => {
+    if (project === null) return;
+    setWorking(true); setNotice(null);
+    try {
+      const [nextProject, nextStatus, nextSummaries] = await Promise.all([fetchProject(project.projectId), fetchStatus(), listProjects()]);
+      setProject(nextProject); setStatus(nextStatus); setSummaries(nextSummaries); setQueuedRequest(null); setNotice({ tone: 'info', text: 'Codex 결과와 프로젝트 상태를 새로 읽었습니다.' });
     } catch (error: unknown) { setNotice({ tone: 'error', text: readableError(error) }); }
     finally { setWorking(false); }
   };
@@ -364,17 +370,17 @@ export default function App(): ReactElement {
   return <main className="app-shell">
     <ProjectRail summaries={summaries} currentId={project.projectId} working={working} onSelect={openProject} onImport={importHandoff} />
     <section className="workspace"><header className="topbar"><div><span className="eyebrow">ACTIVE PRODUCTION</span><h1>{project.title}</h1></div><div className="project-facts"><span>REV <b>{project.revision}</b></span><span>{project.profile.aspectWidth}:{project.profile.aspectHeight}</span><span>{project.profile.medium.toUpperCase()}</span></div>
-      <div className="top-actions"><a href={`${exportBase}/export.json`}>JSON</a><a href={`${exportBase}/export.csv`}>CSV</a><a href={`${exportBase}/export.pdf`}>PDF</a><span className={status?.configured ? 'provider ready' : 'provider'}>{status?.configured ? 'OPENAI READY' : 'OPENAI KEY REQUIRED'}</span></div></header>
+      <div className="top-actions"><a href={`${exportBase}/export.json`}>JSON</a><a href={`${exportBase}/export.csv`}>CSV</a><a href={`${exportBase}/export.pdf`}>PDF</a><button onClick={(): void => { void refreshWorkspace(); }}>REFRESH</button><span className="provider ready">CODEX APP · {status?.pendingRequests ?? 0} QUEUED</span></div></header>
       <div className="edit-grid">{segment !== null && <SceneRail project={project} segmentId={segment.id} onSelect={(id: string): void => { setSegmentId(id); setShotId(''); }} />}
-        <section className="board-area">{segment !== null && <><header className="segment-header"><div><span>{segment.mode}</span><h2>{project.dataset.scenes.find((scene): boolean => scene.id === segment.sceneId)?.title}</h2><p>{clock(segment.startMs)} — {clock(segment.endMs)} · {shots.length} CUTS</p></div><button className="propose" disabled={working || !status?.configured} onClick={(): void => { void generate(`/segments/${encodeURIComponent(segment.id)}/propose`); }}>◇ AI CUT PROPOSAL</button></header>
-          <div className="board-grid">{shots.map((candidate: Shot): ReactElement => <ShotBoard key={candidate.id} project={project} shot={candidate} selected={candidate.id === shot?.id} onSelect={setShotId} busy={working || !status?.configured} onGenerate={async (frameId: string): Promise<void> => { await generate(`/frames/${encodeURIComponent(frameId)}/generate`); }} />)}</div></>}
+        <section className="board-area">{segment !== null && <><header className="segment-header"><div><span>{segment.mode}</span><h2>{project.dataset.scenes.find((scene): boolean => scene.id === segment.sceneId)?.title}</h2><p>{clock(segment.startMs)} — {clock(segment.endMs)} · {shots.length} CUTS</p></div><button className="propose" disabled={working} onClick={(): void => { void queueGeneration(`/segments/${encodeURIComponent(segment.id)}/propose`); }}>◇ CODEX CUT PROPOSAL</button></header>
+          <div className="board-grid">{shots.map((candidate: Shot): ReactElement => <ShotBoard key={candidate.id} project={project} shot={candidate} selected={candidate.id === shot?.id} onSelect={setShotId} busy={working} onGenerate={async (frameId: string): Promise<void> => { await queueGeneration(`/frames/${encodeURIComponent(frameId)}/generate`); }} />)}</div></>}
         </section>
         {segment !== null && <Inspector project={project} segment={segment} shot={shot} draft={draft} working={working} status={status} onDraft={setDraft}
           onSave={async (): Promise<void> => { if (shot !== null && draft !== null) await mutate(`/shots/${encodeURIComponent(shot.id)}`, 'PATCH', { expectedRevision: project.revision, content: draft }); }}
           onSplit={async (): Promise<void> => { if (shot !== null) await mutate(`/shots/${encodeURIComponent(shot.id)}/split`, 'POST', { expectedRevision: project.revision, atMs: Math.floor((shot.startMs + shot.endMs) / 2) }); }}
           onMerge={merge} onMove={reorder} onLocks={async (fields: LockedField[]): Promise<void> => { if (shot !== null) await mutate(`/shots/${encodeURIComponent(shot.id)}/locks`, 'POST', { expectedRevision: project.revision, fields }); }}
           onApprove={async (): Promise<void> => { if (shot !== null) await mutate(`/shots/${encodeURIComponent(shot.id)}/approve`, 'POST', { expectedRevision: project.revision }); }}
-          onSpeech={async (cueId: string): Promise<void> => { await generate(`/audio/${encodeURIComponent(cueId)}/generate`); }} onReference={addReference}
+          onSpeech={async (cueId: string): Promise<void> => { await queueGeneration(`/audio/${encodeURIComponent(cueId)}/generate`); }} onReference={addReference}
           onFrameDescription={async (frameId: string, description: string): Promise<void> => { await mutate(`/frames/${encodeURIComponent(frameId)}`, 'PATCH', { expectedRevision: project.revision, description }); }}
           onFrameReview={async (frameId: string, review: StoryboardFrame['visualReview']): Promise<void> => { await mutate(`/frames/${encodeURIComponent(frameId)}/review`, 'POST', { expectedRevision: project.revision, review }); }}
           onProfile={async (profile: Profile): Promise<void> => { await mutate('/profile', 'PATCH', { expectedRevision: project.revision, profile }); }} sourceImpact={sourceImpactReport}
@@ -384,6 +390,6 @@ export default function App(): ReactElement {
     </section>
     {monitorOpen && <PlaybackMonitor project={project} playhead={playhead} onClose={(): void => { setPlaying(false); setMonitorOpen(false); }} />}
     {notice !== null && <button className={`notice ${notice.tone}`} onClick={(): void => { setNotice(null); }}>{notice.text}<span>×</span></button>}
-    {job !== null && working && <div className="job-strip"><span className="spinner"></span>{job.kind.toUpperCase()} · {job.status.toUpperCase()}</div>}
+    {queuedRequest !== null && <div className="job-strip"><span></span>CODEX {queuedRequest.kind.toUpperCase()} · {queuedRequest.status.toUpperCase()}</div>}
   </main>;
 }

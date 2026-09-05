@@ -1,6 +1,6 @@
 # 범용 콘티 도구 — Design
 
-상태: 첫 완성본 구현에 맞춘 현재 설계. 실제 OpenAI 생성 품질과 제작 판단은 별도 검토가 필요하다.
+상태: 첫 완성본 구현에 맞춘 현재 설계. Codex App의 실제 생성 품질과 제작 판단은 별도 검토가 필요하다.
 
 ## 1. 목표와 결정 근거
 
@@ -18,7 +18,9 @@ flowchart LR
     B --> C[형식별 어댑터]
     C --> D[공통 원본 데이터]
     D --> E[컷 제안]
-    E --> F[수정·프레임·음성·글자]
+    E --> Q[Codex 요청 큐]
+    Q --> X[Codex App 생성]
+    X --> F[수정·프레임·음성·글자]
     F --> G[원문·시간·정보·잠금 검증]
     G --> H[저장·JSON·CSV·PDF·재생]
 ```
@@ -28,8 +30,9 @@ flowchart LR
 - `src/proposal`: 구간의 허용된 원문을 이용한 컷 제안과 모델 요청 경계.
 - `src/exporters`: 검증된 프로젝트의 JSON·CSV·PDF 출력.
 - `src/io`: 입력 파일과 프로젝트 JSON 읽기·쓰기. 입력 경로는 패키지 루트 안으로 제한한다.
-- `src/server`: 프로젝트별 현재본·불변 revision·자산 저장, 낙관적 revision 검사, 생성 작업 큐와 로컬 HTTP API.
-- `src/connectors`: OpenAI Responses·Image·Speech API 경계와 재시도. 키는 서버 환경에서만 읽는다.
+- `src/server`: 프로젝트별 현재본·불변 revision·자산 저장, 낙관적 revision 검사와 로컬 HTTP API.
+- `src/codex`: Codex 요청 영속화, 최소 생성 문맥, 대상 해시, 결과 검증·반영과 명령행 브리지.
+- `.agents/skills/storyboard-workbench`: Codex App이 컷·내장 이미지 생성·로컬 가이드 음성 요청을 처리하는 저장소 스킬.
 - `web`: 공통 프로젝트 모델을 표시하고 편집·생성·재생·원본 갱신·내보내기를 API에 요청하는 React 화면.
 
 ## 3. 입력 계약과 원본 권한
@@ -99,12 +102,12 @@ native 파일은 일반적인 프로젝트 원본을 표현한다. ID는 불투�
 | POST /api/projects/:id/segments/:segmentId/propose | 구간별 컷 제안 작업 |
 | POST /api/projects/:id/frames/:frameId/generate | 선택 프레임 이미지 생성 작업 |
 | POST /api/projects/:id/audio/:cueId/generate | 선택 발화 가이드 음성 생성 작업 |
-| GET /api/jobs/:id | 생성 작업의 진행·오류·결과 |
+| GET /api/codex/requests/:id | 영속 생성 요청의 상태·오류·결과 revision |
 | GET /api/projects/:id/export.json, .csv, .pdf | 검토 상태를 포함한 결과 출력 |
 
-서버는 로컬 주소에 바인딩한다. 외부 API 키는 저장 프로젝트에 포함하지 않는다. 제공자는 명시적으로 설정하고 재시도 후 실패를 보고한다. 다른 제공자나 빈 자산으로 자동 대체하지 않는다. API는 저장과 외부 연결을 담당하고 도메인 변환은 순수 함수로 유지한다.
+서버는 로컬 주소에 바인딩한다. API는 생성 버튼을 누른 시점의 최소 문맥 해시와 대상을 영속 요청으로 저장하며 외부 생성 서비스를 직접 호출하지 않는다. 웹 편집과 생성 실행은 서로 막지 않는다. Codex App 결과를 적용할 때 현재 대상 문맥 해시가 다르면 오래된 요청으로 거부한다. 빈 자산이나 다른 제공자로 자동 대체하지 않는다.
 
-사용자가 생성 제공자를 OpenAI API로 확정했다. 컷 제안은 [Responses의 구조화 출력](https://developers.openai.com/api/docs/guides/structured-outputs), 그림은 [Image API의 생성·편집](https://developers.openai.com/api/docs/guides/image-generation), 가이드 음성은 [Speech API](https://developers.openai.com/api/docs/guides/text-to-speech)에 연결한다. 모델 ID와 품질은 명시적인 서버 설정으로 관리한다. 계정별 실제 접근 가능 여부는 호출 결과로 검증한다. API 키가 없으면 편집·저장은 사용할 수 있고 생성은 설정 필요 상태로 표시한다. 키를 프로젝트 JSON·브라우저 응답·로그에 포함하지 않는다. 화면과 API는 가이드 음성이 AI 생성물임을 알린다.
+생성은 Codex App의 현재 모델과 내장 `image_gen`에서 수행한다. 가이드 음성은 Codex App 작업이 원문 파일을 준비한 뒤 설정된 macOS 한국어 음성으로 만들고 PCM WAV로 변환한다. `OPENAI_API_KEY`와 OpenAI SDK를 사용하지 않는다. 생성 요청과 결과 revision은 `.local` 아래에 프로젝트별 데이터와 분리해 저장하고, 결과 자산에는 요청 ID·prompt·도구 이름·참조 해시를 기록한다.
 
 ## 8. 검증 계획과 구현 순서
 
@@ -112,7 +115,7 @@ native 파일은 일반적인 프로젝트 원본을 표현한다. ID는 불투�
 2. 실제 제작 자료의 production 어댑터, 최소 합성 native 프로젝트, 원문·시간·선택 요소 검증: 구현 및 자동 검증됨.
 3. 컷·프레임·트랙 생성과 편집·잠금, 정보 공개·출처·커버리지 검증, JSON/CSV: 구현 및 자동 검증됨.
 4. 로컬 저장/API·편집 UI, 프로젝트 분리·재열기·원본 차이: 구현, 자동 검증 및 브라우저 흐름 확인됨.
-5. 시각 기준, OpenAI 컷·이미지·음성 생성, 재생, PDF 출력: 구현 및 모의 API 검증됨. 실제 생성 호출 검증이 남아 있다.
+5. 시각 기준, Codex App 컷·이미지·음성 요청과 결과 반영, 재생, PDF 출력: 구현 및 자동 검증됨. 합성 범용 사례의 실제 생성 흐름을 확인했으며 실제 제작 사례의 품질 검토가 남아 있다.
 6. 두 가지 이상의 구성으로 회귀·브라우저 검증, 전체 요구사항 감사: 합성 자료와 초기 회귀 자료의 가져오기·편집·출력은 검증됨. 실제 생성 자산의 시각·낭독 품질 검토가 남아 있다.
 
 필수 자동 검증은 원문 100% 보존과 단위 연결, 영상 시간 공백·중복, 잘못된 ID·구간 소유권, 미지원 버전·손상 해시, 공개 시점 위반, 잠근 필드 변경, 프로젝트 혼입, 저장·출력 정합성이다. 실제 제작 사례 수치는 fixture에만 둔다. 패널·반전이 없는 다른 분량의 프로젝트와 원본 ID가 겹치는 프로젝트도 검증한다.

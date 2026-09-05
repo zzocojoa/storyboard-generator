@@ -37,8 +37,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .project-facts { display: flex; gap: 10px; margin-left: auto; font-size: 9px; color: #676860; }
 .project-facts span { padding: 5px 8px; border-left: 1px solid #d1cfc7; }
 .top-actions { display: flex; gap: 5px; align-items: center; }
-.top-actions a, .top-actions .provider { color: #30312d; border: 1px solid #c8c6bf; padding: 7px 9px; text-decoration: none; font-size: 8px; background: white; }
-.top-actions a:hover { border-color: #e65a36; color: #e65a36; }
+.top-actions a, .top-actions button, .top-actions .provider { color: #30312d; border: 1px solid #c8c6bf; padding: 7px 9px; text-decoration: none; font-size: 8px; background: white; font-family: inherit; }
+.top-actions a:hover, .top-actions button:hover { border-color: #e65a36; color: #e65a36; }
 .top-actions .provider { margin-left: 7px; background: #f1e3d7; color: #9b3c25; border-color: #e8b8a8; }
 .top-actions .provider.ready { background: #dfe9d9; color: #365b2b; border-color: #afc5a4; }
 .edit-grid { min-height: 0; display: grid; grid-template-columns: 210px minmax(460px, 1fr) 330px; }

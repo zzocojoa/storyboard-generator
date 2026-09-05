@@ -3,7 +3,7 @@ import type { Asset, AudioCue, GenerationRecord, Project, StoryboardFrame } from
 import { ProjectSchema } from './schema.js';
 import { validateProject } from './validation.js';
 import { sha256Bytes, sha256Text } from '../importers/integrity.js';
-import type { GeneratedImage, GeneratedSpeech, ProposedSegment } from '../connectors/generation.js';
+import type { GeneratedImage, GeneratedSpeech, ProposedSegment } from '../codex/schema.js';
 import { applySegmentProposal } from '../proposal/model.js';
 
 export type GeneratedMutation = { project: Project; relativePath: string | null; content: Buffer | null };
@@ -32,11 +32,11 @@ function requireImageBytes(bytes: Buffer, mimeType: string): void {
 }
 
 function generationRecord(
-  id: string, result: { prompt: string; model: string; requestId: string | null },
+  id: string, result: { provider: string; prompt: string; model: string; requestId: string | null },
   resultAssetIds: readonly string[], shotIds: readonly string[], referenceHashes: readonly string[], createdAt: string,
 ): GenerationRecord {
   return {
-    id, provider: 'openai', model: result.model, modelVersion: null, requestId: result.requestId,
+    id, provider: result.provider, model: result.model, modelVersion: null, requestId: result.requestId,
     prompt: result.prompt, templateVersion: '1.0.0', seed: null, referenceHashes: [...referenceHashes],
     resultAssetIds: [...resultAssetIds], shotIds: [...shotIds], createdAt,
   };
