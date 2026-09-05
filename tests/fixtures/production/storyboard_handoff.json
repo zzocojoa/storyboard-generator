@@ -1,0 +1,182 @@
+{
+  "contractVersion": "1.0.0",
+  "adapter": "production-v1",
+  "projectId": "PRJ-007",
+  "packageVersion": "fixture-1",
+  "upstreamRevision": null,
+  "timebase": {
+    "fpsNumerator": 24,
+    "fpsDenominator": 1,
+    "dropFrame": false,
+    "sampleRate": 48000,
+    "startTimecode": "00:00:00:00"
+  },
+  "profile": {
+    "medium": "unspecified",
+    "aspectWidth": 16,
+    "aspectHeight": 9,
+    "visualStyle": null
+  },
+  "files": [
+    {
+      "id": "source-1",
+      "role": "presentation",
+      "path": "06_SCENE/presentation_plan.json",
+      "required": true,
+      "hashMode": "bytes-sha256",
+      "sha256": "c6e54e329388ca914981176be013f9135f120ccc76d26091d05a83945534e20c"
+    },
+    {
+      "id": "source-2",
+      "role": "screenplay",
+      "path": "07_SCRIPT/screenplay_units.json",
+      "required": true,
+      "hashMode": "bytes-sha256",
+      "sha256": "8f2c226dc58a65cf1c2bad06f0c84177a37b9133c15c844d94f899d624f69287"
+    },
+    {
+      "id": "source-3",
+      "role": "reactions",
+      "path": "06_SCENE/reaction_segments.json",
+      "required": true,
+      "hashMode": "bytes-sha256",
+      "sha256": "bb89d409f47f692bbaf570cebb6d328dd7949c9c376e47b7849def03860f148a"
+    },
+    {
+      "id": "source-4",
+      "role": "characters",
+      "path": "02_CHARACTER/characters.json",
+      "required": true,
+      "hashMode": "bytes-sha256",
+      "sha256": "6b9a444ab76406545f31997581d67c9d463111abeabef883386e9626c8665af0"
+    },
+    {
+      "id": "source-5",
+      "role": "panel-cast",
+      "path": "06_SCENE/panel_cast.json",
+      "required": true,
+      "hashMode": "bytes-sha256",
+      "sha256": "7254189f662a0045416828f197a67eca49473cc073c4faaaedd4da4bccfcc638"
+    },
+    {
+      "id": "source-6",
+      "role": "scene-cards",
+      "path": "06_SCENE/scene_cards.json",
+      "required": true,
+      "hashMode": "bytes-sha256",
+      "sha256": "e10f01e4b0230ec77588717d992919b6aa5439bfdb78d967314b20c9e095dad9"
+    },
+    {
+      "id": "source-7",
+      "role": "footprint",
+      "path": "06_SCENE/production_footprint.json",
+      "required": true,
+      "hashMode": "bytes-sha256",
+      "sha256": "824db7d8613da89b5223bd714b0d82e88a4f8e238a4b60888927a68d3103a412"
+    },
+    {
+      "id": "source-8",
+      "role": "manifest",
+      "path": "09_PRODUCTION/production_manifest.json",
+      "required": true,
+      "hashMode": "bytes-sha256",
+      "sha256": "5fcfd49cfc4876af90505b5d01188b8991d857651627944337e9895e81a34d10"
+    },
+    {
+      "id": "source-9",
+      "role": "shooting",
+      "path": "09_PRODUCTION/shooting_script.md",
+      "required": true,
+      "hashMode": "bytes-sha256",
+      "sha256": "e38da4030a082a6e847e70ebc5292d29e27e3125ee1f2afe2ca6200421e28ce5"
+    },
+    {
+      "id": "source-10",
+      "role": "edit",
+      "path": "09_PRODUCTION/edit_script.md",
+      "required": true,
+      "hashMode": "bytes-sha256",
+      "sha256": "f5f7de0b3c975db19b971ca01e67b539e6ea18157c5640175dff87476fb10fef"
+    },
+    {
+      "id": "source-11",
+      "role": "subtitles",
+      "path": "09_PRODUCTION/subtitle_script.md",
+      "required": true,
+      "hashMode": "bytes-sha256",
+      "sha256": "c928d8f9f2c315ce66a5139bfa2c966bcb2cf37e814964a055dad4fe7abbd7ab"
+    },
+    {
+      "id": "source-12",
+      "role": "readable",
+      "path": "09_PRODUCTION/broadcast_readable_script.md",
+      "required": true,
+      "hashMode": "bytes-sha256",
+      "sha256": "44db07433f6f29c1e4385407fca959800e374fafe9176c5e260f1edf0791a7fd"
+    },
+    {
+      "id": "source-13",
+      "role": "readable",
+      "path": "09_PRODUCTION/reenactment_character_script.md",
+      "required": true,
+      "hashMode": "bytes-sha256",
+      "sha256": "dd26ab638696c398e1c3c3442f70508ca04a562964351120c0d024b5b701d924"
+    },
+    {
+      "id": "source-14",
+      "role": "readable",
+      "path": "09_PRODUCTION/narration.md",
+      "required": true,
+      "hashMode": "bytes-sha256",
+      "sha256": "ca6a62251d82a988346c7686ac7205408c561c24b90d252dbb16022dd7d1780c"
+    },
+    {
+      "id": "source-15",
+      "role": "readable",
+      "path": "09_PRODUCTION/panel_reaction_script.md",
+      "required": true,
+      "hashMode": "bytes-sha256",
+      "sha256": "d740bdde93bbaca33b3a54c3663f3e1ed449ae39a5d3779411a6b08651b8be99"
+    }
+  ],
+  "authority": [
+    {
+      "field": "timeline",
+      "fileIds": [
+        "source-1"
+      ]
+    },
+    {
+      "field": "units",
+      "fileIds": [
+        "source-2"
+      ]
+    },
+    {
+      "field": "people",
+      "fileIds": [
+        "source-4",
+        "source-5"
+      ]
+    },
+    {
+      "field": "scenes",
+      "fileIds": [
+        "source-2",
+        "source-6"
+      ]
+    },
+    {
+      "field": "screen-text",
+      "fileIds": [
+        "source-2"
+      ]
+    },
+    {
+      "field": "panel-turns",
+      "fileIds": [
+        "source-3"
+      ]
+    }
+  ]
+}

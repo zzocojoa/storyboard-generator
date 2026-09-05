@@ -1,0 +1,18 @@
+{
+  "host": "127.0.0.1",
+  "port": 4317,
+  "dataRoot": ".local/data",
+  "webRoot": "dist/web",
+  "pdfFontPath": "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
+  "generation": {
+    "proposalModel": "gpt-6-astra",
+    "imageModel": "gpt-image-2",
+    "imageQuality": "low",
+    "speechModel": "gpt-4o-mini-tts",
+    "speechVoice": "cedar",
+    "speechInstructions": "한국어 영상 제작용 가이드 음성입니다. 의미를 바꾸지 말고 또렷하고 자연스럽게 읽으세요.",
+    "requestTimeoutMs": 120000,
+    "retryCount": 2,
+    "retryBackoffMs": 750
+  }
+}
