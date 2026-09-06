@@ -1,5 +1,15 @@
 import { contractError, issue } from './errors.js';
-import type { Issue, Timebase } from './schema.js';
+import type { Issue, Shot, StoryboardFrame, Timebase } from './schema.js';
+
+export function frameDisplayAbsoluteMs(shot: Shot, frame: StoryboardFrame): number {
+  return shot.startMs + frame.offsetMs;
+}
+
+/** End Frame은 저장 위치를 유지하면서 컷 내부의 마지막 유효 밀리초에서 의미를 평가한다. */
+export function frameEvaluationAbsoluteMs(shot: Shot, frame: StoryboardFrame): number {
+  if (frame.role === 'end') return Math.max(shot.startMs, shot.endMs - 1);
+  return frameDisplayAbsoluteMs(shot, frame);
+}
 
 export function secondsToMilliseconds(seconds: number): number {
   const milliseconds: number = seconds * 1000;

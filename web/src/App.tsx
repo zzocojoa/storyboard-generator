@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, FormEvent, ReactElement } from 'react';
-import { activeStoryboardFrame } from '../../src/domain/playback.js';
+import { audioOverhangAfterMs, audioOverhangBeforeMs } from '../../src/domain/audio.js';
+import { frameInformationIds, reviewInformationEmission, reviewIssuesForTextCue, textCueInformationIds } from '../../src/domain/emission.js';
+import { activeStoryboardFrame, activeStoryboardShot, playableAudioCuesAt, reviewAudioPlaybackAt, reviewTextPlaybackAt } from '../../src/domain/playback.js';
+import type { BlockedCue } from '../../src/domain/playback.js';
 import type { StoryboardFrameInput } from '../../src/domain/frame.js';
 import { approvalIssuesForShot, effectiveInformationGate, sourceAnchorRange, textMappingReviewIssues } from '../../src/domain/mapping.js';
 import type { EffectiveInformationGate, ShotSourceLinksInput, TextMappingDecisionInput } from '../../src/domain/mapping.js';
 import type { Asset, AudioCue, Issue, LockedField, Profile, Project, Segment, Shot, ShotContent, ShotSourceLink, SourceTemporalAnchor, SourceUnit, StoryboardFrame, TextCue, TextMappingDecision, TextPlacement } from '../../src/domain/schema.js';
 import type { AudioCueTimingInput, TextCueTimingInput } from '../../src/domain/tracks.js';
+import { frameDisplayAbsoluteMs, frameEvaluationAbsoluteMs } from '../../src/domain/time.js';
 import { fetchProject, fetchStatus, importProject, listProjects, mutateProject, previewSourceUpdate, queueCodexRequest, updateProjectSource } from './api.js';
 import type { AppStatus, CodexRequest, ProjectSummary, SourceImpact } from './api.js';
 
@@ -162,7 +166,7 @@ function Timeline(props: { project: Project; playhead: number; playing: boolean;
     <div className="timeline-canvas">
       <div className="track-label">CUT</div><div className="track cut-track">{props.project.shots.map((shot: Shot): ReactElement => <span key={shot.id} style={{ left: `${percent(shot.startMs, total)}%`, width: `${percent(shot.endMs - shot.startMs, total)}%` }} title={shot.id}></span>)}</div>
       <div className="track-label">TXT</div><div className="track text-track">{props.project.textCues.map((cue: TextCue): ReactElement => <span key={cue.id} style={{ left: `${percent(cue.startMs, total)}%`, width: `${percent(cue.endMs - cue.startMs, total)}%` }} title={cue.text}></span>)}</div>
-      <div className="track-label">AUD</div><div className="track audio-track">{props.project.audioCues.map((cue: AudioCue): ReactElement => <span key={cue.id} className={cue.assetId === null ? '' : 'ready'} style={{ left: `${percent(cue.startMs, total)}%`, width: `${percent(cue.endMs - cue.startMs, total)}%` }} title={cue.kind}></span>)}</div>
+      <div className="track-label">AUD</div><div className="track audio-track">{props.project.audioCues.map((cue: AudioCue): ReactElement => <span key={cue.id} className={playableAudioCuesAt(props.project, cue.startMs).some((candidate: AudioCue): boolean => candidate.id === cue.id) ? 'ready' : ''} style={{ left: `${percent(cue.startMs, total)}%`, width: `${percent(cue.endMs - cue.startMs, total)}%` }} title={`${cue.kind} · ${cue.timingRelation}`}></span>)}</div>
       <div className="playhead" style={{ left: `calc(52px + (100% - 52px) * ${props.playhead / total})` }}></div>
     </div>
     <input className="scrubber" aria-label="재생 위치" type="range" min="0" max={total} step="1" value={props.playhead} onChange={(event): void => { props.onChange(Number(event.target.value)); }} />
@@ -170,30 +174,40 @@ function Timeline(props: { project: Project; playhead: number; playing: boolean;
 }
 
 function PlaybackMonitor(props: { project: Project; playhead: number; onClose: () => void }): ReactElement {
-  const shot: Shot | undefined = props.project.shots.find((candidate: Shot): boolean => candidate.startMs <= props.playhead && candidate.endMs > props.playhead) ?? props.project.shots.at(-1);
-  const frame: StoryboardFrame | null = shot === undefined ? null : activeStoryboardFrame(props.project, shot.id, props.playhead);
-  const shotIndex: number = shot === undefined ? -1 : props.project.shots.findIndex((candidate: Shot): boolean => candidate.id === shot.id);
+  const shot: Shot | null = activeStoryboardShot(props.project, props.playhead);
+  const frame: StoryboardFrame | null = shot === null ? null : activeStoryboardFrame(props.project, shot.id, props.playhead);
+  const shotIndex: number = shot === null ? -1 : props.project.shots.findIndex((candidate: Shot): boolean => candidate.id === shot.id);
   const nextShot: Shot | undefined = shotIndex < 0 ? undefined : props.project.shots[shotIndex + 1];
-  const transitionStart: number = shot === undefined ? 0 : shot.endMs - shot.transitionOut.durationMs;
-  const transitionActive: boolean = shot !== undefined && shot.transitionOut.kind !== 'cut' && shot.transitionOut.durationMs > 0 && props.playhead >= transitionStart && props.playhead < shot.endMs;
-  const transitionProgress: number = transitionActive && shot !== undefined ? (props.playhead - transitionStart) / shot.transitionOut.durationMs : 0;
+  const transitionStart: number = shot === null ? 0 : shot.endMs - shot.transitionOut.durationMs;
+  const transitionActive: boolean = shot !== null && shot.transitionOut.kind !== 'cut' && shot.transitionOut.durationMs > 0 && props.playhead >= transitionStart && props.playhead < shot.endMs;
+  const transitionProgress: number = transitionActive && shot !== null ? (props.playhead - transitionStart) / shot.transitionOut.durationMs : 0;
   const nextFrame: StoryboardFrame | null = nextShot === undefined ? null : activeStoryboardFrame(props.project, nextShot.id, nextShot.startMs);
+  const nextFrameSafe: boolean = nextFrame !== null && reviewInformationEmission(props.project, {
+    entityId: nextFrame.id, channel: 'image', informationIds: frameInformationIds(props.project, nextFrame.id), atMs: props.playhead,
+  }).length === 0;
   const currentOpacity: number = transitionActive && shot?.transitionOut.kind !== 'wipe' ? 1 - transitionProgress : 1;
   const nextOpacity: number = shot?.transitionOut.kind === 'match-cut' ? (transitionProgress >= .5 ? 1 : 0) : transitionProgress;
   const nextClip: string = shot?.transitionOut.kind === 'wipe' ? `inset(0 ${100 - transitionProgress * 100}% 0 0)` : 'none';
-  const cues: TextCue[] = props.project.textCues.filter((cue: TextCue): boolean => cue.startMs <= props.playhead && cue.endMs > props.playhead);
+  const textPlayback = reviewTextPlaybackAt(props.project, props.playhead);
+  const audioPlayback = reviewAudioPlaybackAt(props.project, props.playhead);
+  const blocked: BlockedCue[] = [...textPlayback.blocked, ...audioPlayback.blocked];
+  const frameIssues: Issue[] = frame === null ? [] : reviewInformationEmission(props.project, {
+    entityId: frame.id, channel: 'image', informationIds: frameInformationIds(props.project, frame.id), atMs: props.playhead,
+  });
   return <div className="monitor" role="dialog" aria-label="콘티 시간순 재생"><div className="monitor-bar"><span>PROGRAM MONITOR</span><time>{clock(props.playhead)}</time><button onClick={props.onClose}>CLOSE</button></div>
-    <div className="monitor-frame"><div className="monitor-layer" style={{ opacity: currentOpacity }}><FrameImage project={props.project} frame={frame} alt="현재 재생 프레임" /></div>{transitionActive && nextShot !== undefined && shot?.transitionOut.kind !== 'fade' && <div className="monitor-layer next" style={{ opacity: nextOpacity, clipPath: nextClip }}><FrameImage project={props.project} frame={nextFrame} alt="다음 재생 프레임" /></div>}{transitionActive && <span className="transition-indicator">{shot?.transitionOut.kind.toUpperCase()} · {Math.round(transitionProgress * 100)}%</span>}{cues.map((cue: TextCue): ReactElement => <div className="monitor-text" key={cue.id}>{cue.text}</div>)}</div>
-    <div className="monitor-caption"><b>{shot?.id ?? 'END'}</b><span>{shot?.action ?? '재생 종료'}</span><em>{shot === undefined ? '' : `${shot.transitionOut.kind.toUpperCase()} ${shot.transitionOut.durationMs}ms`}</em></div></div>;
+    <div className="monitor-frame"><div className="monitor-layer" style={{ opacity: currentOpacity }}><FrameImage project={props.project} frame={frameIssues.length === 0 ? frame : null} alt="현재 재생 프레임" /></div>{transitionActive && nextShot !== undefined && nextFrameSafe && shot?.transitionOut.kind !== 'fade' && <div className="monitor-layer next" style={{ opacity: nextOpacity, clipPath: nextClip }}><FrameImage project={props.project} frame={nextFrame} alt="다음 재생 프레임" /></div>}{transitionActive && <span className="transition-indicator">{shot?.transitionOut.kind.toUpperCase()} · {Math.round(transitionProgress * 100)}%</span>}{textPlayback.playable.map((cue: TextCue): ReactElement => <div className="monitor-text" key={cue.id}>{cue.text}</div>)}</div>
+    {(blocked.length > 0 || frameIssues.length > 0) && <div className="output-blocked"><b>OUTPUT BLOCKED</b>{frameIssues.length > 0 && <p>{frame?.id} · {frameIssues.map((item: Issue): string => item.code).join(', ')} · NOW {props.playhead}ms</p>}{blocked.map((entry: BlockedCue): ReactElement => <p key={`${entry.channel}:${entry.cueId}`}>{entry.cueId} · {entry.issues.map((item: Issue): string => item.code).join(', ')} · INFORMATION {entry.informationIds.join(', ') || 'NONE'} · NOW {entry.atMs}ms · ALLOWED {entry.issues.map((item: Issue): string | null => item.expected).filter((value: string | null): value is string => value !== null).join(', ') || 'REVIEW'}</p>)}</div>}
+    <div className="monitor-caption"><b>{shot?.id ?? 'END'}</b><span>{shot?.action ?? '재생 종료'}</span><em>{shot === null ? '' : `${shot.transitionOut.kind.toUpperCase()} ${shot.transitionOut.durationMs}ms`}</em></div></div>;
 }
 
-function FrameEditor(props: { frame: StoryboardFrame; working: boolean;
+function FrameEditor(props: { shot: Shot; frame: StoryboardFrame; working: boolean;
   onEdit: (frameId: string, input: StoryboardFrameInput) => Promise<void>; onReview: (frameId: string, review: StoryboardFrame['visualReview']) => Promise<void>;
   onGenerate: (frameId: string) => Promise<void>; }): ReactElement {
   const [draft, setDraft] = useState<StoryboardFrameInput>({ offsetMs: props.frame.offsetMs, role: props.frame.role, description: props.frame.description });
   useEffect((): void => { setDraft({ offsetMs: props.frame.offsetMs, role: props.frame.role, description: props.frame.description }); }, [props.frame]);
   return <article className="frame-editor">
     <header><b>{props.frame.role.toUpperCase()}</b><span>+{props.frame.offsetMs}ms · {props.frame.visualReview.toUpperCase()}</span></header>
+    <p>STORED {props.frame.offsetMs}ms · DISPLAY {frameDisplayAbsoluteMs(props.shot, props.frame)}ms · EVALUATION {frameEvaluationAbsoluteMs(props.shot, props.frame)}ms</p>
     <div className="pair"><label className="field">ROLE<select disabled={props.frame.role === 'start'} value={draft.role} onChange={(event): void => { setDraft({ ...draft, role: event.target.value as StoryboardFrame['role'] }); }}><option value="start">시작</option><option value="key">키</option><option value="end">끝</option></select></label>
       <label className="field">OFFSET MS<input type="number" min="0" value={draft.offsetMs} onChange={(event): void => { setDraft({ ...draft, offsetMs: Number(event.target.value) }); }} /></label></div>
     <label className="field wide">FRAME DESCRIPTION<textarea value={draft.description} onChange={(event): void => { setDraft({ ...draft, description: event.target.value }); }} /></label>
@@ -201,24 +215,37 @@ function FrameEditor(props: { frame: StoryboardFrame; working: boolean;
   </article>;
 }
 
-function AudioCueEditor(props: { cue: AudioCue; text: string; working: boolean; disclosure: string;
+function AudioCueEditor(props: { project: Project; cue: AudioCue; text: string; working: boolean; disclosure: string;
   onTiming: (cueId: string, input: AudioCueTimingInput) => Promise<void>; onSpeech: (cueId: string) => Promise<void>; }): ReactElement {
-  const [draft, setDraft] = useState<AudioCueTimingInput>({ startMs: props.cue.startMs, endMs: props.cue.endMs });
-  useEffect((): void => { setDraft({ startMs: props.cue.startMs, endMs: props.cue.endMs }); }, [props.cue]);
+  const [draft, setDraft] = useState<AudioCueTimingInput>({ startMs: props.cue.startMs, endMs: props.cue.endMs, timingRelation: props.cue.timingRelation });
+  useEffect((): void => { setDraft({ startMs: props.cue.startMs, endMs: props.cue.endMs, timingRelation: props.cue.timingRelation }); }, [props.cue]);
+  const unit = props.project.dataset.units.find((candidate): boolean => candidate.id === props.cue.unitId);
+  const sourceSegment = props.project.dataset.segments.find((candidate): boolean => candidate.id === unit?.segmentId);
+  const playback = reviewAudioPlaybackAt(props.project, props.cue.startMs);
+  const blocked = playback.blocked.find((entry: BlockedCue): boolean => entry.cueId === props.cue.id);
   return <article className="track-editor"><header><b>{props.cue.kind.toUpperCase()}</b><span>{props.cue.timingStatus.toUpperCase()}</span></header><p>{props.text}</p>
+    <p>SOURCE {sourceSegment?.id ?? 'UNKNOWN'} · RELATION {props.cue.timingRelation} · BEFORE {audioOverhangBeforeMs(props.project, props.cue)}ms · AFTER {audioOverhangAfterMs(props.project, props.cue)}ms</p>
+    <p>{blocked === undefined ? 'OUTPUT READY' : `OUTPUT BLOCKED · ${blocked.issues.map((item: Issue): string => item.code).join(', ')}`}</p>
+    <label className="field">TIMING RELATION<select value={draft.timingRelation} onChange={(event): void => { setDraft({ ...draft, timingRelation: event.target.value as AudioCue['timingRelation'] }); }}><option value="within-segment">WITHIN SEGMENT</option><option value="j-cut">J-CUT</option><option value="l-cut">L-CUT</option></select></label>
     <div className="pair"><label className="field">START MS<input type="number" min="0" value={draft.startMs} onChange={(event): void => { setDraft({ ...draft, startMs: Number(event.target.value) }); }} /></label><label className="field">END MS<input type="number" min="0" value={draft.endMs} onChange={(event): void => { setDraft({ ...draft, endMs: Number(event.target.value) }); }} /></label></div>
     <div className="track-actions"><button disabled={props.working} onClick={(): void => { void props.onTiming(props.cue.id, draft); }}>타이밍 저장</button>{isSpeechCue(props.cue) && <button disabled={props.working} title={props.disclosure} onClick={(): void => { void props.onSpeech(props.cue.id); }}>{props.cue.assetId === null ? 'CODEX VOICE' : 'RETAKE'}</button>}</div>
   </article>;
 }
 
-function TextCueEditor(props: { cue: TextCue; working: boolean; placementEndMs: number | null | undefined;
+function TextCueEditor(props: { project: Project; cue: TextCue; working: boolean; placementEndMs: number | null | undefined;
   onTiming: (cueId: string, input: TextCueTimingInput) => Promise<void>; }): ReactElement {
   const [draft, setDraft] = useState<TextCueTimingInput>({ startMs: props.cue.startMs, endMs: props.cue.endMs, kind: props.cue.kind });
   useEffect((): void => { setDraft({ startMs: props.cue.startMs, endMs: props.cue.endMs, kind: props.cue.kind }); }, [props.cue]);
+  const informationIds: string[] = textCueInformationIds(props.project, props.cue);
+  const cueIssues: Issue[] = reviewIssuesForTextCue(props.project, props.cue.id);
+  const gates: EffectiveInformationGate[] = informationIds.map((id: string): EffectiveInformationGate => effectiveInformationGate(props.project, id));
+  const derived: boolean = props.cue.authority === 'mapping-decision';
   return <article className="track-editor"><header><b>{props.cue.kind.toUpperCase()}</b><span>{props.cue.timingStatus.toUpperCase()}</span></header><p>{props.cue.text}</p>
+    <p>AUTHORITY {props.cue.authority} · MAPPING {props.cue.mappingDecisionId ?? 'NONE'} · UNIT {props.cue.unitId ?? 'NONE'}</p>
+    <p>INFORMATION {informationIds.join(', ') || 'NONE'} · GATE {gates.map((gate: EffectiveInformationGate): string => `${gate.id}:${gate.effectiveNotBeforeMs}`).join(', ') || 'NONE'} · {cueIssues.length === 0 ? 'OUTPUT READY' : `OUTPUT BLOCKED ${cueIssues.map((item: Issue): string => item.code).join(', ')}`}</p>
     <label className="field">TYPE<select value={draft.kind} onChange={(event): void => { setDraft({ ...draft, kind: event.target.value as TextCue['kind'] }); }}><option value="overlay">오버레이</option><option value="prop-text">화면 속 글자</option><option value="dialogue-subtitle">대사 자막</option></select></label>
-    <div className="pair"><label className="field">START MS<input disabled={props.cue.placementId !== null} type="number" min="0" value={draft.startMs} onChange={(event): void => { setDraft({ ...draft, startMs: Number(event.target.value) }); }} /></label><label className="field">END MS<input disabled={props.placementEndMs !== null && props.placementEndMs !== undefined} type="number" min="0" value={draft.endMs} onChange={(event): void => { setDraft({ ...draft, endMs: Number(event.target.value) }); }} /></label></div>
-    <div className="track-actions"><button disabled={props.working} onClick={(): void => { void props.onTiming(props.cue.id, draft); }}>글자 트랙 저장</button></div>
+    <div className="pair"><label className="field">START MS<input disabled={props.cue.placementId !== null || derived} type="number" min="0" value={draft.startMs} onChange={(event): void => { setDraft({ ...draft, startMs: Number(event.target.value) }); }} /></label><label className="field">END MS<input disabled={(props.placementEndMs !== null && props.placementEndMs !== undefined) || derived} type="number" min="0" value={draft.endMs} onChange={(event): void => { setDraft({ ...draft, endMs: Number(event.target.value) }); }} /></label></div>
+    <div className="track-actions"><button disabled={props.working || derived} onClick={(): void => { void props.onTiming(props.cue.id, draft); }}>{derived ? 'MAPPING에서 수정' : '글자 트랙 저장'}</button></div>
   </article>;
 }
 
@@ -348,7 +375,7 @@ function Inspector(props: { project: Project; segment: Segment; shot: Shot | nul
         <label className="field wide">MOVE<input value={props.draft.camera.move} onChange={(event): void => { props.onDraft({ ...props.draft as ShotContent, camera: { ...(props.draft as ShotContent).camera, move: event.target.value } }); }} /></label>
       </div>
       <label className="field wide">VISUAL LOCATION<select value={props.draft.visualLocationId ?? ''} onChange={(event): void => { props.onDraft({ ...props.draft as ShotContent, visualLocationId: event.target.value || null }); }}><option value="">미정</option>{props.project.dataset.locations.map((location): ReactElement => <option key={location.id} value={location.id}>{location.name}</option>)}</select></label>
-      <section className="inspector-section frame-list"><header>STORYBOARD FRAMES <span>{frames.length}</span></header>{frames.map((frame: StoryboardFrame): ReactElement => <FrameEditor key={frame.id} frame={frame} working={props.working} onEdit={props.onFrameEdit} onReview={props.onFrameReview} onGenerate={props.onFrameGenerate} />)}
+      <section className="inspector-section frame-list"><header>STORYBOARD FRAMES <span>{frames.length}</span></header>{frames.map((frame: StoryboardFrame): ReactElement => <FrameEditor key={frame.id} shot={shot} frame={frame} working={props.working} onEdit={props.onFrameEdit} onReview={props.onFrameReview} onGenerate={props.onFrameGenerate} />)}
         <div className="frame-add-actions">{keyOffset > 0 && keyOffset < duration && !frameOffsets.has(keyOffset) && <button disabled={props.working} onClick={(): void => { void props.onFrameAdd(shot.id, { offsetMs: keyOffset, role: 'key', description: `${shot.action} 중간 동작` }); }}>＋ 키 프레임</button>}{!frames.some((frame: StoryboardFrame): boolean => frame.role === 'end') && !frameOffsets.has(duration) && <button disabled={props.working} onClick={(): void => { void props.onFrameAdd(shot.id, { offsetMs: duration, role: 'end', description: `${shot.action} 종료 상태` }); }}>＋ 끝 프레임</button>}</div>
       </section>
       <div className="pair"><label className="field">CAMERA AXIS<input value={props.draft.cameraAxis ?? ''} onChange={(event): void => { props.onDraft({ ...props.draft as ShotContent, cameraAxis: event.target.value || null }); }} /></label><label className="field">DIRECTION<input value={props.draft.screenDirection ?? ''} onChange={(event): void => { props.onDraft({ ...props.draft as ShotContent, screenDirection: event.target.value || null }); }} /></label></div>
@@ -367,8 +394,8 @@ function Inspector(props: { project: Project; segment: Segment; shot: Shot | nul
         onChange={async (nextLink: ShotSourceLink): Promise<void> => { await props.onSourceLinks({ links: (shot.sourceLinks.map((link: ShotSourceLink): ShotSourceLink => link.unitId === nextLink.unitId ? nextLink : link)) }); }} onMove={props.onSourceMove} />)}</section>
       <section className="inspector-section text-mapping-block"><header>TEXT MAPPING REVIEW <span>{textMappingIssues.length} REVIEW</span></header>{textMappings.map((mapping): ReactElement => <TextMappingEditor key={mapping.decision.id} decision={mapping.decision} placement={mapping.placement} units={props.project.dataset.units.filter((unit: SourceUnit): boolean => unit.segmentId === props.segment.id)} issues={textMappingIssues.filter((item: Issue): boolean => item.entityId === mapping.decision.id)} working={props.working} onSave={props.onTextMapping} />)}</section>
       <section className="inspector-section information-gate-block"><header>INFORMATION GATE <span>{informationGates.filter((gate: EffectiveInformationGate): boolean => gate.reviewRequired).length} REVIEW</span></header>{informationGates.length === 0 && <p className="empty-note">이 구간에는 정보 공개 규칙이 없습니다.</p>}{informationGates.map((gate: EffectiveInformationGate): ReactElement => <article className={gate.reviewRequired ? 'mapping-editor unresolved' : 'mapping-editor'} key={gate.id}><header><b>{gate.id}</b><span>{gate.precision}</span></header><p>BASE {gate.baseNotBeforeMs}ms · EFFECTIVE {gate.effectiveNotBeforeMs}ms</p><p className="canonical-text">{gate.evidenceType} · {gate.evidenceId ?? 'authoritative base'}</p>{gate.reviewReasons.map((reason: string): ReactElement => <p className="mapping-issue" key={reason}>{reason}</p>)}<small className="source-ref">{gate.sourceRefs.map((ref): string => `${ref.fileId}:${ref.locator}`).join(' · ')}</small></article>)}</section>
-      <section className="inspector-section audio-block"><header>AUDIO TRACK <span>{audio.filter((cue: AudioCue): boolean => cue.assetId !== null).length}/{audio.length}</span></header><p className="disclosure">{props.status?.aiVoiceDisclosure ?? '가이드 음성은 Codex App 작업에서 생성합니다.'}</p>{audio.map((cue: AudioCue): ReactElement => <AudioCueEditor key={cue.id} cue={cue} text={props.project.dataset.units.find((candidate): boolean => candidate.id === cue.unitId)?.text ?? cue.unitId} working={props.working} disclosure={props.status?.aiVoiceDisclosure ?? 'Codex App 가이드 음성'} onTiming={props.onAudioTiming} onSpeech={props.onSpeech} />)}</section>
-      <section className="inspector-section text-block"><header>TEXT TRACK <span>{text.length}</span></header>{text.map((cue: TextCue): ReactElement => <TextCueEditor key={cue.id} cue={cue} working={props.working} placementEndMs={props.project.dataset.textPlacements.find((placement): boolean => placement.id === cue.placementId)?.endMs} onTiming={props.onTextTiming} />)}</section>
+      <section className="inspector-section audio-block"><header>AUDIO TRACK <span>{audio.filter((cue: AudioCue): boolean => playableAudioCuesAt(props.project, cue.startMs).some((candidate: AudioCue): boolean => candidate.id === cue.id)).length}/{audio.length} PLAYABLE</span></header><p className="disclosure">{props.status?.aiVoiceDisclosure ?? '가이드 음성은 Codex App 작업에서 생성합니다.'}</p>{audio.map((cue: AudioCue): ReactElement => <AudioCueEditor key={cue.id} project={props.project} cue={cue} text={props.project.dataset.units.find((candidate): boolean => candidate.id === cue.unitId)?.text ?? cue.unitId} working={props.working} disclosure={props.status?.aiVoiceDisclosure ?? 'Codex App 가이드 음성'} onTiming={props.onAudioTiming} onSpeech={props.onSpeech} />)}</section>
+      <section className="inspector-section text-block"><header>TEXT TRACK <span>{text.length}</span></header>{text.map((cue: TextCue): ReactElement => <TextCueEditor key={cue.id} project={props.project} cue={cue} working={props.working} placementEndMs={props.project.dataset.textPlacements.find((placement): boolean => placement.id === cue.placementId)?.endMs} onTiming={props.onTextTiming} />)}</section>
       <form className="reference-form" onSubmit={upload}><header>VISUAL REFERENCE</header><select value={reference.kind} onChange={(event): void => { const kind = event.target.value as ReferenceDraft['kind']; setReference({ ...reference, kind, subjectId: '' }); }}><option value="character">인물</option><option value="location">장소</option><option value="prop">소품</option></select>
         {reference.kind !== 'prop' && <select required value={reference.subjectId} onChange={(event): void => { setReference({ ...reference, subjectId: event.target.value }); }}><option value="">대상 선택</option>{referenceSubjects.map((subject): ReactElement => <option key={subject.id} value={subject.id}>{subject.name}</option>)}</select>}
         <input required placeholder="외형·상태 설명" value={reference.description} onChange={(event): void => { setReference({ ...reference, description: event.target.value }); }} />
@@ -448,7 +475,7 @@ export default function App(): ReactElement {
 
   useEffect((): void => {
     if (!playing || project === null) return;
-    for (const cue of project.audioCues.filter((candidate: AudioCue): boolean => candidate.assetId !== null && candidate.startMs <= playhead && candidate.endMs > playhead)) {
+    for (const cue of playableAudioCuesAt(project, playhead)) {
       if (playedCues.current.has(cue.id) || cue.assetId === null) continue;
       const audioElement = new Audio(assetUrl(project.projectId, cue.assetId));
       audioElement.currentTime = Math.max(0, (playhead - cue.startMs) / 1000);

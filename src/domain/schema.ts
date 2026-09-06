@@ -180,15 +180,35 @@ export const FrameSchema = z.strictObject({
   id: IdSchema, shotId: IdSchema, offsetMs: MillisecondsSchema, role: z.enum(['start', 'end', 'key']),
   description: z.string(), imageAssetId: IdSchema.nullable(), visualReview: z.enum(['pending', 'accepted', 'rejected']),
 });
+export const AudioTimingRelationSchema = z.enum(['within-segment', 'j-cut', 'l-cut']);
 export const AudioCueSchema = z.strictObject({
   id: IdSchema, unitId: IdSchema, kind: z.enum(['dialogue', 'voiceover', 'panel', 'sfx', 'music']),
   startMs: MillisecondsSchema, endMs: MillisecondsSchema, timingStatus: z.enum(['proposed', 'measured']),
-  assetId: IdSchema.nullable(),
+  timingRelation: AudioTimingRelationSchema, assetId: IdSchema.nullable(),
 });
-export const TextCueSchema = z.strictObject({
+export const TextCueAuthoritySchema = z.enum(['placement', 'mapping-decision', 'source-unit', 'review-required']);
+const TextCueFieldsSchema = z.strictObject({
   id: IdSchema, segmentId: IdSchema, unitId: IdSchema.nullable(), placementId: IdSchema.nullable(),
+  mappingDecisionId: IdSchema.nullable(), authority: TextCueAuthoritySchema,
   text: z.string(), startMs: MillisecondsSchema, endMs: MillisecondsSchema,
   kind: z.enum(['overlay', 'prop-text', 'dialogue-subtitle']), timingStatus: z.enum(['proposed', 'confirmed']),
+});
+export const TextCueSchema = TextCueFieldsSchema.superRefine((cue, context): void => {
+  const addIssue = (message: string, path: string): void => context.addIssue({ code: 'custom', message, path: [path] });
+  if (cue.authority === 'placement') {
+    if (cue.placementId === null) addIssue('Placement 권한 Cue에는 placementId가 필요합니다.', 'placementId');
+    if (cue.mappingDecisionId !== null) addIssue('Placement 권한 Cue는 mappingDecisionId를 저장하지 않습니다.', 'mappingDecisionId');
+  }
+  if (cue.authority === 'mapping-decision') {
+    if (cue.mappingDecisionId === null) addIssue('Mapping Decision 권한 Cue에는 mappingDecisionId가 필요합니다.', 'mappingDecisionId');
+    if (cue.unitId === null) addIssue('Mapping Decision 권한 Cue에는 Canonical Unit이 필요합니다.', 'unitId');
+    if (cue.placementId !== null) addIssue('Mapping Decision 권한 Cue는 Placement Cue와 분리되어야 합니다.', 'placementId');
+  }
+  if (cue.authority === 'source-unit') {
+    if (cue.unitId === null) addIssue('Source Unit 권한 Cue에는 unitId가 필요합니다.', 'unitId');
+    if (cue.placementId !== null || cue.mappingDecisionId !== null) addIssue('Source Unit 권한 Cue는 다른 시각 권한을 함께 저장하지 않습니다.', 'authority');
+  }
+  if (cue.authority === 'review-required' && cue.mappingDecisionId !== null) addIssue('검토 필요 Cue는 Mapping Decision 파생 Cue로 확정할 수 없습니다.', 'mappingDecisionId');
 });
 export const AssetSchema = z.strictObject({
   id: IdSchema, kind: z.enum(['image', 'audio', 'character', 'location', 'prop']),
@@ -201,7 +221,7 @@ export const GenerationSchema = z.strictObject({
   referenceHashes: z.array(HashSchema), resultAssetIds: z.array(IdSchema), shotIds: z.array(IdSchema), createdAt: z.iso.datetime(),
 });
 export const ProjectSchema = z.strictObject({
-  schemaVersion: z.literal('1.3.0'), projectId: IdSchema, title: z.string().min(1), revision: z.number().int().nonnegative(),
+  schemaVersion: z.literal('1.4.0'), projectId: IdSchema, title: z.string().min(1), revision: z.number().int().nonnegative(),
   profile: ProfileSchema,
   handoff: HandoffSchema, sources: z.array(SnapshotSchema), dataset: DatasetSchema, importIssues: z.array(IssueSchema),
   textMappingDecisions: z.array(TextMappingDecisionSchema),
@@ -237,7 +257,9 @@ export type SourceTemporalAnchor = z.infer<typeof SourceTemporalAnchorSchema>;
 export type ShotContent = z.infer<typeof ShotContentSchema>;
 export type LockedField = z.infer<typeof LockedFieldSchema>;
 export type StoryboardFrame = z.infer<typeof FrameSchema>;
+export type AudioTimingRelation = z.infer<typeof AudioTimingRelationSchema>;
 export type AudioCue = z.infer<typeof AudioCueSchema>;
+export type TextCueAuthority = z.infer<typeof TextCueAuthoritySchema>;
 export type TextCue = z.infer<typeof TextCueSchema>;
 export type Asset = z.infer<typeof AssetSchema>;
 export type GenerationRecord = z.infer<typeof GenerationSchema>;

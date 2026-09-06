@@ -36,7 +36,7 @@ describe('P0 원문과 공개 시점 회귀', (): void => {
     const changed: Project = {
       ...project,
       dataset: { ...project.dataset, informationRules: project.dataset.informationRules.map((rule) => rule.id === 'fact:FACT-10' ? { ...rule, baseNotBeforeMs: 1140000 } : rule) },
-      textMappingDecisions: project.textMappingDecisions.map((decision) => project.dataset.textPlacements.find((placement) => placement.id === decision.placementId)?.segmentId === 'SEG-024' ? { ...decision, status: 'confirmed' } : decision),
+      textMappingDecisions: project.textMappingDecisions.map((decision) => ({ ...decision, status: 'confirmed' })),
       shots: project.shots.map((candidate) => candidate.id === shot.id ? { ...candidate, sourceLinks: [{ unitId, usage: 'primary-visual', status: 'confirmed', temporalAnchor: { kind: 'frame', frameId: frame.id, basis: 'manual', status: 'confirmed' } }], informationIds: ['fact:FACT-10'] } : candidate),
       frames: [...project.frames, frame],
     };

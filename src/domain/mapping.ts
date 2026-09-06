@@ -8,6 +8,7 @@ import type {
   SourceRef, SourceTemporalAnchor, SourceUnit, StoryboardFrame, TextCue, TextMappingDecision, TextPlacement,
 } from './schema.js';
 import { sourcePolicyIssues } from './source-policy.js';
+import { frameDisplayAbsoluteMs, frameEvaluationAbsoluteMs } from './time.js';
 import { validateProject } from './validation.js';
 
 export const TextMappingDecisionInputSchema = z.strictObject({
@@ -100,9 +101,9 @@ function anchorRange(project: Project, shot: Shot, anchor: SourceTemporalAnchor)
   if (anchor.status !== 'confirmed') return null;
   if (anchor.kind === 'frame') {
     const frame: StoryboardFrame | undefined = project.frames.find((candidate: StoryboardFrame): boolean => candidate.id === anchor.frameId && candidate.shotId === shot.id);
-    if (frame === undefined || frame.offsetMs >= shotDurationMs) return null;
-    const startMs: number = shot.startMs + frame.offsetMs;
-    return { startMs, endMs: startMs + 1 };
+    if (frame === undefined || frame.offsetMs > shotDurationMs) return null;
+    const startMs: number = frameEvaluationAbsoluteMs(shot, frame);
+    return { startMs, endMs: Math.min(shot.endMs, startMs + 1) };
   }
   if (anchor.startOffsetMs >= shotDurationMs || anchor.startOffsetMs >= anchor.endOffsetMs || anchor.endOffsetMs > shotDurationMs) return null;
   return { startMs: shot.startMs + anchor.startOffsetMs, endMs: shot.startMs + anchor.endOffsetMs };
@@ -117,7 +118,7 @@ export function directVisualLinks(shot: Shot): ShotSourceLink[] {
 }
 
 export function absoluteFrameTime(shot: Shot, frame: StoryboardFrame): number {
-  return MillisecondsSchema.parse(shot.startMs + frame.offsetMs);
+  return MillisecondsSchema.parse(frameDisplayAbsoluteMs(shot, frame));
 }
 
 type GateEvidence = { time: number; type: GateEvidenceType; id: string; refs: SourceRef[] };
@@ -167,6 +168,7 @@ function audioEvidence(project: Project, rule: InformationRule): GateEvidence[] 
   const segment: Segment | undefined = project.dataset.segments.find((candidate: Segment): boolean => candidate.id === rule.segmentId);
   if (segment === undefined) return [];
   return project.audioCues.flatMap((cue: AudioCue): GateEvidence[] => {
+    if (cue.timingRelation !== 'within-segment') return [];
     const unit: SourceUnit | undefined = project.dataset.units.find((candidate: SourceUnit): boolean => candidate.id === cue.unitId && candidate.segmentId === rule.segmentId && candidate.informationIds.includes(rule.id));
     if (unit === undefined || measuredAsset(project, cue) === null || cue.startMs < segment.startMs || cue.endMs > segment.endMs) return [];
     return [{ time: cue.startMs, type: 'measured-audio', id: cue.id, refs: unit.sourceRefs }];
@@ -227,7 +229,7 @@ function placementCue(project: Project, decision: TextMappingDecision, existing:
   return {
     id: current?.id ?? `text-placement-${project.dataset.textPlacements.indexOf(placement) + 1}`, segmentId: placement.segmentId,
     unitId: decision.status === 'confirmed' && decision.relation !== 'standalone-placement' && decision.relation !== 'separate-element' ? decision.canonicalUnitId : null,
-    placementId: placement.id, text: placement.text, startMs: placement.startMs,
+    placementId: placement.id, mappingDecisionId: null, authority: 'placement', text: placement.text, startMs: placement.startMs,
     endMs: placement.endMs ?? current?.endMs ?? Math.min(segment.endMs, placement.startMs + 2000),
     kind: current?.kind ?? 'overlay', timingStatus: placement.endMs === null ? current?.timingStatus ?? 'proposed' : 'confirmed',
   };
@@ -241,6 +243,7 @@ function canonicalCue(project: Project, decision: TextMappingDecision, existing:
   const current: TextCue | undefined = existing.find((cue: TextCue): boolean => cue.unitId === unit.id && cue.placementId === null);
   return [{
     id: current?.id ?? `${decision.id}:canonical`, segmentId: unit.segmentId, unitId: unit.id, placementId: null,
+    mappingDecisionId: decision.id, authority: 'mapping-decision',
     text: unit.text, startMs: decision.canonicalStartMs, endMs: decision.canonicalEndMs,
     kind: unit.kind === 'SCREEN_TEXT' ? 'overlay' : 'prop-text', timingStatus: 'confirmed',
   }];
@@ -262,7 +265,8 @@ export function reconcileTextCues(project: Project, decisions: readonly TextMapp
       const segment: Segment = project.dataset.segments.find((value: Segment): boolean => value.id === unit.segmentId) as Segment;
       const current: TextCue | undefined = project.textCues.find((cue: TextCue): boolean => cue.unitId === unit.id && cue.placementId === null);
       return current ?? { id: `text-unit-${project.dataset.units.indexOf(unit) + 1}`, segmentId: unit.segmentId, unitId: unit.id, placementId: null,
-        text: unit.text, startMs: segment.startMs, endMs: Math.min(segment.endMs, segment.startMs + holdMs), kind: unit.kind === 'SCREEN_TEXT' ? 'overlay' : 'prop-text', timingStatus: 'proposed' };
+        mappingDecisionId: null, authority: 'source-unit', text: unit.text, startMs: segment.startMs,
+        endMs: Math.min(segment.endMs, segment.startMs + holdMs), kind: unit.kind === 'SCREEN_TEXT' ? 'overlay' : 'prop-text', timingStatus: 'proposed' };
     });
   return [...placed, ...canonical, ...unmapped];
 }
@@ -474,7 +478,7 @@ export function reviewIssuesForFrame(project: Project, frameId: string): Issue[]
   if (frame === undefined) return [issue('FRAME_NOT_FOUND', 'conflict', frameId, 'id', `프레임을 찾을 수 없습니다: ${frameId}`, 'existing frame', frameId, [])];
   const shot: Shot | undefined = project.shots.find((candidate: Shot): boolean => candidate.id === frame.shotId);
   if (shot === undefined) return [issue('SHOT_NOT_FOUND', 'conflict', frame.id, 'shotId', `프레임의 컷을 찾을 수 없습니다: ${frame.shotId}`, 'existing shot', frame.shotId, [])];
-  const frameMs: number = absoluteFrameTime(shot, frame);
+  const frameMs: number = frameEvaluationAbsoluteMs(shot, frame);
   const active: ShotSourceLink[] = directVisualLinks(shot).filter((link: ShotSourceLink): boolean => {
     const range: SourceAnchorRange | null = sourceAnchorRange(project, shot, link);
     return range !== null && range.startMs <= frameMs && frameMs < range.endMs;

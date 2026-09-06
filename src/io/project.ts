@@ -89,10 +89,48 @@ function migrate12To13(input: JsonObject): JsonObject {
   };
 }
 
-/** 1.0·1.1·1.2 저장본을 기준 Gate와 불확실한 Source Anchor가 분리된 1.3 형식으로 올린다. */
+function matchingCanonicalDecision(input: JsonObject, cue: JsonObject): JsonObject | null {
+  if (!Array.isArray(input.textMappingDecisions) || typeof cue.unitId !== 'string') return null;
+  const matches: JsonObject[] = input.textMappingDecisions.filter(isJsonObject).filter((decision: JsonObject): boolean =>
+    decision.canonicalUnitId === cue.unitId && decision.status === 'confirmed' && decision.renderCanonicalSeparately === true
+    && decision.canonicalStartMs === cue.startMs && decision.canonicalEndMs === cue.endMs);
+  return matches.length === 1 ? matches[0] ?? null : null;
+}
+
+function migratedTextCue14(input: JsonObject, cue: unknown): unknown {
+  if (!isJsonObject(cue)) return cue;
+  if (typeof cue.placementId === 'string') return { ...cue, authority: 'placement', mappingDecisionId: null };
+  const canonical: JsonObject | null = matchingCanonicalDecision(input, cue);
+  if (canonical !== null && typeof canonical.id === 'string') return { ...cue, authority: 'mapping-decision', mappingDecisionId: canonical.id };
+  if (typeof cue.unitId === 'string' && isJsonObject(input.dataset) && Array.isArray(input.dataset.units)) {
+    const unit: JsonObject | undefined = input.dataset.units.filter(isJsonObject).find((candidate: JsonObject): boolean =>
+      candidate.id === cue.unitId && candidate.segmentId === cue.segmentId && candidate.text === cue.text);
+    if (unit !== undefined) return { ...cue, authority: 'source-unit', mappingDecisionId: null };
+  }
+  return { ...cue, authority: 'review-required', mappingDecisionId: null };
+}
+
+function migratedFrame14(frame: unknown): unknown {
+  if (!isJsonObject(frame)) return frame;
+  const { evaluationAbsoluteMs: _evaluationAbsoluteMs, displayAbsoluteMs: _displayAbsoluteMs, ...stored } = frame;
+  return stored;
+}
+
+function migrate13To14(input: JsonObject): JsonObject {
+  if (input.schemaVersion !== '1.3.0' || !Array.isArray(input.audioCues) || !Array.isArray(input.textCues)) return input;
+  return {
+    ...input,
+    schemaVersion: '1.4.0',
+    audioCues: input.audioCues.map((cue: unknown): unknown => isJsonObject(cue) ? { ...cue, timingRelation: 'within-segment' } : cue),
+    textCues: input.textCues.map((cue: unknown): unknown => migratedTextCue14(input, cue)),
+    frames: Array.isArray(input.frames) ? input.frames.map(migratedFrame14) : input.frames,
+  };
+}
+
+/** 1.0~1.3 저장본을 출력 권한과 Audio 관계가 명시된 1.4 형식으로 올린다. */
 export function migrateProjectInput(input: unknown): unknown {
   if (!isJsonObject(input)) return input;
-  return migrate12To13(migrate11To12(migrate10To11(input)));
+  return migrate13To14(migrate12To13(migrate11To12(migrate10To11(input))));
 }
 
 /** 저장된 원본 스냅샷에서 데이터를 다시 계산해 편집 가능한 값과 원문을 구분한다. */

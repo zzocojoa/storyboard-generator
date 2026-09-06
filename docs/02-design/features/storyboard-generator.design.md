@@ -1,6 +1,6 @@
 # 범용 콘티 도구 — Design
 
-상태: 1.3.0 도메인 계약, 정보 공개 시간 안전장치, 대표 실제 구간의 Codex App 생성·PRJ-007 Golden 검증을 반영한 현재 설계. 전체 분량의 제작 판단은 별도 검토가 필요하다.
+상태: 1.4.0 도메인 계약, 공통 정보 출력 인터록, Text Cue 권한, End Frame 평가 경계, 명시적 J/L-cut과 대표 실제 구간의 Codex App 생성·PRJ-007 Golden 검증을 반영한 현재 설계. 전체 분량의 제작 판단은 별도 검토가 필요하다.
 
 ## 1. 목표와 결정 근거
 
@@ -23,10 +23,11 @@ flowchart LR
     Q --> X[Codex App 생성]
     X --> F[수정·프레임·음성·글자]
     F --> G[원문·시간·정보·잠금 검증]
-    G --> H[저장·JSON·CSV·PDF·재생]
+    G --> I[Information Emission Interlock]
+    I --> H[저장·JSON·CSV·PDF·재생]
 ```
 
-- `src/domain`: 타입·스키마, 정규화된 프로젝트, Text/Source Mapping, 시간·원문·정보 Gate 검사, 순수 편집 함수.
+- `src/domain`: 타입·스키마, 정규화된 프로젝트, Text/Source Mapping, 시간·원문·정보 Gate 검사, 출력 인터록, 안전한 재생 선택자, 순수 편집 함수.
 - `src/importers`: 패키지 검사, 범용 native 입력, 기존 production 입력의 명시적 변환.
 - `src/proposal`: 구간의 허용된 원문을 이용한 컷 제안과 모델 요청 경계.
 - `src/exporters`: 검증된 프로젝트의 JSON·CSV·PDF 출력.
@@ -64,9 +65,9 @@ native 파일은 일반적인 프로젝트 원본을 표현한다. ID는 불투�
 - 원문 `SourceUnit`은 발화, 내레이션, 패널 발화, 지문, 화면 글자, 채팅, 메모, 효과음, 음악을 구분한다. 원문 문자열과 출처는 편집 지시와 분리한다.
 - `Shot`은 구간, 화면 위치, 구도·각도·이동, 행동 제안, 출연 형태, 소품, 연속성 전후 상태, 다음 컷으로 나가는 전환, 원문 참조를 가진다.
 - `StoryboardFrame`은 컷의 시작·종료·중간 keyframe과 이미지 자산을 별도로 연결한다. 컷 하나에 이미지 하나를 강제하지 않는다.
-- `AudioCue`와 `TextCue`는 영상 컷과 독립된 시작·종료를 가진다. 오디오는 발화·VO·패널·SFX·음악을 구분한다. 채팅·메모를 자동 낭독하지 않는다.
+- `AudioCue`와 `TextCue`는 영상 컷과 독립된 시작·종료를 가진다. 오디오는 발화·VO·패널·SFX·음악을 구분하고 원본 Segment와의 관계를 `within-segment`, `j-cut`, `l-cut`으로 명시한다. Text Cue는 Placement, 확정 Mapping, Source Unit 또는 `review-required` 권한을 기록한다. 채팅·메모를 자동 낭독하지 않는다.
 - `TextMappingDecision`은 자막 Placement와 Canonical 원문의 관계를 `exact`, `abbreviation`, `separate-element`, `replacement`, `standalone-placement`로 기록한다. 명시적 `placement.unitId`, 허용 종류의 유일한 정확 일치, 유일한 휴리스틱 후보 순서로 찾는다. 중복 정확 일치는 자동 선택하지 않는다. 관계마다 Canonical 연결·별도 렌더링·시간 범위의 불변식을 검사한다. `separate-element`의 Placement Cue는 Canonical Unit을 소유하지 않고, 별도 Canonical Cue만 명시한 시각과 Unit을 가진다.
-- `ShotSourceLink`는 컷과 원문 Unit의 권한 관계다. `primary-visual`, `continued-visual`, `audio-only`, `context-only` 용도와 `confirmed`, `mapping-required` 상태, `shot-offset`·`frame`·`unresolved` 시간 Anchor를 가진다. `SOUND`와 `MUSIC`은 직접 시각 근거가 될 수 없고 `continued-visual`은 앞선 `primary-visual`을 요구한다. `sourceUnitIds`는 1.3.0 프로젝트에 중복 저장하지 않는다.
+- `ShotSourceLink`는 컷과 원문 Unit의 권한 관계다. `primary-visual`, `continued-visual`, `audio-only`, `context-only` 용도와 `confirmed`, `mapping-required` 상태, `shot-offset`·`frame`·`unresolved` 시간 Anchor를 가진다. `SOUND`와 `MUSIC`은 직접 시각 근거가 될 수 없고 `continued-visual`은 앞선 `primary-visual`을 요구한다. `sourceUnitIds`는 1.4.0 프로젝트에 중복 저장하지 않는다.
 - 인물의 역할·시각 기준과 컷의 실제 출연 형태를 분리한다. 출연 형태는 VISIBLE, HAND_ONLY, SILHOUETTE, OFFSCREEN_VOICE, VOICE_OVER, IMPLIED, ARCHIVE_IMAGE다. 목록에 없으면 그 컷의 출연이 선언되지 않은 상태다.
 - 장소는 이야기 장소와 화면 장소를 분리한다. 모호한 장소를 이야기 장소로 자동 확정하지 않는다.
 - `Asset`은 종류, 경로, SHA-256, 시각 설명, 원문과 독립된 버전을 가진다. 인물 의상·소품 상태·공간 축은 컷의 연속성 상태로 표현한다.
@@ -76,9 +77,13 @@ native 파일은 일반적인 프로젝트 원본을 표현한다. ID는 불투�
 
 내부 시간은 프로젝트 시작에 대한 정수 밀리초와 반열린 구간 `[startMs, endMs)`로 저장한다. FPS는 유리수, drop-frame 여부, 오디오 sample rate, 시작 timecode는 프로젝트 설정으로 둔다. 밀리초↔프레임 변환의 반올림 정책을 명시하고 저장 시간표를 표시 문자열로 역산하지 않는다. Drop-frame 지원 범위는 검증된 조합으로 제한한다.
 
-구간에는 fixed/proposed 시간 상태가 있다. 미정 시간은 임의의 25분으로 채우지 않는다. 음성은 proposed/measured 상태를 별도로 가지며, 실제 가이드 음성 길이를 측정하기 전 낭독 가능성을 통과로 판정하지 않는다. J/L컷의 오디오 구간은 의도적으로 영상 구간을 넘어갈 수 있지만 전체 타임라인 범위를 넘지 않아야 한다.
+구간에는 fixed/proposed 시간 상태가 있다. 미정 시간은 임의의 25분으로 채우지 않는다. 음성은 proposed/measured 상태를 별도로 가지며, 실제 가이드 음성 길이와 Audio Cue의 명시적 관계를 검증하기 전 낭독 가능성을 통과로 판정하지 않는다. `j-cut`은 바로 앞 Segment에서 시작해 원본 Segment 안에서 끝나고, `l-cut`은 원본 Segment에서 시작해 바로 다음 Segment 안에서 끝난다. J/L-cut은 Information Gate 증거가 아니다. 시간이나 관계를 바꾸면 measured 상태와 Audio 기반 Anchor를 무효화한다.
 
-정보 공개 규칙은 information ID, 최초 Segment, 최초 Unit과 순서, 권한 하한 `baseNotBeforeMs`, `exact-time`·`unit-order`·`segment-start` 정밀도를 가진다. `effectiveNotBeforeMs`는 저장 필드가 아니며 확정 Text Mapping, 확정 Source Temporal Anchor, 같은 Segment의 유효한 측정 Audio Cue, 유일한 Unit 순서 근거에서 매 검사마다 계산한다. 어떤 근거도 기준 하한을 앞당길 수 없다. Source나 Audio가 더 늦은 Unit-order 근거보다 앞서면 후반 근거를 유효 하한으로 유지하고 충돌을 검토 항목으로 만든다. Unit 순서만 있고 확정 시간 근거가 없으면 검토 필요 상태로 남겨 승인과 생성을 막는다. 프레임 Prompt는 `shot.startMs + frame.offsetMs`와 해당 시각에 활성화된 직접 시각 Link 및 Text Mapping만 함께 검사한다. 모든 시간 활성 구간은 `[startMs, endMs)`로 판정한다. 금지 사실의 설명 자체를 이미지 prompt에 넣지 않는다. 기록된 정보 ID를 비교하는 검사는 의미적·시각적 반전 누설을 완전히 검증하지 못하므로 그림 검토 상태를 따로 둔다.
+정보 공개 규칙은 information ID, 최초 Segment, 최초 Unit과 순서, 권한 하한 `baseNotBeforeMs`, `exact-time`·`unit-order`·`segment-start` 정밀도를 가진다. `effectiveNotBeforeMs`는 저장 필드가 아니며 확정 Text Mapping, 확정 Source Temporal Anchor, 같은 Segment의 유효한 `within-segment` 측정 Audio Cue, 유일한 Unit 순서 근거에서 매 검사마다 계산한다. 어떤 근거도 기준 하한을 앞당길 수 없다. Source나 Audio가 더 늦은 Unit-order 근거보다 앞서면 후반 근거를 유효 하한으로 유지하고 충돌을 검토 항목으로 만든다. Unit 순서만 있고 확정 시간 근거가 없으면 검토 필요 상태로 남겨 승인과 생성을 막는다.
+
+Information Emission Interlock은 이미지, 글자 오버레이, 음성 재생·생성, 컷 제안, PDF·CSV 출력에 같은 공개 판정을 적용한다. 출력 대상은 정보 ID의 원본 근거와 유효 Gate를 가져야 하며, 미해결 규칙·검토 필요 Gate·조기 공개는 차단한다. Program Monitor와 실제 오디오 요소는 안전 선택자의 결과만 렌더링하고 차단된 Cue는 본문 대신 ID와 Issue code를 표시한다. JSON은 재편집과 감사를 위해 원본 데이터와 재계산 입력을 보존한다.
+
+프레임 Prompt와 출력 검사는 해당 시각에 활성화된 직접 시각 Link 및 Text Mapping만 사용한다. 일반 프레임의 표시·평가 시각은 `shot.startMs + frame.offsetMs`다. End Frame은 컷 종료점에 표시하지만 `[startMs, endMs)` 계약에 따라 `endMs - 1`에서 평가한다. 금지 사실의 설명 자체를 이미지 prompt에 넣지 않는다. 기록된 정보 ID를 비교하는 검사는 의미적·시각적 반전 누설을 완전히 검증하지 못하므로 그림 검토 상태를 따로 둔다.
 
 ## 6. 제안·잠금·충돌 처리
 
@@ -121,12 +126,12 @@ native 파일은 일반적인 프로젝트 원본을 표현한다. ID는 불투�
 
 ## 8. 검증 계획과 구현 순서
 
-1. 버전 고정 패키지, 1.3.0 스키마·타입, 1.0.0→1.1.0→1.2.0→1.3.0 Migration, 파일 해시·경로·권한 검사, native 입력: 구현 및 자동 검증됨.
+1. 버전 고정 패키지, 1.4.0 스키마·타입, 1.0.0→1.1.0→1.2.0→1.3.0→1.4.0 Migration, 파일 해시·경로·권한 검사, native 입력: 구현 및 자동 검증됨.
 2. 실제 제작 자료의 production 어댑터, 최소 합성 native 프로젝트, 원문·시간·선택 요소 검증: 구현 및 자동 검증됨.
 3. 컷·시작/키/끝 프레임·독립 트랙·전환 생성과 편집·잠금, Text Mapping 상태 기계·Source Temporal Anchor·동적 Information Gate, JSON/CSV/PDF 보존: 구현 및 자동 검증됨.
 4. 로컬 저장/API·Mapping 편집 UI, 프로젝트 분리·재열기·원본 차이: 구현 및 자동 검증됨.
 5. 시각 기준, Codex App 컷·이미지·음성 요청과 결과 반영, 재생, PDF 출력: 구현 및 자동 검증됨. 합성 범용 사례와 PRJ-007 `SEG-008`의 실제 생성 흐름을 확인했다.
-6. 두 가지 이상의 구성으로 회귀·브라우저 검증, 전체 요구사항 감사: 합성 자료와 초기 회귀 자료의 가져오기·편집·출력을 검증했다. PRJ-007 Golden에서 전체 구조·원문·시간과 `SEG-024`의 1,088,000ms, 1,108,000ms, 1,148,000ms 공개 순서를 검증했다. 실제 생성 사례에서는 5개 컷의 시간 합계, 첫 프레임 재생성·승인, 한 발화의 WAV 길이 반영을 확인했다. 전체 분량의 시각·낭독 검토는 남아 있다.
+6. 두 가지 이상의 구성으로 회귀·브라우저 검증, 전체 요구사항 감사: 합성 자료와 초기 회귀 자료의 가져오기·편집·출력을 검증했다. 20개 파일의 142개 자동 테스트에는 44개 출력 경계 회귀가 포함된다. PRJ-007 Golden에서 전체 구조·원문·시간, `SEG-024`의 Text·Audio 3단계 공개, `SEG-018`의 J-cut 저장·재생과 Gate 비조기화를 검증했다. 실제 생성 사례에서는 5개 컷의 시간 합계, 첫 프레임 재생성·승인, 한 발화의 WAV 길이 반영을 확인했다. 전체 분량의 시각·낭독 검토는 남아 있다.
 
 필수 자동 검증은 원문 100% 보존과 단위 연결, 영상 시간 공백·중복, 잘못된 ID·구간 소유권, 미지원 버전·손상 해시, 공개 시점 위반, 잠근 필드 변경, 프로젝트 혼입, 저장·출력 정합성이다. 실제 제작 사례 수치는 fixture에만 둔다. 패널·반전이 없는 다른 분량의 프로젝트와 원본 ID가 겹치는 프로젝트도 검증한다.
 

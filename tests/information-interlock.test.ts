@@ -65,7 +65,7 @@ describe('정보 공개 시점 안전장치 결함 재현', (): void => {
     const rule = project.dataset.informationRules.find((candidate): boolean => candidate.id === 'fact:FACT-10');
     if (rule === undefined || rule.notBeforeUnitId === null) throw new Error('검증용 공개 규칙이 없습니다.');
     const asset: Asset = { id: 'early-audio-asset', kind: 'audio', subjectId: 'early-audio', path: 'assets/early.wav', mimeType: 'audio/wav', sha256: '1'.repeat(64), description: '검증 음성', durationMs: 1000, version: 1 };
-    const cue: AudioCue = { id: 'early-audio', unitId: rule.notBeforeUnitId, kind: 'dialogue', startMs: rule.baseNotBeforeMs - 1000, endMs: rule.baseNotBeforeMs, timingStatus: 'measured', assetId: asset.id };
+    const cue: AudioCue = { id: 'early-audio', unitId: rule.notBeforeUnitId, kind: 'dialogue', startMs: rule.baseNotBeforeMs - 1000, endMs: rule.baseNotBeforeMs, timingStatus: 'measured', timingRelation: 'within-segment', assetId: asset.id };
     const changed: Project = { ...project, textMappingDecisions: [], audioCues: [cue], assets: [asset] };
     expect(effectiveInformationGate(changed, rule.id).effectiveNotBeforeMs).toBeGreaterThanOrEqual(rule.baseNotBeforeMs);
   });
@@ -191,7 +191,7 @@ describe('정보 공개 시점 안전장치 결함 재현', (): void => {
 
   it('audio_gate_requires_same_rule_segment', async (): Promise<void> => {
     const project: Project = await temporalMappingOutline();
-    const cue: AudioCue = { id: 'foreign-audio', unitId: 'gate-a', kind: 'dialogue', startMs: 0, endMs: 1000, timingStatus: 'measured', assetId: 'foreign-audio-asset' };
+    const cue: AudioCue = { id: 'foreign-audio', unitId: 'gate-a', kind: 'dialogue', startMs: 0, endMs: 1000, timingStatus: 'measured', timingRelation: 'within-segment', assetId: 'foreign-audio-asset' };
     const asset: Asset = { id: 'foreign-audio-asset', kind: 'audio', subjectId: cue.id, path: 'assets/foreign.wav', mimeType: 'audio/wav', sha256: '2'.repeat(64), description: '다른 구간 음성', durationMs: 1000, version: 1 };
     const changed: Project = { ...project, textMappingDecisions: [], shots: [], frames: [], audioCues: [cue], assets: [asset] };
     const gate = effectiveInformationGate(changed, 'info:gate');
@@ -207,7 +207,7 @@ describe('정보 공개 시점 안전장치 결함 재현', (): void => {
     const shot: Shot = segmentShot(project, 'demonstration');
     const prepared: Project = { ...project, assets: [asset], audioCues: project.audioCues.map((candidate: AudioCue): AudioCue => candidate.id === cue.id ? measuredCue : candidate),
       shots: project.shots.map((candidate: Shot): Shot => candidate.id === shot.id ? { ...candidate, approvalStatus: 'approved', sourceLinks: candidate.sourceLinks.map((link: ShotSourceLink): ShotSourceLink => link.unitId === cue.unitId ? { ...link, status: 'confirmed', temporalAnchor: { kind: 'shot-offset', startOffsetMs: 0, endOffsetMs: measuredCue.endMs - measuredCue.startMs, basis: 'audio-cue', status: 'confirmed' } } : link) } : candidate) };
-    const moved: Project = updateAudioCueTiming(prepared, cue.id, { startMs: measuredCue.startMs + 100, endMs: measuredCue.endMs + 100 });
+    const moved: Project = updateAudioCueTiming(prepared, cue.id, { startMs: measuredCue.startMs + 100, endMs: measuredCue.endMs + 100, timingRelation: measuredCue.timingRelation });
     const movedLink: ShotSourceLink = segmentShot(moved, 'demonstration').sourceLinks.find((link: ShotSourceLink): boolean => link.unitId === cue.unitId) as ShotSourceLink;
     expect(moved.audioCues.find((candidate: AudioCue): boolean => candidate.id === cue.id)?.timingStatus).toBe('proposed');
     expect(segmentShot(moved, 'demonstration').approvalStatus).toBe('proposed');
@@ -225,7 +225,7 @@ describe('정보 공개 시점 안전장치 결함 재현', (): void => {
       shots: project.shots.map((shot: Shot): Shot => shot.segmentId === 'SEG-024' ? { ...shot, approvalStatus: 'approved' } : shot),
       frames: project.frames.map((candidate: StoryboardFrame): StoryboardFrame => candidate.id === frame.id ? { ...candidate, imageAssetId: imageAsset.id, visualReview: 'accepted' } : candidate),
     };
-    const moved: Project = updateAudioCueTiming(prepared, cue.id, { startMs: cue.startMs + 100, endMs: cue.endMs + 100 });
+    const moved: Project = updateAudioCueTiming(prepared, cue.id, { startMs: cue.startMs + 100, endMs: cue.endMs + 100, timingRelation: cue.timingRelation });
     expect(segmentShot(moved, 'SEG-024').approvalStatus).toBe('proposed');
     expect(moved.frames.find((candidate: StoryboardFrame): boolean => candidate.id === frame.id)?.visualReview).toBe('pending');
   });
@@ -381,7 +381,7 @@ describe('정보 공개 시점 안전장치 결함 재현', (): void => {
     for (const shot of legacy.shots) for (const link of shot.sourceLinks) delete link.temporalAnchor;
     legacy.textMappingDecisions[0] = { ...(legacy.textMappingDecisions[0] as Record<string, unknown>), canonicalUnitId: null, relation: 'separate-element', status: 'confirmed', renderCanonicalSeparately: true, canonicalStartMs: 100, canonicalEndMs: 200 };
     const migrated: Project = parseProject(legacy);
-    expect(migrated.schemaVersion).toBe('1.3.0');
+    expect(migrated.schemaVersion).toBe('1.4.0');
     expect(migrated.shots.every((shot: Shot): boolean => shot.approvalStatus === 'proposed' && shot.sourceLinks.every((link: ShotSourceLink): boolean => link.status === 'mapping-required' && link.temporalAnchor.kind === 'unresolved' && link.temporalAnchor.basis === 'migration'))).toBe(true);
     expect(migrated.textMappingDecisions[0]).toEqual(expect.objectContaining({ canonicalUnitId: null, relation: 'standalone-placement', status: 'unresolved', renderCanonicalSeparately: false, canonicalStartMs: null, canonicalEndMs: null }));
   });

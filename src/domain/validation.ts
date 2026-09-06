@@ -1,3 +1,4 @@
+import { audioTimingIssues } from './audio.js';
 import { issue } from './errors.js';
 import type { Dataset, InformationRule, Issue, Project, Segment, Shot, ShotSourceLink, Snapshot, SourceRef, SourceUnit, TextMappingDecision, TextPlacement } from './schema.js';
 import { sourcePolicyIssues } from './source-policy.js';
@@ -198,12 +199,7 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
       ...(cue.timingStatus === 'measured' && cue.assetId === null ? [issue('MISSING_MEASURED_AUDIO', 'error', cue.id, 'timingStatus', '실제 음성 자산 없이 측정 완료로 표시할 수 없습니다.', null, null, [])] : []),
       ...(cue.timingStatus === 'measured' && asset?.durationMs !== cue.endMs - cue.startMs ? [issue('AUDIO_DURATION_MISMATCH', 'error', cue.id, 'timing', '측정된 큐 길이와 오디오 자산 길이가 다릅니다.', String(asset?.durationMs ?? 'null'), String(cue.endMs - cue.startMs), [])] : []),
       ...(cue.timingStatus === 'measured' && asset?.subjectId !== cue.id ? [issue('AUDIO_ASSET_SUBJECT_MISMATCH', 'error', cue.id, 'assetId', '측정된 오디오 자산은 해당 큐를 대상으로 해야 합니다.', cue.id, String(asset?.subjectId ?? 'null'), [])] : []),
-      ...((): Issue[] => {
-        const unit: SourceUnit | undefined = dataset.units.find((candidate: SourceUnit): boolean => candidate.id === cue.unitId);
-        const segment: Segment | undefined = unit === undefined ? undefined : dataset.segments.find((candidate: Segment): boolean => candidate.id === unit.segmentId);
-        return segment !== undefined && (cue.startMs < segment.startMs || cue.endMs > segment.endMs)
-          ? [issue('AUDIO_OUTSIDE_SOURCE_SEGMENT', 'error', cue.id, 'timing', '오디오 큐는 원문과 같은 구간 안에 있어야 합니다.', `${segment.startMs}..${segment.endMs}`, `${cue.startMs}..${cue.endMs}`, unit?.sourceRefs ?? [])] : [];
-      })(),
+      ...audioTimingIssues(project, cue),
     ];
   });
   const textIssues: Issue[] = project.textCues.flatMap((cue): Issue[] => {

@@ -1,4 +1,7 @@
 import { contractError } from '../domain/errors.js';
+import { assertAudioTimingRelation, audioOverhangAfterMs, audioOverhangBeforeMs } from '../domain/audio.js';
+import { reviewInformationEmission } from '../domain/emission.js';
+import type { Issue } from '../domain/schema.js';
 import type { AudioCue, Project, Segment, SourceUnit } from '../domain/schema.js';
 import { sha256Text } from '../importers/integrity.js';
 import { buildFrameImageContext, buildSegmentContext } from '../proposal/context.js';
@@ -7,8 +10,11 @@ import type { ProjectStore } from '../server/store.js';
 import type { CodexRequest, CodexRequestKind } from './schema.js';
 
 export type SpeechContext = {
-  projectId: string; cue: Pick<AudioCue, 'id' | 'kind' | 'startMs' | 'endMs'>;
-  unit: Pick<SourceUnit, 'id' | 'text' | 'speakerId'>; segment: Pick<Segment, 'id' | 'endMs'>;
+  projectId: string; cue: Pick<AudioCue, 'id' | 'kind' | 'startMs' | 'endMs' | 'timingRelation'> & {
+    overhangBeforeMs: number; overhangAfterMs: number;
+  };
+  unit: Pick<SourceUnit, 'id' | 'text' | 'speakerId' | 'informationIds'>;
+  segment: Pick<Segment, 'id' | 'startMs' | 'endMs'>;
 };
 export type CodexReference = { id: string; path: string; mimeType: string; sha256: string };
 export type ProposalWork = { kind: 'proposal'; request: CodexRequest; prompt: string; context: SegmentContext };
@@ -24,8 +30,16 @@ function requireSpeechContext(project: Project, cueId: string): SpeechContext {
   if (unit === undefined) throw contractError('SOURCE_UNIT_NOT_FOUND', `오디오 큐의 원문을 찾을 수 없습니다: ${cue.unitId}`, []);
   const segment: Segment | undefined = project.dataset.segments.find((candidate: Segment): boolean => candidate.id === unit.segmentId);
   if (segment === undefined) throw contractError('SEGMENT_NOT_FOUND', `원문의 구간을 찾을 수 없습니다: ${unit.segmentId}`, []);
-  return { projectId: project.projectId, cue: { id: cue.id, kind: cue.kind, startMs: cue.startMs, endMs: cue.endMs },
-    unit: { id: unit.id, text: unit.text, speakerId: unit.speakerId }, segment: { id: segment.id, endMs: segment.endMs } };
+  assertAudioTimingRelation(project, cue);
+  const outputIssues: Issue[] = reviewInformationEmission(project, {
+    entityId: cue.id, channel: 'speech-generation', informationIds: [...unit.informationIds], atMs: cue.startMs,
+  });
+  if (outputIssues.length > 0) throw contractError('AUDIO_OUTPUT_GATE_BLOCKED', outputIssues.map((value: Issue): string => `${value.code}: ${value.message}`).join('\n'), outputIssues);
+  return { projectId: project.projectId,
+    cue: { id: cue.id, kind: cue.kind, startMs: cue.startMs, endMs: cue.endMs, timingRelation: cue.timingRelation,
+      overhangBeforeMs: audioOverhangBeforeMs(project, cue), overhangAfterMs: audioOverhangAfterMs(project, cue) },
+    unit: { id: unit.id, text: unit.text, speakerId: unit.speakerId, informationIds: [...unit.informationIds] },
+    segment: { id: segment.id, startMs: segment.startMs, endMs: segment.endMs } };
 }
 
 function contextFor(project: Project, kind: CodexRequestKind, targetId: string): SegmentContext | ImageContext | SpeechContext {

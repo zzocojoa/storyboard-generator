@@ -1,118 +1,83 @@
-# 범용 콘티 도구 — 1.3.0 구현 보고서
+# 범용 콘티 도구 — 1.4.0 구현 보고서
 
 ## 1. 작업 기준
 
-- 시작 Branch: `codex/storyboard-generator`
-- 3차 검토 기준이자 구현 시작 HEAD: `e5e5dc78f0b61a71cf134800598336d91f7bc288` (`feat: add temporal storyboard mappings`)
-- 후속 감사 시작 HEAD: `f895f12d114a396fb11ebbdfc40e0034a1f2bd3c`
-- 구현 종료 HEAD: `b31d1317da0415d05313310236f28db88f3fe4bc` (`fix: close storyboard gate edge cases`)
-- 종료 상태: 구현 commit을 원격 `codex/storyboard-generator`에 push했고 GitHub CI 성공을 확인했다. 이 보고서의 CI 결과 반영은 문서 전용 후속 commit이다.
-- 기존 Project Schema: `1.2.0`
-- 신규 Project Schema: `1.3.0`
-- 생성 실행: Codex App의 현재 모델, 내장 `image_gen`, 설정된 macOS 음성을 사용한다. `OPENAI_API_KEY`와 OpenAI SDK는 사용하지 않는다.
+- Branch: `codex/storyboard-generator`
+- 구현 시작 HEAD: `34646b9261fff80aefe915944e742e72fa457663`
+- 구현 종료 HEAD: CI 확인 뒤 이 문서에 기록한다.
+- Project Schema: `1.3.0 → 1.4.0`
+- 실행 경계: Codex App의 현재 모델, 내장 `image_gen`, 설정된 macOS 음성을 사용한다. `OPENAI_API_KEY`, OpenAI SDK, 외부 생성 fallback은 사용하지 않는다.
+- 범위: 특정 프로젝트에 종속되지 않는 최종 정보 출력 경계다. PRJ-007은 fixture와 Golden 회귀로만 사용한다.
 
 ## 2. 재현한 결함
 
-| 결함 | 재현 테스트 | 기존 잘못된 동작 | 수정 후 동작 |
+| 재현 테스트 | 기존 동작 | 수정 | 수정 후 결과 |
 |---|---|---|---|
-| Unit-order 조기 공개 | `unit_order_gate_blocks_segment_start_frame` | 시간 Anchor가 없는 후반 Unit 정보가 Segment 시작부터 허용될 수 있었다. | Gate를 `reviewRequired`로 두고 승인·프레임 생성·제안 적용을 차단한다. |
-| Audio Gate 조기화 | `measured_audio_cannot_advance_base_gate` | 측정 Cue를 앞으로 옮겨 기준 Gate를 앞당길 수 있었다. | Base 하한과 더 늦은 Unit-order 근거를 유지하고 앞선 Audio는 충돌로 기록한다. |
-| 휴리스틱 Gate 영속 | `derived_gate_is_not_persisted_as_source` | 가져오기 시 계산한 후보 시각이 원본 규칙처럼 남을 수 있었다. | Dataset에는 Base Rule만 저장하고 Effective Gate는 현재 상태에서 재계산한다. |
-| 연속 Shot 후반 공개 | `continuous_shot_can_reveal_at_key_frame` | Shot 시작 시각만 검사해 후반 Key Frame의 정상 공개를 승인할 수 없었다. | Source Anchor의 절대 시각으로 검사해 후반 공개를 지원한다. |
-| 모순된 Text Mapping | `text_mapping_relation_invariants` | Canonical, 별도 렌더링, 시간 필드의 모순된 조합이 가능했다. | relation별 불변식을 Zod와 공통 Review에서 강제한다. |
-| 중복 exact 후보 | `duplicate_exact_text_remains_unresolved` | 같은 문구의 첫 후보를 임의 확정할 수 있었다. | 복수 exact는 Canonical을 비우고 unresolved로 남긴다. |
-| Source Usage 우회 | `proposal_rejects_all_nonvisual_usage` | 모든 원문을 비시각 용도로 지정해 순서와 시각 근거 검사를 피할 수 있었다. | 제안과 승인 모두 직접 시각 Source를 요구한다. |
-| unresolved 분할 근거 | `unresolved_mapping_is_not_split_evidence` | 미확정 Placement 시각을 Source 분할의 확정 근거로 사용할 수 있었다. | 확정 관계만 사용하고 불확실한 Link는 mapping-required로 둔다. |
-| 약한 이미지 검사 | `frame_generation_checks_all_mapping_conflicts` | confirmed 표지만 있으면 의미적으로 틀린 Mapping이 이미지 문맥에 들어갈 수 있었다. | Canonical 존재·구간·종류·exact 문구·별도 시간과 Gate를 공통 Review로 검사한다. |
-| Unknown Rule UI 예외 | `unknown_information_rule_returns_review_issue` | Inspector 계산 중 `effectiveInformationGate` 예외로 렌더가 중단될 수 있었다. | `UNRESOLVED_INFORMATION_RULE` 구조화 Issue를 반환한다. |
+| `playback_does_not_render_review_required_text` 외 Text 9개 | Text Cue의 본문 권한과 Gate가 실제 Monitor 출력 경로에서 강제되지 않았다. | Cue authority와 공통 출력 판정, 안전 선택자를 추가했다. | 권한 미확정·조기 정보는 본문 없이 code와 ID만 표시된다. |
+| `proposed_audio_asset_is_not_playable` 외 Audio 7개 | proposed 또는 자산·Gate가 유효하지 않은 Audio를 실제 재생할 수 있었다. | measured Asset·관계·정보 Gate를 함께 검사하는 재생 선택자를 연결했다. | 안전한 Cue만 `Audio.play()`에 도달한다. |
+| `end_frame_uses_last_inside_instant` 외 End Frame 6개 | `offsetMs === shot duration`인 End Frame을 반열린 범위 밖으로 평가했다. | 표시 시각과 평가 시각을 분리했다. | End Frame은 종료점에 표시되고 마지막 내부 ms에서 Source·Mapping·Gate를 평가한다. |
+| `j_cut_requires_previous_adjacent_segment` 외 J/L 13개 | Cross-Segment Audio의 의도를 구조적으로 구분하지 못했고 Gate 증거가 될 수 있었다. | 세 관계와 인접 범위 검사를 추가하고 J/L을 Gate 증거에서 제외했다. | 합법 J/L만 저장·재생되고 범위 위반과 Gate 조기화는 차단된다. |
+| `migration_130_to_140_preserves_data` 외 Migration 5개 | 1.3 저장본에 새 권한·관계 필드가 없었다. | 기존 근거에서 보수적으로 값을 복원하는 1.4 Migration을 추가했다. | 원문·컷·자산은 보존되고 모호한 Text Cue는 review-required가 된다. |
 
-후속 코드 감사에서는 `separate-element` Cue 결합, 확정 Mapping 의미 충돌 누락, 측정 Audio 변경의 관련 컷 미무효화, exact-time 증거 우선순위, 프레임 이동 후 Anchor 잔존, Anchor 종료점 포함 판정의 6개 회귀를 실패 테스트로 재현했다. 최초 보강 실행은 31개 중 6개 실패, 25개 통과였고 수정 후 미래 Text Mapping 유출과 보수적 Migration까지 추가한 33개가 모두 통과했다.
+첫 출력 경계 실행은 import 누락으로 실패했고, 구현 후 40개 중 39개가 통과했다. 남은 End Frame 진단을 수정한 뒤 출력 경계 40개와 PRJ-007 Golden 4개가 모두 통과했다.
 
 ## 3. 핵심 구현
 
-### Base Information Rule
+- **Information Emission Interlock:** 이미지, Text Overlay, Audio Playback, Speech Generation, Proposal, Export가 `reviewInformationEmission`의 원본 근거·Rule 존재·review 상태·유효 Gate 판정을 공유한다.
+- **TextCue authority:** `placement`, `mapping-decision`, `source-unit`, `review-required`와 연결 ID를 Schema에 저장한다. Mapping 파생 Cue의 직접 본문·시각 변경은 거부하고 Source Unit Cue 편집은 Gate를 검사한다.
+- **Safe Text playback:** Program Monitor는 `playableTextCuesAt`만 렌더링한다. 차단된 Cue는 본문 대신 cue ID, information ID, issue code를 표시한다.
+- **Safe Audio playback:** `playableAudioCuesAt`은 measured 상태, Audio Asset의 대상·길이, timing relation, 정보 Gate를 모두 검사한다. Timeline과 실제 Audio 요소가 같은 결과를 사용한다.
+- **End Frame:** display time은 `endMs`, evaluation time은 `max(startMs, endMs - 1)`다. 이미지 문맥, Source Anchor, Text Mapping, Gate, 재생, CSV·PDF에 같은 경계를 적용한다.
+- **J/L-cut:** Audio Cue는 `within-segment`, `j-cut`, `l-cut` 중 하나를 명시한다. J-cut은 바로 앞 Segment부터 원본 Segment 안까지, L-cut은 원본 Segment부터 바로 다음 Segment까지 허용한다. J/L은 Gate 증거가 아니다.
+- **Speech apply:** 요청 문맥에 timing relation·overhang·information IDs·Segment 범위를 넣는다. 생성 WAV의 측정 길이로 만든 후보가 관계·Gate 검사를 통과한 뒤에만 Asset과 measured Cue를 반영한다.
 
-`InformationRule.baseNotBeforeMs`와 원본 Segment·Unit·정밀도·Source Reference를 권한 입력으로 보존한다. production-v1의 Base는 presentation plan이 지정한 Segment 하한이며 native-v1의 명시적 exact-time은 후보 계산으로 덮어쓰지 않는다.
+## 4. Schema와 Migration
 
-### Effective Information Gate
+- `storyboard_project.schema.json`의 version은 `1.4.0`이다.
+- `AudioCue.timingRelation`은 필수다.
+- `TextCue.mappingDecisionId`와 `TextCue.authority`는 필수이며 Zod가 authority별 연결 불변식을 검사한다.
+- 저장본은 `1.0.0 → 1.1.0 → 1.2.0 → 1.3.0 → 1.4.0` 순서로 변환한다.
+- 1.3 Audio Cue는 기존 Segment 내부 계약에 따라 `within-segment`가 된다. Text Cue는 Placement, exact Mapping, Source Unit 순서로 권한을 복원하고 유일하지 않은 경우 `review-required`로 둔다.
+- Migration은 source snapshot, 원문·ID, Segment·Shot·Frame 시간, Asset, Generation Record를 보존한다. display/evaluation time은 유도값이라 저장하지 않고 다시 계산한다.
 
-`effectiveInformationGate`는 Base Rule, 현재 Text Mapping과 Placement, Source Anchor, 유효한 measured Audio, Unit 순서를 매번 읽는다. Derived 값은 Dataset에 저장하지 않는다. 결과 시각은 Base보다 빠를 수 없으며, Source·Audio가 더 늦은 Unit-order 근거보다 앞서면 후반 하한과 검토 상태를 유지한다.
+## 5. 변경 파일
 
-### Source Temporal Anchor
-
-직접 시각 Link는 컷 상대 `shot-offset`, 동일 컷의 `frame`, 또는 `unresolved` Anchor를 가진다. 활성 구간은 `[startMs, endMs)`다. 분할·병합·재정렬·Link 이동에서 절대 의미를 보존하거나 명시적으로 재검토하며, 연결 프레임의 offset 변경은 `unresolved/frame-change`로 전환한다. Inspector는 절대 공개 시각과 정보별 Gate 비교를 표시한다.
-
-### Text Mapping 상태 머신
-
-`exact`, `abbreviation`, `replacement`, `separate-element`, `standalone-placement`의 Canonical·별도 렌더링·시간 조합을 강제한다. 후보는 명시적 `placement.unitId`, 허용 화면 글자 종류의 유일한 exact, 유일한 휴리스틱 순서다. `separate-element`는 Placement Cue와 Canonical Cue를 독립시키고 분할에는 Canonical 시각을 사용한다.
-
-### Audio Gate 보호
-
-Gate 증거가 되는 measured Audio는 연결 Asset의 종류·subject·길이, Unit과 Rule의 Segment, Cue의 Segment 범위를 모두 만족해야 한다. Base 또는 Unit-order 하한보다 앞선 Audio는 공개 권한이 되지 않는다. 측정 Cue의 시간 변경은 measured 상태를 해제하고 관련 Anchor, 컷 승인, 프레임 검토를 무효화한다. Cross-Segment Audio는 재생할 수 있지만 Gate 증거로 사용하지 않는다.
-
-### Approval / Generation Review 통합
-
-프로젝트·구간·컷·프레임 Review가 Text Mapping, Source Usage, Temporal Anchor, Information Gate를 같은 함수 계층으로 검사한다. 프레임 문맥에는 해당 시각에 활성인 직접 시각 Link와 Text Mapping만 들어간다. `APPROVAL BLOCKED`는 code, entity, field, 기대값, 현재값, Source Reference를 표시한다. Codex 요청은 이 검사를 통과한 뒤에만 생성된다.
-
-## 4. 변경 파일
-
-- 신규 파일: `.github/workflows/ci.yml`, `src/domain/source-policy.ts`, `tests/information-interlock.test.ts`, `assets/fonts/NanumGothic-Regular.ttf`, `assets/fonts/OFL.txt`
-- 수정 파일: `.agents/skills/storyboard-workbench/SKILL.md`, `AGENTS.md`, `README.md`, Design·Analysis·Report, Domain Schema·Mapping·Validation·Edit·Frame·Tracks·Media·Source Update, Importer, Proposal, IO, Exporter, Web Inspector, 관련 기존 테스트와 설정
-- 삭제 파일: 없음
-- 생성 Schema: `schemas/shot.schema.json`, `schemas/storyboard_project.schema.json`
-- Migration: `src/io/project.ts`의 `1.0.0 → 1.1.0 → 1.2.0 → 1.3.0`
-- PRJ-007 ID와 시각은 fixture와 Golden Test에만 있으며 공통 도메인 로직에는 없다.
-
-## 5. Migration
-
-- 1.0.0: 각 Shot에 명시적 cut `transitionOut`을 추가해 1.1.0으로 올린다.
-- 1.1.0: 원본 Unit과 Segment에서 Information Rule 메타데이터를 복원하고 `sourceUnitIds`를 `context-only/mapping-required` Link로 바꿔 1.2.0으로 올린다.
-- 1.2.0: 저장된 handoff와 source snapshot에서 권한 Base Rule을 다시 만들고, 모든 기존 Link에 `unresolved/migration` Anchor를 부여해 1.3.0으로 올린다.
-- 불확실한 값: Canonical이 없는 Mapping은 `standalone-placement/unresolved`로, 시간이 부족한 `separate-element`는 unresolved 관계로 보수적으로 변환한다.
-- 기존 승인 상태: 모든 이관 Shot을 proposed로 바꿔 Source 시간과 Gate를 다시 확인하게 한다.
-- 보존: source snapshot, 원문 문자열·ID, Segment 시간, Shot 내용, Frame, Audio/Text Cue, Asset, GenerationRecord를 유지한다.
-- 호환성 제한: 1.2 저장본에 handoff 또는 source snapshot이 없으면 Base 권한을 추측하지 않고 `MIGRATION_SOURCE_REQUIRED`로 중단한다.
+- 신규: `src/domain/audio.ts`, `src/domain/emission.ts`, `tests/output-boundary-regression.test.ts`
+- Domain/Codex: `schema.ts`, `time.ts`, `mapping.ts`, `tracks.ts`, `playback.ts`, `media.ts`, `validation.ts`, `proposal/context.ts`, `proposal/outline.ts`, `codex/work.ts`
+- IO/출력: `io/project.ts`, `importers/import-package.ts`, `exporters/csv.ts`, `exporters/pdf.ts`, 생성 Project Schema
+- UI: `web/src/App.tsx`, `web/src/styles.css`
+- 검증: 기존 7개 테스트 파일과 PRJ-007 Golden
+- 문서: `README.md`, `AGENTS.md`, Design, Analysis, Report, `storyboard-workbench` Skill
+- 사용자 소유 untracked 파일 `README 2.md`는 수정·추적하지 않았다.
 
 ## 6. 테스트 결과
 
-| 명령 | 결과 | Test File | Test 수 | 실패 후 수정한 내용 |
-|---|---:|---:|---:|---|
-| `npm run schemas:write` | 성공 | 해당 없음 | 해당 없음 | `frame-change` Anchor basis를 생성 JSON Schema에 반영 |
-| `npm run typecheck` | 성공 | 해당 없음 | 해당 없음 | Domain·Server 타입 확인 |
-| `npm run typecheck:web` | 성공 | 해당 없음 | 해당 없음 | Inspector 비교 모델 타입 확인 |
-| `npm test` | 성공 | 19 | 98 | 6개 보강 회귀와 PRJ-007의 앞선 Source 대 Unit-order 충돌 계산 수정 |
-| `npm run schemas:check` | 성공 | 해당 없음 | 해당 없음 | Zod와 생성 Schema 일치 확인 |
-| `npm run build:web` | 성공 | 해당 없음 | 해당 없음 | Vite production bundle 확인 |
-| `npm run check` | 성공 | 19 | 98 | 위 검사를 한 번 더 통합 실행 |
+| 명령 | 결과 | 파일/테스트 | 확인 내용 |
+|---|---:|---:|---|
+| `npm run schemas:write` | 성공 | 해당 없음 | 1.4.0 JSON Schema 생성 |
+| `npm run typecheck` | 성공 | 해당 없음 | Domain·Server strict type 검사 |
+| `npm run typecheck:web` | 성공 | 해당 없음 | React UI strict type 검사 |
+| `npm test` | 성공 | 20 / 142 | 기존 98개와 신규 44개 회귀 |
+| `npm run schemas:check` | 성공 | 해당 없음 | Zod와 생성 Schema 정합성 |
+| `npm run build:web` | 성공 | 해당 없음 | 운영 Vite bundle |
+| `npm run check` | 성공 | 20 / 142 | 전체 통합 검사 |
 
-요구된 27개 이름의 회귀 테스트를 모두 유지한다. `tests/information-interlock.test.ts`에는 Cue 독립성, 프레임 이동 무효화, 반열린 Anchor 경계, 미래 Mapping 제외, 보수적 Canonical Migration을 포함한 33개 시나리오가 있다.
+## 7. PRJ-007 Golden
 
-## 7. PRJ-007 Golden 결과
+- 기존 구조: Scene 12, Segment 32, screenplay Source Unit 79, Panel Turn 16, 전체 1,500,000ms, 원문 변경 0건을 유지한다.
+- SEG-024 Text·Audio는 FACT-03 1,088,000ms, FACT-02·FACT-09 1,108,000ms, FACT-10 1,148,000ms의 3단계 Gate 전에는 출력되지 않는다.
+- SEG-018의 UNIT-044 Audio는 829,000–831,000ms J-cut으로 저장·JSON 재열기·재생되며 기존 Effective Gate 목록을 바꾸지 않는다.
+- End Frame은 마지막 내부 시각의 Source만 사용하며 다음 Shot의 정보와 후반 Text Mapping을 포함하지 않는다.
+- PRJ-007의 ID와 시각은 fixture와 Golden Test에만 있고 공통 로직에는 없다.
 
-- Scene: 12
-- Segment: 32
-- screenplay Source Unit: 79
-- Panel Turn: 16
-- 전체 길이: 1,500,000ms
-- 원문 변경: 0건
-- Segment Gap / Overlap: 0건
-- 다른 Segment Source 혼입: 0건
-- 18:00 Canonical 상세 문구 조기 Cue: 0건
-- SEG-024 공개 시각: FACT-03 1,088,000ms, FACT-02 1,108,000ms, FACT-09 1,108,000ms, FACT-10 1,148,000ms
-- Audio 조기화 차단: Base 및 더 늦은 Unit-order 하한 전에는 Gate를 앞당기지 않고 관련 승인을 무효화한다.
-- Continuous Shot Key Frame 공개: Shot 시작이 1,080,000ms여도 UNIT-064의 1,148,000ms Frame Anchor에서는 허용된다.
-- Future Information 차단: UNIT-064는 1,148,000ms 전 프레임에 전달되지 않으며, 이전 프레임 문맥에 1,108,000ms·1,148,000ms Text Mapping을 포함하지 않는다.
+## 8. CI
 
-## 8. CI 결과
-
-- Workflow 추가: 예. pull request와 `master`, `codex/storyboard-generator` push에서 Node.js 24, `npm ci`, `npm run check`를 실행한다.
-- Workflow 실행: 구현 HEAD `b31d1317da0415d05313310236f28db88f3fe4bc`에서 실행됨.
-- 실제 GitHub 결과: [CI 실행 34009525933](https://github.com/zzocojoa/storyboard-generator/actions/runs/34009525933) 성공. `npm ci`와 `npm run check` 단계가 모두 통과했다.
-- 로컬과 GitHub의 차이: 로컬에서는 여섯 명시 명령을 각각 실행하고 `npm run check`를 다시 실행했다. GitHub는 깨끗한 Ubuntu runner에서 Node.js 24로 의존성을 다시 설치한 뒤 통합 검사만 실행했다.
+- 구현 commit push 뒤 현재 HEAD의 GitHub Actions 실행 ID, URL, 결과를 기록한다.
+- Workflow는 Node.js 24에서 `npm ci`와 `npm run check`를 실행한다.
 
 ## 9. 남은 위험
 
-- 정보 ID와 원문 연결 검사는 이미지가 간접적으로 암시하는 반전까지 판정하지 못하므로 생성 그림의 사람 검토가 필요하다.
-- PRJ-007 전체 분량의 연출·시각 연속성·자막 가독성과 가이드 음성 호흡은 제작 검토가 남아 있다.
-- `native-v1`, `production-v1` 외 임의 문서 입력은 지원하지 않는다.
-- Codex App은 요청별 비용을 제공하지 않아 비용은 `N/A`로 기록한다.
+- 정보 ID와 원문 관계 검사는 이미지가 사실을 간접적으로 암시하는지 판단하지 못한다. 생성 그림의 사람 검토가 필요하다.
+- PRJ-007 전체 분량의 연출·시각 연속성·자막 가독성·가이드 음성 호흡은 제작 검토가 남아 있다.
+- 지원 입력은 `native-v1`, `production-v1`이다. 임의 문서 입력, 클라우드 협업, 완성 영상 렌더링은 현재 범위가 아니다.
+- Codex App은 요청별 비용을 노출하지 않아 비용을 `N/A`로 표시한다.

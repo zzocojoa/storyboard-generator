@@ -4,7 +4,7 @@
   "properties": {
     "schemaVersion": {
       "type": "string",
-      "const": "1.3.0"
+      "const": "1.4.0"
     },
     "projectId": {
       "$ref": "#/$defs/__schema0"
@@ -1032,6 +1032,14 @@
               "measured"
             ]
           },
+          "timingRelation": {
+            "type": "string",
+            "enum": [
+              "within-segment",
+              "j-cut",
+              "l-cut"
+            ]
+          },
           "assetId": {
             "anyOf": [
               {
@@ -1050,6 +1058,7 @@
           "startMs",
           "endMs",
           "timingStatus",
+          "timingRelation",
           "assetId"
         ],
         "additionalProperties": false
@@ -1067,27 +1076,19 @@
             "$ref": "#/$defs/__schema0"
           },
           "unitId": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/__schema0"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/$defs/__schema24"
           },
           "placementId": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/__schema0"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/$defs/__schema25"
+          },
+          "mappingDecisionId": {
+            "$ref": "#/$defs/__schema26"
+          },
+          "authority": {
+            "$ref": "#/$defs/__schema27"
           },
           "text": {
-            "type": "string"
+            "$ref": "#/$defs/__schema28"
           },
           "startMs": {
             "$ref": "#/$defs/__schema12"
@@ -1096,19 +1097,10 @@
             "$ref": "#/$defs/__schema12"
           },
           "kind": {
-            "type": "string",
-            "enum": [
-              "overlay",
-              "prop-text",
-              "dialogue-subtitle"
-            ]
+            "$ref": "#/$defs/__schema29"
           },
           "timingStatus": {
-            "type": "string",
-            "enum": [
-              "proposed",
-              "confirmed"
-            ]
+            "$ref": "#/$defs/__schema30"
           }
         },
         "required": [
@@ -1116,6 +1108,8 @@
           "segmentId",
           "unitId",
           "placementId",
+          "mappingDecisionId",
+          "authority",
           "text",
           "startMs",
           "endMs",
@@ -1664,6 +1658,63 @@
         "state"
       ],
       "additionalProperties": false
+    },
+    "__schema24": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/__schema0"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "__schema25": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/__schema0"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "__schema26": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/__schema0"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "__schema27": {
+      "type": "string",
+      "enum": [
+        "placement",
+        "mapping-decision",
+        "source-unit",
+        "review-required"
+      ]
+    },
+    "__schema28": {
+      "type": "string"
+    },
+    "__schema29": {
+      "type": "string",
+      "enum": [
+        "overlay",
+        "prop-text",
+        "dialogue-subtitle"
+      ]
+    },
+    "__schema30": {
+      "type": "string",
+      "enum": [
+        "proposed",
+        "confirmed"
+      ]
     }
   }
 }

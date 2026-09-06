@@ -1,11 +1,13 @@
 import { contractError } from '../domain/errors.js';
 import { requireShot } from '../domain/edit.js';
-import { absoluteFrameTime, directVisualLinks, effectiveInformationGate, reviewIssuesForFrame, sourceAnchorRange } from '../domain/mapping.js';
+import { reviewInformationEmission } from '../domain/emission.js';
+import { directVisualLinks, effectiveInformationGate, reviewIssuesForFrame, sourceAnchorRange } from '../domain/mapping.js';
 import type { EffectiveInformationGate } from '../domain/mapping.js';
 import type {
   Asset, Issue, Person, Profile, Project, Segment, Shot, ShotSourceLink, SourceUnit,
   StoryboardFrame, TextMappingDecision, TextPlacement,
 } from '../domain/schema.js';
+import { frameDisplayAbsoluteMs, frameEvaluationAbsoluteMs } from '../domain/time.js';
 
 export type ProposalPerson = Pick<Person, 'id' | 'name' | 'visualDescription'>;
 export type ProposalUnit = Pick<SourceUnit, 'id' | 'kind' | 'order' | 'text' | 'speakerId' | 'informationIds'> & {
@@ -24,7 +26,9 @@ export type SegmentContext = {
 export type ImageContext = {
   projectId: string; profile: Profile;
   shot: Pick<Shot, 'id' | 'startMs' | 'endMs' | 'action' | 'camera' | 'cameraAxis' | 'screenDirection' | 'visualLocationId' | 'presence' | 'continuityBefore' | 'continuityAfter'>;
-  frame: Pick<StoryboardFrame, 'id' | 'offsetMs' | 'role' | 'description'> & { absoluteMs: number };
+  frame: Pick<StoryboardFrame, 'id' | 'offsetMs' | 'role' | 'description'> & {
+    absoluteMs: number; displayAbsoluteMs: number; evaluationAbsoluteMs: number;
+  };
   sourceLinks: ShotSourceLink[]; sourceUnits: ProposalUnit[]; people: ProposalPerson[];
   visualReferences: Pick<Asset, 'id' | 'kind' | 'description' | 'sha256' | 'version'>[];
   allowedInformationIds: string[]; informationGates: ContextInformationGate[];
@@ -40,12 +44,12 @@ function contextGate(gate: EffectiveInformationGate): ContextInformationGate {
   };
 }
 
-function requireAllowedInformation(project: Project, ids: readonly string[], absoluteMs: number, context: string): ContextInformationGate[] {
-  return [...new Set(ids)].map((id: string): ContextInformationGate => {
+function requireAllowedInformation(project: Project, ids: readonly string[], absoluteMs: number, entityId: string): ContextInformationGate[] {
+  const informationIds: string[] = [...new Set(ids)];
+  const outputIssues: Issue[] = reviewInformationEmission(project, { entityId, channel: 'image', informationIds, atMs: absoluteMs });
+  if (outputIssues.length > 0) throw contractError('INFORMATION_OUTPUT_BLOCKED', outputIssues.map((value: Issue): string => `${value.code}: ${value.message}`).join('\n'), outputIssues);
+  return informationIds.map((id: string): ContextInformationGate => {
     const gate: EffectiveInformationGate = effectiveInformationGate(project, id);
-    const ruleSegment: Segment | undefined = project.dataset.segments.find((segment: Segment): boolean => segment.id === gate.segmentId);
-    if (gate.reviewRequired && (ruleSegment === undefined || absoluteMs < ruleSegment.endMs)) throw contractError('UNRESOLVED_INFORMATION_GATE', `${context}: ${id}의 공개 시점 근거를 검토하세요: ${gate.reviewReasons.join(',')}`, []);
-    if (gate.effectiveNotBeforeMs > absoluteMs) throw contractError('FORBIDDEN_PROMPT_INFORMATION', `${context}: ${id}는 ${gate.effectiveNotBeforeMs}ms 이후에만 전달할 수 있습니다.`, []);
     return contextGate(gate);
   });
 }
@@ -62,12 +66,11 @@ function proposalUnit(project: Project, unit: SourceUnit): ProposalUnit {
   };
 }
 
-function promptUnits(project: Project, links: readonly ShotSourceLink[], segmentId: string, absoluteMs: number): ProposalUnit[] {
+function promptUnits(project: Project, links: readonly ShotSourceLink[], segmentId: string): ProposalUnit[] {
   return links.map((link: ShotSourceLink): ProposalUnit => {
     if (link.status === 'mapping-required') throw contractError('SOURCE_MAPPING_REQUIRED', `${link.unitId}: 이미지 생성 전에 Source Mapping을 확정하세요.`, []);
     const unit: SourceUnit | undefined = project.dataset.units.find((value: SourceUnit): boolean => value.id === link.unitId && value.segmentId === segmentId);
     if (unit === undefined) throw contractError('INVALID_PROMPT_SOURCE', `${link.unitId}: 선택 구간의 원문만 전달할 수 있습니다.`, []);
-    requireAllowedInformation(project, unit.informationIds, absoluteMs, unit.id);
     return proposalUnit(project, unit);
   });
 }
@@ -128,18 +131,19 @@ export function buildSegmentContext(project: Project, segmentId: string): Segmen
 
 /** 그림 요청에는 선택한 프레임의 절대 시각에 허용된 직접 시각 원문만 넣는다. */
 function imageContext(project: Project, shot: Shot, frame: StoryboardFrame): ImageContext {
-  const absoluteMs: number = absoluteFrameTime(shot, frame);
+  const displayAbsoluteMs: number = frameDisplayAbsoluteMs(shot, frame);
+  const evaluationAbsoluteMs: number = frameEvaluationAbsoluteMs(shot, frame);
   const reviewIssues: Issue[] = reviewIssuesForFrame(project, frame.id);
   if (reviewIssues.length > 0) throw contractError('FRAME_GENERATION_BLOCKED', reviewIssues.map((value: Issue): string => `${value.code}: ${value.message}`).join('\n'), reviewIssues);
   const links: ShotSourceLink[] = directVisualLinks(shot).filter((link: ShotSourceLink): boolean => {
     const range = sourceAnchorRange(project, shot, link);
-    return range !== null && range.startMs <= absoluteMs && absoluteMs < range.endMs;
+    return range !== null && range.startMs <= evaluationAbsoluteMs && evaluationAbsoluteMs < range.endMs;
   });
-  const units: ProposalUnit[] = promptUnits(project, links, shot.segmentId, absoluteMs);
+  const units: ProposalUnit[] = promptUnits(project, links, shot.segmentId);
   const activeUnitIds: ReadonlySet<string> = new Set<string>(units.map((unit: ProposalUnit): string => unit.id));
   const unitInformationIds: string[] = units.flatMap((unit: ProposalUnit): string[] => unit.informationIds);
   const allowedInformationIds: string[] = [...new Set(unitInformationIds)];
-  const informationGates: ContextInformationGate[] = requireAllowedInformation(project, allowedInformationIds, absoluteMs, shot.id);
+  const informationGates: ContextInformationGate[] = requireAllowedInformation(project, allowedInformationIds, evaluationAbsoluteMs, frame.id);
   const visiblePersonIds: string[] = shot.presence.filter((presence): boolean => ['VISIBLE', 'HAND_ONLY', 'SILHOUETTE', 'ARCHIVE_IMAGE'].includes(presence.mode)).map((presence): string => presence.personId);
   const automaticReferenceIds: string[] = latestAssets(project.assets.filter((asset: Asset): boolean =>
     (asset.kind === 'character' && asset.subjectId !== null && visiblePersonIds.includes(asset.subjectId))
@@ -155,11 +159,12 @@ function imageContext(project: Project, shot: Shot, frame: StoryboardFrame): Ima
     projectId: project.projectId, profile: project.profile,
     shot: { id: shot.id, startMs: shot.startMs, endMs: shot.endMs, action: shot.action, camera: shot.camera, cameraAxis: shot.cameraAxis,
       screenDirection: shot.screenDirection, visualLocationId: shot.visualLocationId, presence: shot.presence, continuityBefore: shot.continuityBefore, continuityAfter: shot.continuityAfter },
-    frame: { id: frame.id, offsetMs: frame.offsetMs, role: frame.role, description: frame.description, absoluteMs },
+    frame: { id: frame.id, offsetMs: frame.offsetMs, role: frame.role, description: frame.description,
+      absoluteMs: evaluationAbsoluteMs, displayAbsoluteMs, evaluationAbsoluteMs },
     sourceLinks: links, sourceUnits: units.filter((unit: ProposalUnit): boolean => !['SCREEN_TEXT', 'NOTE', 'CHAT'].includes(unit.kind)),
     people: promptPeople(project, visiblePersonIds), visualReferences, allowedInformationIds, informationGates,
     textOverlayUnitIds: units.filter((unit: ProposalUnit): boolean => ['SCREEN_TEXT', 'NOTE', 'CHAT'].includes(unit.kind)).map((unit: ProposalUnit): string => unit.id),
-    textMappings: frameContextMappings(project, shot.segmentId, absoluteMs, activeUnitIds),
+    textMappings: frameContextMappings(project, shot.segmentId, evaluationAbsoluteMs, activeUnitIds),
   };
 }
 

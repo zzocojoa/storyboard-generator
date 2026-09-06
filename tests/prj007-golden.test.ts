@@ -1,13 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { approveShot } from '../src/domain/edit.js';
+import { textCueInformationIds } from '../src/domain/emission.js';
 import { effectiveInformationGate, updateTextMappingDecision } from '../src/domain/mapping.js';
-import type { Project, Shot, SourceUnit, StoryboardFrame, TextMappingDecision } from '../src/domain/schema.js';
+import { playableAudioCuesAt, playableTextCuesAt } from '../src/domain/playback.js';
+import type { Asset, AudioCue, Project, Shot, SourceUnit, StoryboardFrame, TextCue, TextMappingDecision } from '../src/domain/schema.js';
+import { updateAudioCueTiming } from '../src/domain/tracks.js';
+import { exportProjectJson } from '../src/exporters/json.js';
 import { validateDataset, validateProject } from '../src/domain/validation.js';
 import { importPackage } from '../src/importers/import-package.js';
 import { parseJson, requireSnapshot } from '../src/importers/integrity.js';
 import { ReactionsSchema, ScreenplaySchema } from '../src/importers/production-schema.js';
 import { buildFrameImageContext } from '../src/proposal/context.js';
 import { createSourceOutline } from '../src/proposal/outline.js';
+import { parseProject } from '../src/io/project.js';
 import { productionPackage } from './helpers.js';
 
 async function goldenProject(): Promise<Project> {
@@ -15,11 +20,26 @@ async function goldenProject(): Promise<Project> {
 }
 
 function confirmSegmentMappings(project: Project, segmentId: string): Project {
-  const decisions: TextMappingDecision[] = project.textMappingDecisions.filter((decision: TextMappingDecision): boolean => project.dataset.textPlacements.find((placement): boolean => placement.id === decision.placementId)?.segmentId === segmentId);
-  return decisions.reduce((current: Project, decision: TextMappingDecision): Project => decision.status === 'confirmed' ? current : updateTextMappingDecision(current, decision.id, {
+  const decisions: TextMappingDecision[] = project.textMappingDecisions.filter((decision: TextMappingDecision): boolean => {
+    const placementSegmentId: string | undefined = project.dataset.textPlacements.find((placement): boolean => placement.id === decision.placementId)?.segmentId;
+    return placementSegmentId === segmentId || decision.status === 'unresolved';
+  });
+  const mapped: Project = decisions.reduce((current: Project, decision: TextMappingDecision): Project => decision.status === 'confirmed' ? current : updateTextMappingDecision(current, decision.id, {
     canonicalUnitId: decision.canonicalUnitId, relation: decision.relation, status: 'confirmed', renderCanonicalSeparately: false,
     canonicalStartMs: null, canonicalEndMs: null, note: 'Golden fixture Mapping 확인',
   }), project);
+  return { ...mapped, shots: mapped.shots.map((shot: Shot): Shot => ({ ...shot, sourceLinks: shot.sourceLinks.map((link) => {
+    if (link.temporalAnchor.status === 'confirmed' || !['primary-visual', 'continued-visual'].includes(link.usage)) return link;
+    const unit: SourceUnit | undefined = mapped.dataset.units.find((candidate: SourceUnit): boolean => candidate.id === link.unitId);
+    const times: number[] = unit?.informationIds.flatMap((informationId: string): number[] => mapped.dataset.informationRules
+      .filter((rule): boolean => rule.id === informationId && rule.segmentId === shot.segmentId)
+      .map((rule): number => effectiveInformationGate(mapped, rule.id).effectiveNotBeforeMs)) ?? [];
+    if (times.length === 0) return link;
+    const startMs: number = Math.max(...times);
+    return { ...link, status: 'confirmed' as const, temporalAnchor: { kind: 'shot-offset' as const,
+      startOffsetMs: startMs - shot.startMs, endOffsetMs: Math.min(shot.endMs - shot.startMs, startMs - shot.startMs + 1),
+      basis: 'manual' as const, status: 'confirmed' as const } };
+  }) })) };
 }
 
 function contextAt(project: Project, unitId: string, absoluteMs: number): ReturnType<typeof buildFrameImageContext> {
@@ -30,6 +50,13 @@ function contextAt(project: Project, unitId: string, absoluteMs: number): Return
     frames: [...project.frames.filter((candidate: StoryboardFrame): boolean => candidate.id !== frame.id), frame],
   };
   return buildFrameImageContext(changed, frame.id);
+}
+
+function withMeasuredCue(project: Project, cue: AudioCue, startMs: number, endMs: number, timingRelation: AudioCue['timingRelation']): Project {
+  const asset: Asset = { id: `${cue.id}:golden-audio`, kind: 'audio', subjectId: cue.id, path: `assets/${cue.id}.wav`, mimeType: 'audio/wav',
+    sha256: '3'.repeat(64), description: 'Golden 검증 음성', durationMs: endMs - startMs, version: 1 };
+  return { ...project, assets: [...project.assets, asset], audioCues: project.audioCues.map((candidate: AudioCue): AudioCue => candidate.id === cue.id
+    ? { ...candidate, startMs, endMs, timingRelation, timingStatus: 'measured', assetId: asset.id } : candidate) };
 }
 
 describe('PRJ-007 Golden Acceptance', (): void => {
@@ -78,5 +105,56 @@ describe('PRJ-007 Golden Acceptance', (): void => {
     expect(() => approveShot(changed, shot.id)).toThrowError(expect.objectContaining({
       code: 'SHOT_APPROVAL_BLOCKED', issues: expect.arrayContaining([expect.objectContaining({ code: 'EARLY_INFORMATION_REVEAL' })]),
     }));
+  });
+
+  it('seg024_text_output_respects_three_stage_gate', async (): Promise<void> => {
+    const mapped: Project = confirmSegmentMappings(await goldenProject(), 'SEG-024');
+    const fact10Unit: SourceUnit = mapped.dataset.units.find((unit: SourceUnit): boolean => unit.id === 'UNIT-064') as SourceUnit;
+    const fact10Cue: TextCue = { id: 'seg024-fact10-text-output', segmentId: fact10Unit.segmentId, unitId: fact10Unit.id,
+      placementId: null, mappingDecisionId: null, authority: 'source-unit', text: fact10Unit.text, startMs: 1148000,
+      endMs: 1151000, kind: 'overlay', timingStatus: 'confirmed' };
+    const project: Project = { ...mapped, textCues: [...mapped.textCues, fact10Cue] };
+    const gates: ReadonlyArray<{ informationId: string; atMs: number }> = [
+      { informationId: 'fact:FACT-03', atMs: 1088000 },
+      { informationId: 'fact:FACT-02', atMs: 1108000 },
+      { informationId: 'fact:FACT-09', atMs: 1108000 },
+      { informationId: 'fact:FACT-10', atMs: 1148000 },
+    ];
+    for (const gate of gates) {
+      const earlyIds: string[] = playableTextCuesAt(project, gate.atMs - 1).flatMap((cue: TextCue): string[] => textCueInformationIds(project, cue));
+      const availableIds: string[] = playableTextCuesAt(project, gate.atMs).flatMap((cue: TextCue): string[] => textCueInformationIds(project, cue));
+      expect(earlyIds).not.toContain(gate.informationId);
+      expect(availableIds).toContain(gate.informationId);
+    }
+  });
+
+  it('seg024_audio_output_respects_three_stage_gate', async (): Promise<void> => {
+    const project: Project = confirmSegmentMappings(await goldenProject(), 'SEG-024');
+    const earlyCue: AudioCue = project.audioCues.find((cue: AudioCue): boolean => cue.unitId === 'UNIT-062') as AudioCue;
+    const safeCue: AudioCue = project.audioCues.find((cue: AudioCue): boolean => cue.unitId === 'UNIT-065') as AudioCue;
+    const earlyMeasured: Project = withMeasuredCue(project, earlyCue, 1080000, 1081000, 'within-segment');
+    expect(playableAudioCuesAt(earlyMeasured, 1080500).map((cue: AudioCue): string => cue.id)).not.toContain(earlyCue.id);
+    const safeMeasured: Project = withMeasuredCue(project, safeCue, 1148000, 1149000, 'within-segment');
+    expect(playableAudioCuesAt(safeMeasured, 1148500).map((cue: AudioCue): string => cue.id)).toContain(safeCue.id);
+  });
+
+  it('seg018_j_cut_can_be_saved_and_played', async (): Promise<void> => {
+    const project: Project = await goldenProject();
+    const cue: AudioCue = project.audioCues.find((candidate: AudioCue): boolean => candidate.unitId === 'UNIT-044') as AudioCue;
+    const edited: Project = updateAudioCueTiming(project, cue.id, { startMs: 829000, endMs: 831000, timingRelation: 'j-cut' });
+    const measured: Project = withMeasuredCue(edited, edited.audioCues.find((candidate: AudioCue): boolean => candidate.id === cue.id) as AudioCue, 829000, 831000, 'j-cut');
+    expect(playableAudioCuesAt(measured, 829500).map((candidate: AudioCue): string => candidate.id)).toContain(cue.id);
+    const reopened: Project = parseProject(JSON.parse(exportProjectJson(measured)));
+    expect(reopened.audioCues.find((candidate: AudioCue): boolean => candidate.id === cue.id)?.timingRelation).toBe('j-cut');
+  });
+
+  it('seg018_j_cut_does_not_advance_gate', async (): Promise<void> => {
+    const project: Project = await goldenProject();
+    const cue: AudioCue = project.audioCues.find((candidate: AudioCue): boolean => candidate.unitId === 'UNIT-044') as AudioCue;
+    const before = project.dataset.informationRules.map((rule) => effectiveInformationGate(project, rule.id));
+    const edited: Project = updateAudioCueTiming(project, cue.id, { startMs: 829000, endMs: 831000, timingRelation: 'j-cut' });
+    const changed: Project = withMeasuredCue(edited, edited.audioCues.find((candidate: AudioCue): boolean => candidate.id === cue.id) as AudioCue, 829000, 831000, 'j-cut');
+    const after = changed.dataset.informationRules.map((rule) => effectiveInformationGate(changed, rule.id));
+    expect(after).toEqual(before);
   });
 });

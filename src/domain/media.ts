@@ -1,5 +1,7 @@
+import { assertAudioTimingRelation } from './audio.js';
+import { reviewInformationEmission } from './emission.js';
 import { assertNoErrors, contractError } from './errors.js';
-import type { Asset, AudioCue, GenerationRecord, Project, Shot, ShotSourceLink, StoryboardFrame } from './schema.js';
+import type { Asset, AudioCue, GenerationRecord, Issue, Project, Shot, ShotSourceLink, StoryboardFrame } from './schema.js';
 import { ProjectSchema } from './schema.js';
 import { validateProject } from './validation.js';
 import { sha256Bytes, sha256Text } from '../importers/integrity.js';
@@ -118,7 +120,15 @@ export function applyGeneratedSpeech(
   if (segment === undefined) throw contractError('SEGMENT_NOT_FOUND', `원문의 구간을 찾을 수 없습니다: ${unit.segmentId}`, []);
   const durationMs: number = wavDurationMs(result.bytes);
   const endMs: number = cue.startMs + durationMs;
-  if (cue.startMs < segment.startMs || endMs > segment.endMs) throw contractError('GENERATED_SPEECH_TOO_LONG', `${cueId}: 생성 음성이 원문 구간 ${segment.id}의 범위를 벗어납니다. segment=${segment.startMs}..${segment.endMs}, audio=${cue.startMs}..${endMs}`, []);
+  const measuredCue: AudioCue = { ...cue, endMs, timingStatus: 'measured' };
+  if (cue.timingRelation === 'within-segment' && (cue.startMs < segment.startMs || endMs > segment.endMs)) {
+    throw contractError('GENERATED_SPEECH_TOO_LONG', `${cueId}: 생성 음성이 원문 구간 ${segment.id}의 범위를 벗어납니다. segment=${segment.startMs}..${segment.endMs}, audio=${cue.startMs}..${endMs}`, []);
+  }
+  assertAudioTimingRelation(project, measuredCue);
+  const outputIssues: Issue[] = reviewInformationEmission(project, {
+    entityId: cue.id, channel: 'speech-generation', informationIds: [...unit.informationIds], atMs: cue.startMs,
+  });
+  if (outputIssues.length > 0) throw contractError('AUDIO_OUTPUT_GATE_BLOCKED', outputIssues.map((value: Issue): string => `${value.code}: ${value.message}`).join('\n'), outputIssues);
   const assetId: string = `${generationId}:audio`;
   if (project.assets.some((asset: Asset): boolean => asset.id === assetId)) throw contractError('DUPLICATE_ASSET_ID', `자산 ID가 이미 존재합니다: ${assetId}`, []);
   const prior: Asset | undefined = cue.assetId === null ? undefined : project.assets.find((asset: Asset): boolean => asset.id === cue.assetId);
@@ -136,7 +146,7 @@ export function applyGeneratedSpeech(
     }) };
   });
   const next: Project = { ...project, assets: [...project.assets, asset],
-    audioCues: project.audioCues.map((candidate: AudioCue): AudioCue => candidate.id === cueId ? { ...candidate, endMs, timingStatus: 'measured', assetId } : candidate),
+    audioCues: project.audioCues.map((candidate: AudioCue): AudioCue => candidate.id === cueId ? { ...measuredCue, assetId } : candidate),
     shots,
     frames: project.frames.map((frame: StoryboardFrame): StoryboardFrame => affectedShotIds.has(frame.shotId) ? { ...frame, visualReview: 'pending' } : frame),
     generationRecords: [...project.generationRecords, record] };

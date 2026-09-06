@@ -29,7 +29,8 @@ function outlineAudio(project: Project, segment: Segment): AudioCue[] {
     const beforeWeight: number = spoken.slice(0, index).reduce((sum: number, candidate: SourceUnit): number => sum + [...candidate.text].length, 0);
     const startMs: number = index < 0 ? segment.startMs : segment.startMs + Math.floor(duration * beforeWeight / totalWeight);
     const endMs: number = index < 0 ? segment.endMs : segment.startMs + Math.floor(duration * (beforeWeight + [...unit.text].length) / totalWeight);
-    return { id: `audio-${project.dataset.units.indexOf(unit) + 1}`, unitId: unit.id, kind, startMs, endMs, timingStatus: 'proposed', assetId: null };
+    return { id: `audio-${project.dataset.units.indexOf(unit) + 1}`, unitId: unit.id, kind, startMs, endMs,
+      timingStatus: 'proposed', timingRelation: 'within-segment', assetId: null };
   });
 }
 
