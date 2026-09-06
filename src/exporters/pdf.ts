@@ -7,8 +7,8 @@ import { effectiveInformationGate } from '../domain/mapping.js';
 import type { EffectiveInformationGate } from '../domain/mapping.js';
 import { reviewAudioPlaybackAt } from '../domain/playback.js';
 import type { BlockedCue } from '../domain/playback.js';
-import type { Issue, Project, Shot, StoryboardFrame, TextCue } from '../domain/schema.js';
-import { formatMilliseconds, frameDisplayAbsoluteMs, frameEvaluationAbsoluteMs } from '../domain/time.js';
+import type { Issue, Project, Shot, StoryboardFrame, TextCue, Timebase } from '../domain/schema.js';
+import { formatProjectTimecode, frameDisplayAbsoluteMs, frameEvaluationAbsoluteMs } from '../domain/time.js';
 
 export type AssetLoader = (assetId: string) => Promise<Buffer>;
 
@@ -19,7 +19,8 @@ type FrameRect = { x: number; y: number; width: number; height: number };
 
 function assetErrorCode(error: unknown): string | null {
   if (!(error instanceof Error) || !('code' in error) || typeof error.code !== 'string') return null;
-  return error.code.startsWith('ASSET_') ? error.code : null;
+  return error.code.startsWith('ASSET_') || error.code.startsWith('STORED_ASSET_') || error.code.startsWith('STORED_AUDIO_')
+    ? error.code : null;
 }
 
 async function pageItems(project: Project, loadAsset: AssetLoader): Promise<FramePageItem[]> {
@@ -81,7 +82,8 @@ function frameRect(x: number, y: number, aspectWidth: number, aspectHeight: numb
   return { x: x + 8 + (availableWidth - width) / 2, y: y + 8 + (availableHeight - height) / 2, width, height };
 }
 
-function drawCard(document: PDFKit.PDFDocument, item: FramePageItem, index: number, aspectWidth: number, aspectHeight: number): void {
+function drawCard(document: PDFKit.PDFDocument, item: FramePageItem, index: number, aspectWidth: number, aspectHeight: number,
+  timebase: Timebase): void {
   const column: number = index % 2;
   const row: number = Math.floor(index / 2);
   const x: number = 32 + column * 397;
@@ -91,7 +93,7 @@ function drawCard(document: PDFKit.PDFDocument, item: FramePageItem, index: numb
   document.roundedRect(x, y, width, 230, 5).lineWidth(0.8).strokeColor('#b6bcc2').stroke();
   if (item.image === null) drawPlaceholder(document, frame.x, frame.y, frame.width, frame.height, item.placeholderText);
   else document.image(item.image, frame.x, frame.y, { fit: [frame.width, frame.height], align: 'center', valign: 'center' });
-  const time: string = `${formatMilliseconds(item.shot.startMs)} – ${formatMilliseconds(item.shot.endMs)}`;
+  const time: string = `${formatProjectTimecode(item.shot.startMs, timebase)} – ${formatProjectTimecode(item.shot.endMs, timebase)}`;
   document.fillColor('#d34b2e').fontSize(8).text(time, x + 228, y + 10, { width: 143 });
   document.fillColor('#101820').fontSize(10).text(item.shot.id, x + 228, y + 28, { width: 143, height: 27, ellipsis: true });
   document.fillColor('#59636d').fontSize(8).text(`${item.shot.camera.size} · ${item.shot.camera.angle} · ${item.shot.camera.move}\n${item.shot.transitionOut.kind.toUpperCase()} ${item.shot.transitionOut.durationMs}ms`, x + 228, y + 59, { width: 143, height: 31, ellipsis: true });
@@ -122,7 +124,7 @@ export async function exportProjectPdf(project: Project, fontPath: string, loadA
     document.addPage();
     addHeader(document, project, pageIndex + 1, totalPages);
     items.slice(pageIndex * 4, pageIndex * 4 + 4).forEach((item: FramePageItem, index: number): void => {
-      drawCard(document, item, index, project.profile.aspectWidth, project.profile.aspectHeight);
+      drawCard(document, item, index, project.profile.aspectWidth, project.profile.aspectHeight, project.handoff.timebase);
     });
   }
   document.end();

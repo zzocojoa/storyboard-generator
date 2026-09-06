@@ -155,8 +155,8 @@ describe('A. Project-scoped root create lock', (): void => {
   it('root_create_lock_records_project_and_transaction', async (): Promise<void> => {
     const scenario = await activeCreate('after-root-create-lock-acquired', 'root-metadata');
     const metadata = JSON.parse(await readFile(rootLockPath(scenario.dataRoot, scenario.project.projectId), 'utf8')) as Record<string, unknown>;
-    expect(metadata).toMatchObject({ version: 2, projectId: scenario.project.projectId, host: hostname(), pid: process.pid });
-    expect(metadata.transactionId).toMatch(/^[0-9a-f-]{36}$/); scenario.gate.release(); await scenario.pending;
+    expect(metadata).toMatchObject({ version: 3, projectId: scenario.project.projectId, host: hostname(), pid: process.pid });
+    expect(metadata.transactionId).toMatch(/^[0-9a-f-]{36}$/); expect(metadata.processInstanceId).toMatch(/^[0-9a-f-]{36}$/); scenario.gate.release(); await scenario.pending;
   });
   it('root_create_lock_is_removed_after_success', async (): Promise<void> => {
     const root = await temporaryRoot('storyboard-root-clean-'); const dataRoot = join(root, 'data'); const project = await outline('root-clean');
@@ -248,10 +248,10 @@ describe('C. Root create lock recovery', (): void => {
     const projectId = 'malformed-root'; await writeFile(rootLockPath(dataRoot, projectId), '{}'); const observer = new ProjectStore(dataRoot); await observer.initialize();
     expect(observer.recoveryBlocks()).toContainEqual(expect.objectContaining({ directoryName: projectStoreKey(projectId), code: 'STORE_CREATE_RECOVERY_REQUIRED' })); expect(await exists(rootLockPath(dataRoot, projectId))).toBe(true);
   });
-  it('root_lock_journal_transaction_mismatch_is_blocked', async (): Promise<void> => {
+  it('root_lock_journal_transaction_mismatch_is_isolated', async (): Promise<void> => {
     const fixture = await crashedCreate('after-create-journal-prepared', 'mismatch-root'); const path = rootLockPath(fixture.dataRoot, fixture.project.projectId);
     const metadata = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>; await writeFile(path, JSON.stringify({ ...metadata, transactionId: randomUUID() }));
-    const observer = new ProjectStore(fixture.dataRoot); await observer.initialize(); expect(observer.recoveryBlocks()).toContainEqual(expect.objectContaining({ projectId: fixture.project.projectId, code: 'STORE_CREATE_RECOVERY_REQUIRED' }));
+    const observer = new ProjectStore(fixture.dataRoot); await observer.initialize(); expect(observer.recoveryBlocks()).toEqual([]); expect(await readdir(join(fixture.dataRoot, '.create-locks'))).toEqual([]);
   });
   it('root_create_recovery_is_idempotent', async (): Promise<void> => {
     const fixture = await crashedCreate('after-root-create-lock-acquired', 'idempotent-root'); await new ProjectStore(fixture.dataRoot).initialize(); await new ProjectStore(fixture.dataRoot).initialize();
@@ -345,7 +345,7 @@ describe('E. Generation Record transition', (): void => {
   });
   it('new_generation_record_shot_ids_must_exist', async (): Promise<void> => {
     const current = await outline('generation-missing-shot'); const next = { ...current, generationRecords: [record('record-1', ['missing-shot'], [])] };
-    expect(generationRecordIssues(next)).toContainEqual(expect.objectContaining({ code: 'GENERATION_RECORD_SHOT_NOT_FOUND' })); expect(() => assertGenerationRecordTransition(current, next)).toThrowError(expect.objectContaining({ code: 'GENERATION_RECORD_SHOT_NOT_FOUND' }));
+    expect(generationRecordIssues(next)).not.toContainEqual(expect.objectContaining({ code: 'GENERATION_RECORD_SHOT_NOT_FOUND' })); expect(() => assertGenerationRecordTransition(current, next)).toThrowError(expect.objectContaining({ code: 'GENERATION_RECORD_SHOT_NOT_FOUND' }));
   });
   it('new_generation_record_result_assets_must_exist', async (): Promise<void> => {
     const root = await temporaryRoot('storyboard-generation-asset-'); const store = new ProjectStore(join(root, 'data')); const project = await store.create(await outline('generation-missing-asset'));
@@ -449,7 +449,7 @@ describe('I. Web UI error states', (): void => {
   it('project_busy_message_requests_reload_or_retry', (): void => { expect(apiErrorMessage(apiError('PROJECT_BUSY', 'conflict', true, false))).toMatch(/완료 후.*재시도/); });
   it('project_already_exists_message_is_distinct', (): void => { expect(apiErrorMessage(apiError('PROJECT_ALREADY_EXISTS', 'conflict', false, false))).toBe('같은 Project가 이미 저장돼 있습니다.'); });
   it('recovery_423_displays_storage_recovery_banner', (): void => { expect(apiErrorMessage(apiError('STORE_RECOVERY_BLOCKED', 'locked', false, true))).toContain('STORAGE RECOVERY REQUIRED'); });
-  it('recovery_423_disables_mutation_controls', (): void => { expect(mutationControlsDisabled(false, true)).toBe(true); });
+  it('recovery_423_disables_mutation_controls', (): void => { expect(mutationControlsDisabled(false, 'blocked', { blockedProjectIds: ['blocked'], assetIntegrityIssues: [] })).toBe(true); });
   it('recovery_423_is_not_automatically_retried', (): void => { expect(shouldRetryApiError(apiError('STORE_RECOVERY_BLOCKED', 'locked', false, true))).toBe(false); });
   it('storage_503_displays_temporary_unavailable_message', (): void => { expect(apiErrorMessage(apiError('STORE_LOCK_ACQUISITION_FAILED', 'unavailable', true, false))).toContain('STORAGE TEMPORARILY UNAVAILABLE'); });
 });

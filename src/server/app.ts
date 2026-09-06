@@ -73,8 +73,16 @@ async function queueRequest(kind: CodexRequestKind, projectId: string, targetId:
 }
 
 export type HttpErrorCategory = 'validation' | 'not-found' | 'conflict' | 'locked' | 'unavailable' | 'internal';
-export type HttpErrorPolicy = { status: number; category: HttpErrorCategory; retryable: boolean; operatorActionRequired: boolean };
-export type HttpErrorBody = { error: { code: string; message: string; issues: unknown[]; category: HttpErrorCategory; retryable: boolean; operatorActionRequired: boolean } };
+export type HttpErrorScope = 'request' | 'project' | 'asset' | 'service';
+export type HttpErrorPolicy = {
+  status: number; category: HttpErrorCategory; scope: HttpErrorScope;
+  retryable: boolean; operatorActionRequired: boolean; mutationBlocked: boolean;
+};
+export type HttpErrorBody = { error: {
+  code: string; message: string; issues: unknown[]; category: HttpErrorCategory; scope: HttpErrorScope;
+  retryable: boolean; operatorActionRequired: boolean; mutationBlocked: boolean;
+  projectId: string | null; resourceId: string | null;
+} };
 
 const conflictPolicies: ReadonlyMap<string, boolean> = new Map<string, boolean>([
   ['PROJECT_BUSY', true], ['REVISION_CONFLICT', true], ['PROJECT_ALREADY_EXISTS', false], ['PROJECT_VERSION_EXISTS', false],
@@ -82,6 +90,14 @@ const conflictPolicies: ReadonlyMap<string, boolean> = new Map<string, boolean>(
 const lockedCodes: ReadonlySet<string> = new Set<string>([
   'STORE_RECOVERY_BLOCKED', 'STORE_RECOVERY_REQUIRED', 'STORE_CREATE_RECOVERY_REQUIRED', 'STORE_LOCK_CLEANUP_REQUIRED',
   'STORE_CONCURRENT_MODIFICATION', 'STORE_PATH_UNSAFE', 'TRANSACTION_JOURNAL_PATH_UNSAFE',
+]);
+const storedAssetCodes: ReadonlySet<string> = new Set<string>([
+  'STORED_ASSET_FILE_MISSING', 'STORED_ASSET_HASH_MISMATCH', 'STORED_ASSET_MIME_MISMATCH',
+  'STORED_ASSET_CONTENT_CORRUPT', 'STORED_AUDIO_METADATA_MISMATCH', 'STORED_AUDIO_DURATION_MISMATCH',
+]);
+const notFoundCodes: ReadonlySet<string> = new Set<string>([
+  'PROJECT_NOT_FOUND', 'SHOT_NOT_FOUND', 'FRAME_NOT_FOUND', 'AUDIO_CUE_NOT_FOUND', 'TEXT_CUE_NOT_FOUND',
+  'SEGMENT_NOT_FOUND', 'CODEX_REQUEST_NOT_FOUND', 'ASSET_NOT_FOUND', 'SOURCE_LINK_NOT_FOUND', 'ROUTE_NOT_FOUND',
 ]);
 
 function isValidationError(error: Error, code: string): boolean {
@@ -95,25 +111,46 @@ function isValidationError(error: Error, code: string): boolean {
 /** 서버 오류 코드를 사용자 입력, 충돌, 복구 잠금과 일시 장애로 명시적으로 분류한다. */
 export function httpErrorPolicy(error: Error): HttpErrorPolicy {
   const code: string = 'code' in error && typeof error.code === 'string' ? error.code : error.name;
+  if (storedAssetCodes.has(code)) {
+    return { status: 423, category: 'locked', scope: 'asset', retryable: false, operatorActionRequired: true, mutationBlocked: false };
+  }
   if (lockedCodes.has(code) || code.startsWith('STORE_RECOVERY_') || code.startsWith('STORE_CREATE_RECOVERY_')) {
-    return { status: 423, category: 'locked', retryable: false, operatorActionRequired: true };
+    return { status: 423, category: 'locked', scope: 'project', retryable: false, operatorActionRequired: true, mutationBlocked: true };
   }
-  if (code === 'STORE_LOCK_ACQUISITION_FAILED') return { status: 503, category: 'unavailable', retryable: true, operatorActionRequired: false };
+  if (code === 'STORE_LOCK_ACQUISITION_FAILED') return { status: 503, category: 'unavailable', scope: 'service', retryable: true, operatorActionRequired: false, mutationBlocked: false };
   const conflictRetryable: boolean | undefined = conflictPolicies.get(code);
-  if (conflictRetryable !== undefined) return { status: 409, category: 'conflict', retryable: conflictRetryable, operatorActionRequired: false };
-  if (code !== 'ASSET_REFERENCE_NOT_FOUND' && code.endsWith('_NOT_FOUND')) {
-    return { status: 404, category: 'not-found', retryable: false, operatorActionRequired: false };
+  if (conflictRetryable !== undefined) {
+    return { status: 409, category: 'conflict', scope: code === 'PROJECT_BUSY' ? 'project' : 'request', retryable: conflictRetryable,
+      operatorActionRequired: false, mutationBlocked: false };
   }
-  if (isValidationError(error, code)) return { status: 400, category: 'validation', retryable: false, operatorActionRequired: false };
-  return { status: 500, category: 'internal', retryable: false, operatorActionRequired: false };
+  if (notFoundCodes.has(code)) return { status: 404, category: 'not-found', scope: code === 'PROJECT_NOT_FOUND' ? 'project' : 'request',
+    retryable: false, operatorActionRequired: false, mutationBlocked: false };
+  if (isValidationError(error, code)) return { status: 400, category: 'validation', scope: 'request', retryable: false,
+    operatorActionRequired: false, mutationBlocked: false };
+  return { status: 500, category: 'internal', scope: 'service', retryable: false, operatorActionRequired: false, mutationBlocked: false };
 }
 
-export function errorBody(error: Error): HttpErrorBody {
+function requestErrorContext(error: Error, request: FastifyRequest | undefined): { projectId: string | null; resourceId: string | null } {
+  const params: Record<string, unknown> = typeof request?.params === 'object' && request.params !== null
+    ? request.params as Record<string, unknown> : {};
+  const contextualProjectId: unknown = 'projectId' in error ? error.projectId : undefined;
+  const contextualResourceId: unknown = 'resourceId' in error ? error.resourceId : undefined;
+  const projectId: string | null = typeof contextualProjectId === 'string' ? contextualProjectId
+    : typeof params.projectId === 'string' ? params.projectId : null;
+  const routeResource: unknown = params.assetId ?? params.shotId ?? params.frameId ?? params.cueId ?? params.segmentId ?? params.requestId;
+  const resourceId: string | null = typeof contextualResourceId === 'string' ? contextualResourceId
+    : typeof routeResource === 'string' ? routeResource : null;
+  return { projectId, resourceId };
+}
+
+export function errorBody(error: Error, request?: FastifyRequest): HttpErrorBody {
   const code: string = 'code' in error && typeof error.code === 'string' ? error.code : error.name;
   const issues: unknown[] = error instanceof ZodError ? error.issues : 'issues' in error && Array.isArray(error.issues) ? error.issues : [];
   const policy: HttpErrorPolicy = httpErrorPolicy(error);
+  const context = requestErrorContext(error, request);
   return { error: { code, message: error.message, issues, category: policy.category, retryable: policy.retryable,
-    operatorActionRequired: policy.operatorActionRequired } };
+    operatorActionRequired: policy.operatorActionRequired, scope: policy.scope, mutationBlocked: policy.mutationBlocked,
+    projectId: context.projectId, resourceId: context.resourceId } };
 }
 
 type AudioUpload = { expectedRevision: number; originalFileName: string; declaredMimeType: string; bytes: Buffer };
@@ -155,11 +192,13 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
   await requests.initialize();
   const audioNormalizer: WorkerAudioNormalizer = audioNormalizerOverride ?? new WorkerAudioNormalizer(config.audioNormalization);
   const app: FastifyInstance = Fastify({ logger: { level: 'info' }, bodyLimit: MAX_AUDIO_BYTES + 1024 * 1024 });
-  app.addHook('onClose', async (): Promise<void> => audioNormalizer.close());
+  app.addHook('onClose', async (): Promise<void> => {
+    await Promise.all([audioNormalizer.close(), store.close()]);
+  });
   await app.register(fastifyMultipart, { limits: { fileSize: MAX_AUDIO_BYTES, files: 1, fields: 1, parts: 2 } });
 
-  app.setErrorHandler((error: Error, _request: FastifyRequest, reply: FastifyReply): void => {
-    reply.status(httpErrorPolicy(error).status).send(errorBody(error));
+  app.setErrorHandler((error: Error, request: FastifyRequest, reply: FastifyReply): void => {
+    reply.status(httpErrorPolicy(error).status).send(errorBody(error, request));
   });
 
   app.get('/api/status', async (): Promise<object> => {
@@ -169,6 +208,7 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
     return { provider: 'codex-app', ...metrics,
       recentFailures: failed.slice(-5).reverse().map((item: CodexRequest): object => ({ id: item.id, kind: item.kind, projectId: item.projectId, targetId: item.targetId, error: item.error })),
       storageRecovery: store.recoveryEvents(), storageRecoveryBlocks: store.recoveryBlocks(),
+      activeCreates: store.activeCreates(), activeUpdates: store.activeUpdates(),
       generationInstruction: 'Codex 앱에서 $storyboard-workbench 대기 요청 처리를 실행하세요.', aiVoiceDisclosure: `가이드 음성은 macOS ${config.codex.speechVoice} 합성 음성입니다.` };
   });
   app.get('/api/projects', async (): Promise<object> => ({ projects: await store.list() }));
@@ -180,6 +220,10 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
     const { projectId } = ProjectParamsSchema.parse(request.params);
     const project: Project = await store.read(projectId);
     return { issues: mappingReviewIssues(project) };
+  });
+  app.get('/api/projects/:projectId/generation-audit', async (request: FastifyRequest): Promise<object> => {
+    const { projectId } = ProjectParamsSchema.parse(request.params);
+    return { records: await store.generationRecordAudit(projectId) };
   });
   app.post('/api/projects/import', async (request: FastifyRequest, reply: FastifyReply): Promise<object> => {
     const body = ImportBodySchema.parse(request.body);
@@ -395,7 +439,8 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
   await app.register(fastifyStatic, { root: config.webRoot, wildcard: true });
   app.setNotFoundHandler((request: FastifyRequest, reply: FastifyReply): void => {
     if (request.url.startsWith('/api/')) {
-      reply.status(404).send({ error: { code: 'ROUTE_NOT_FOUND', message: `API 경로를 찾을 수 없습니다: ${request.method} ${request.url}`, issues: [] } });
+      const error: Error = contractError('ROUTE_NOT_FOUND', `API 경로를 찾을 수 없습니다: ${request.method} ${request.url}`, []);
+      reply.status(404).send(errorBody(error, request));
       return;
     }
     void reply.sendFile('index.html');

@@ -275,22 +275,22 @@ describe('오디오 자원 한계', (): void => {
 describe('실제 WAV metadata와 타임라인 결속', (): void => {
   it('실제 sample rate와 Asset metadata 불일치를 차단한다', async (): Promise<void> => {
     const fixture: LegacyFixture = await createLegacyFixture(24000, 1, 16, 500, 500, 500, 48000, 1, 'pcm_s16le', null);
-    await expect(fixture.store.asset(fixture.project.projectId, fixture.asset.id)).rejects.toMatchObject({ code: 'AUDIO_ASSET_METADATA_MISMATCH' });
+    await expect(fixture.store.asset(fixture.project.projectId, fixture.asset.id)).rejects.toMatchObject({ code: 'STORED_AUDIO_METADATA_MISMATCH' });
   });
 
   it('실제 duration과 Asset metadata 불일치를 차단한다', async (): Promise<void> => {
     const fixture: LegacyFixture = await createLegacyFixture(48000, 1, 16, 500, 600, 600, 48000, 1, 'pcm_s16le', null);
-    await expect(fixture.store.asset(fixture.project.projectId, fixture.asset.id)).rejects.toMatchObject({ code: 'AUDIO_ASSET_METADATA_MISMATCH' });
+    await expect(fixture.store.asset(fixture.project.projectId, fixture.asset.id)).rejects.toMatchObject({ code: 'STORED_AUDIO_DURATION_MISMATCH' });
   });
 
   it('실제 channel 수와 Asset metadata 불일치를 차단한다', async (): Promise<void> => {
     const fixture: LegacyFixture = await createLegacyFixture(48000, 1, 16, 500, 500, 500, 48000, 2, 'pcm_s16le', null);
-    await expect(fixture.store.asset(fixture.project.projectId, fixture.asset.id)).rejects.toMatchObject({ code: 'AUDIO_ASSET_METADATA_MISMATCH' });
+    await expect(fixture.store.asset(fixture.project.projectId, fixture.asset.id)).rejects.toMatchObject({ code: 'STORED_AUDIO_METADATA_MISMATCH' });
   });
 
   it('실제 codec과 Asset metadata 불일치를 차단한다', async (): Promise<void> => {
     const fixture: LegacyFixture = await createLegacyFixture(48000, 1, 16, 500, 500, 500, 48000, 1, 'pcm_s24le', null);
-    await expect(fixture.store.asset(fixture.project.projectId, fixture.asset.id)).rejects.toMatchObject({ code: 'AUDIO_ASSET_METADATA_MISMATCH' });
+    await expect(fixture.store.asset(fixture.project.projectId, fixture.asset.id)).rejects.toMatchObject({ code: 'STORED_AUDIO_METADATA_MISMATCH' });
   });
 
   it('Asset 길이와 Cue 타임라인이 다른 Project를 저장 계약에서 거부한다', async (): Promise<void> => {
@@ -307,7 +307,7 @@ describe('실제 WAV metadata와 타임라인 결속', (): void => {
 describe('이전 WAV의 명시적 정규화 복구', (): void => {
   it('24kHz PCM WAV를 손상이 아닌 정규화 필요 상태로 식별한다', async (): Promise<void> => {
     const fixture: LegacyFixture = await createLegacyFixture(24000, 1, 16, 500, 500, 500, 24000, 1, 'pcm_s16le', null);
-    await expect(fixture.store.asset(fixture.project.projectId, fixture.asset.id)).rejects.toMatchObject({ code: 'AUDIO_ASSET_NORMALIZATION_REQUIRED' });
+    await expect(fixture.store.asset(fixture.project.projectId, fixture.asset.id)).rejects.toMatchObject({ code: 'STORED_AUDIO_METADATA_MISMATCH' });
     expect((await fixture.store.list())[0]?.audioRepairRequired).toBe(1);
   });
 
@@ -491,7 +491,9 @@ describe('저장 Transaction journal 복구', (): void => {
     const lockPath: string = join(projectDirectory(dataRoot, project.projectId), 'write.lock');
     await writeFile(lockPath, JSON.stringify({ version: 2, projectId: project.projectId, host: hostname(), pid: process.pid,
       transactionId, createdAt: '2026-09-06T00:00:00.000Z' }));
-    await expect(new ProjectStore(dataRoot).initialize()).rejects.toMatchObject({ code: 'PROJECT_BUSY' });
+    const observer: ProjectStore = new ProjectStore(dataRoot); await observer.initialize();
+    expect(observer.activeUpdates()).toContainEqual(expect.objectContaining({ projectId: project.projectId, transactionId }));
+    await expect(observer.assertMutable(project.projectId)).rejects.toMatchObject({ code: 'PROJECT_BUSY' });
     expect(await exists(lockPath)).toBe(true); await unlink(lockPath);
   });
 

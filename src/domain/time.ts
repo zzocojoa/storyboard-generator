@@ -1,4 +1,4 @@
-import { contractError, issue } from './errors.js';
+import { assertNoErrors, contractError, issue } from './errors.js';
 import type { Issue, Shot, StoryboardFrame, Timebase } from './schema.js';
 
 export function frameDisplayAbsoluteMs(shot: Shot, frame: StoryboardFrame): number {
@@ -38,6 +38,62 @@ export function formatMilliseconds(value: number): string {
 
 export function millisecondsToNearestFrame(value: number, timebase: Timebase): number {
   return Math.round(value * timebase.fpsNumerator / (1000 * timebase.fpsDenominator));
+}
+
+function elapsedFrames(value: number, timebase: Timebase): bigint {
+  if (!Number.isSafeInteger(value) || value < 0) throw contractError('INVALID_TIME', '음수가 아닌 정수 밀리초가 필요합니다.', []);
+  return BigInt(value) * BigInt(timebase.fpsNumerator) / (1000n * BigInt(timebase.fpsDenominator));
+}
+
+function timecodeFields(value: string): readonly [number, number, number, number] {
+  const fields: number[] = value.split(/[:;]/u).map(Number);
+  const [hours, minutes, seconds, frames] = fields;
+  if (hours === undefined || minutes === undefined || seconds === undefined || frames === undefined) {
+    throw contractError('INVALID_TIMECODE', `시작 타임코드를 해석할 수 없습니다: ${value}`, []);
+  }
+  return [hours, minutes, seconds, frames];
+}
+
+function startFrameNumber(timebase: Timebase, nominalFps: number): bigint {
+  const [hours, minutes, seconds, frames] = timecodeFields(timebase.startTimecode);
+  const nominal: bigint = BigInt(nominalFps);
+  const totalMinutes: number = hours * 60 + minutes;
+  const nominalFrames: bigint = BigInt(hours * 3600 + minutes * 60 + seconds) * nominal + BigInt(frames);
+  if (!timebase.dropFrame) return nominalFrames;
+  const droppedPerMinute: number = Math.round(nominalFps * 2 / 30);
+  const dropped: number = droppedPerMinute * (totalMinutes - Math.floor(totalMinutes / 10));
+  return nominalFrames - BigInt(dropped);
+}
+
+function dropFrameLabel(frameNumber: bigint, nominalFps: number): bigint {
+  const droppedPerMinute: bigint = BigInt(Math.round(nominalFps * 2 / 30));
+  const nominal: bigint = BigInt(nominalFps);
+  const framesPer10Minutes: bigint = nominal * 600n - droppedPerMinute * 9n;
+  const framesPer24Hours: bigint = (nominal * 3600n - droppedPerMinute * 54n) * 24n;
+  const normalized: bigint = frameNumber % framesPer24Hours;
+  const tenMinuteBlocks: bigint = normalized / framesPer10Minutes;
+  const remainder: bigint = normalized % framesPer10Minutes;
+  const additionalMinutes: bigint = remainder < droppedPerMinute ? 0n
+    : (remainder - droppedPerMinute) / (nominal * 60n - droppedPerMinute);
+  return normalized + droppedPerMinute * 9n * tenMinuteBlocks + droppedPerMinute * additionalMinutes;
+}
+
+/** Project Timebase와 시작 Timecode를 사용해 정수 프레임 산술로 표시한다. */
+export function formatProjectTimecode(milliseconds: number, timebase: Timebase): string {
+  assertNoErrors(validateTimebase(timebase), 'INVALID_TIMEBASE');
+  const nominalFps: number = Math.round(timebase.fpsNumerator / timebase.fpsDenominator);
+  const absoluteFrame: bigint = startFrameNumber(timebase, nominalFps) + elapsedFrames(milliseconds, timebase);
+  const displayFrame: bigint = timebase.dropFrame ? dropFrameLabel(absoluteFrame, nominalFps) : absoluteFrame;
+  const nominal: bigint = BigInt(nominalFps);
+  const frames: bigint = displayFrame % nominal;
+  const totalSeconds: bigint = displayFrame / nominal;
+  const seconds: bigint = totalSeconds % 60n;
+  const totalMinutes: bigint = totalSeconds / 60n;
+  const minutes: bigint = totalMinutes % 60n;
+  const hours: bigint = totalMinutes / 60n;
+  const separator: string = timebase.dropFrame ? ';' : ':';
+  const base: string = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}${separator}${String(frames).padStart(2, '0')}`;
+  return hours === 0n ? base : `${String(hours).padStart(2, '0')}:${base}`;
 }
 
 export function validateTimebase(timebase: Timebase): Issue[] {

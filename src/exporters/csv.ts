@@ -7,7 +7,7 @@ import type { BlockedCue } from '../domain/playback.js';
 import type { Issue, Project, Shot, ShotSourceLink, SourceUnit, StoryboardFrame, TextCue } from '../domain/schema.js';
 import { effectiveInformationGate, reviewIssuesForShot } from '../domain/mapping.js';
 import type { EffectiveInformationGate } from '../domain/mapping.js';
-import { formatMilliseconds, frameDisplayAbsoluteMs, frameEvaluationAbsoluteMs } from '../domain/time.js';
+import { formatProjectTimecode, frameDisplayAbsoluteMs, frameEvaluationAbsoluteMs } from '../domain/time.js';
 import { parseProject } from '../io/project.js';
 
 /** 스프레드시트가 사용자 원문을 수식으로 실행하지 않도록 위험한 접두사에 작은따옴표를 붙인다. */
@@ -43,7 +43,8 @@ function shotRow(project: Project, shot: Shot, assetIntegrity: Readonly<Record<s
     .map((rule): EffectiveInformationGate => effectiveInformationGate(project, rule.id));
   return [
     project.projectId, project.title, shot.id, shot.segmentId, segment?.sceneId ?? '', segment?.mode ?? '',
-    String(shot.startMs), String(shot.endMs), String(shot.endMs - shot.startMs), formatMilliseconds(shot.startMs), formatMilliseconds(shot.endMs),
+    String(shot.startMs), String(shot.endMs), String(shot.endMs - shot.startMs),
+    formatProjectTimecode(shot.startMs, project.handoff.timebase), formatProjectTimecode(shot.endMs, project.handoff.timebase),
     scene?.storyLocationId ?? '', shot.visualLocationId ?? '', shot.action, shot.camera.size, shot.camera.angle, shot.camera.move,
     shot.transitionOut.kind, String(shot.transitionOut.durationMs), shot.transitionOut.note,
     JSON.stringify(shot.presence), JSON.stringify(shot.propIds), JSON.stringify(shot.sourceLinks),

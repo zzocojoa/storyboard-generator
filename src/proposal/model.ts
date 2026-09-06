@@ -7,8 +7,13 @@ import { sourcePolicyIssues } from '../domain/source-policy.js';
 import { validateProject } from '../domain/validation.js';
 import { assertNoErrors } from '../domain/errors.js';
 
+export const ProposedSourceAnchorSchema = z.strictObject({
+  startPermille: z.number().int().min(0).max(999),
+  endPermille: z.number().int().min(1).max(1000),
+}).refine((value): boolean => value.startPermille < value.endPermille, { message: 'startPermille은 endPermille보다 작아야 합니다.' });
+
 export const ShotProposalSchema = z.strictObject({
-  sourceLinks: z.array(ShotSourceLinkSchema.pick({ unitId: true, usage: true })).min(1), durationWeight: z.number().int().positive().max(10000),
+  sourceLinks: z.array(ShotSourceLinkSchema.pick({ unitId: true, usage: true }).extend({ anchor: ProposedSourceAnchorSchema.optional() })).min(1), durationWeight: z.number().int().positive().max(10000),
   action: z.string().min(1), visualLocationId: z.string().min(1).nullable(),
   camera: z.strictObject({ size: z.string().min(1), angle: z.string().min(1), move: z.string().min(1) }),
   presence: z.array(PresenceSchema), propIds: z.array(z.string().min(1)),
@@ -17,6 +22,16 @@ export const ShotProposalSchema = z.strictObject({
 });
 export const SegmentProposalSchema = z.strictObject({ shots: z.array(ShotProposalSchema).min(1).max(64) });
 export type SegmentProposal = z.infer<typeof SegmentProposalSchema>;
+export type ProposedSourceAnchor = z.infer<typeof ProposedSourceAnchorSchema>;
+
+function proposalAnchor(durationMs: number, anchor: ProposedSourceAnchor | undefined): ShotSourceLink['temporalAnchor'] {
+  const startOffsetMs: number = anchor === undefined ? 0 : Math.floor(durationMs * anchor.startPermille / 1000);
+  const endOffsetMs: number = anchor === undefined ? durationMs : Math.ceil(durationMs * anchor.endPermille / 1000);
+  if (startOffsetMs < 0 || startOffsetMs >= endOffsetMs || endOffsetMs > durationMs) {
+    throw contractError('INVALID_PROPOSAL_SOURCE_ANCHOR', `제안 Source Anchor가 컷 범위를 벗어났습니다: duration=${durationMs}, start=${startOffsetMs}, end=${endOffsetMs}`, []);
+  }
+  return { kind: 'shot-offset', startOffsetMs, endOffsetMs, basis: 'proposal', status: 'confirmed' };
+}
 
 function validateProposalSources(project: Project, segmentId: string, proposal: SegmentProposal): void {
   const sourceUnits: SourceUnit[] = project.dataset.units.filter((unit: SourceUnit): boolean => unit.segmentId === segmentId);
@@ -26,8 +41,10 @@ function validateProposalSources(project: Project, segmentId: string, proposal: 
   const unknown: string[] = [...new Set(proposedIds.filter((id: string): boolean => !sourceIds.includes(id)))];
   const missing: string[] = sourceIds.filter((id: string): boolean => !proposedIds.includes(id));
   if (unknown.length > 0 || missing.length > 0) throw contractError('PROPOSAL_SOURCE_COVERAGE', `${segmentId}: 원문 연결을 확인하세요. unknown=${unknown.join(',')}, missing=${missing.join(',')}`, []);
-  const policyShots = proposal.shots.map((shot, index: number) => ({ id: `${segmentId}:proposal:${index + 1}`, sourceLinks: shot.sourceLinks.map((link): ShotSourceLink => ({
-    ...link, status: 'confirmed', temporalAnchor: { kind: 'shot-offset', startOffsetMs: 0, endOffsetMs: 1, basis: 'proposal', status: 'confirmed' },
+  const policyShots = proposal.shots.map((shot, index: number) => ({ id: `${segmentId}:proposal:${index + 1}`, sourceLinks: [...shot.sourceLinks]
+    .sort((left, right): number => (left.anchor?.startPermille ?? 0) - (right.anchor?.startPermille ?? 0))
+    .map((link): ShotSourceLink => ({
+    unitId: link.unitId, usage: link.usage, status: 'confirmed', temporalAnchor: { kind: 'shot-offset', startOffsetMs: 0, endOffsetMs: 1, basis: 'proposal', status: 'confirmed' },
   })) }));
   const policyIssues = sourcePolicyIssues(sourceUnits, policyShots);
   if (policyIssues.length > 0) {
@@ -38,20 +55,41 @@ function validateProposalSources(project: Project, segmentId: string, proposal: 
   }
 }
 
-function validateProposalInformation(project: Project, segment: Segment, proposal: SegmentProposal, durations: readonly number[]): void {
-  proposal.shots.forEach((shot, index: number): void => {
-    const startMs: number = segment.startMs + durations.slice(0, index).reduce((sum: number, duration: number): number => sum + duration, 0);
-    const linkedUnits: SourceUnit[] = shot.sourceLinks.flatMap((link): SourceUnit[] => {
+function anchorStart(link: ShotSourceLink): number {
+  return link.temporalAnchor.kind === 'shot-offset' ? link.temporalAnchor.startOffsetMs : 0;
+}
+
+function validateProposalInformation(project: Project, shots: readonly Shot[]): void {
+  shots.forEach((shot: Shot): void => {
+    const linkedUnits: SourceUnit[] = shot.sourceLinks.flatMap((link: ShotSourceLink): SourceUnit[] => {
       const unit: SourceUnit | undefined = project.dataset.units.find((candidate: SourceUnit): boolean => candidate.id === link.unitId);
       return unit === undefined ? [] : [unit];
     });
-    const directInformationIds: string[] = shot.sourceLinks.filter((link): boolean => ['primary-visual', 'continued-visual'].includes(link.usage)).flatMap((link): string[] => linkedUnits.find((unit: SourceUnit): boolean => unit.id === link.unitId)?.informationIds ?? []);
+    const directLinks: ShotSourceLink[] = shot.sourceLinks.filter((link: ShotSourceLink): boolean => ['primary-visual', 'continued-visual'].includes(link.usage));
+    const directInformationIds: string[] = directLinks.flatMap((link: ShotSourceLink): string[] => linkedUnits.find((unit: SourceUnit): boolean => unit.id === link.unitId)?.informationIds ?? []);
     for (const informationId of [...new Set([...shot.informationIds, ...directInformationIds])]) {
       const gate = effectiveInformationGate(project, informationId);
-      if (gate.reviewRequired || startMs < gate.effectiveNotBeforeMs) throw contractError('PROPOSAL_INFORMATION_GATE', `${segment.id}: ${informationId}를 ${startMs}ms 컷에 배치할 수 없습니다. effectiveNotBefore=${gate.effectiveNotBeforeMs}, reasons=${gate.reviewReasons.join(',')}`, []);
-      if (shot.informationIds.includes(informationId) && !linkedUnits.some((unit: SourceUnit): boolean => unit.informationIds.includes(informationId))) throw contractError('PROPOSAL_INFORMATION_WITHOUT_SOURCE', `${segment.id}: ${informationId}를 뒷받침하는 Source Link가 필요합니다.`, []);
+      const supportingLinks: ShotSourceLink[] = directLinks.filter((link: ShotSourceLink): boolean =>
+        linkedUnits.find((unit: SourceUnit): boolean => unit.id === link.unitId)?.informationIds.includes(informationId) === true);
+      const revealMs: number = shot.startMs + Math.min(...supportingLinks.map(anchorStart));
+      if (gate.reviewRequired || supportingLinks.length === 0 || revealMs < gate.effectiveNotBeforeMs) throw contractError('PROPOSAL_INFORMATION_GATE', `${shot.segmentId}: ${informationId}를 ${revealMs}ms에 공개할 수 없습니다. effectiveNotBefore=${gate.effectiveNotBeforeMs}, reasons=${gate.reviewReasons.join(',')}`, []);
+      if (shot.informationIds.includes(informationId) && !linkedUnits.some((unit: SourceUnit): boolean => unit.informationIds.includes(informationId))) throw contractError('PROPOSAL_INFORMATION_WITHOUT_SOURCE', `${shot.segmentId}: ${informationId}를 뒷받침하는 Source Link가 필요합니다.`, []);
     }
   });
+}
+
+function validateProposalSourceOrder(project: Project, shots: readonly Shot[]): void {
+  const events = shots.flatMap((shot: Shot) => shot.sourceLinks
+    .filter((link: ShotSourceLink): boolean => ['primary-visual', 'continued-visual'].includes(link.usage))
+    .map((link: ShotSourceLink, index: number) => ({
+      unit: project.dataset.units.find((unit: SourceUnit): boolean => unit.id === link.unitId),
+      atMs: shot.startMs + anchorStart(link), index,
+    }))).filter((event): event is { unit: SourceUnit; atMs: number; index: number } => event.unit !== undefined);
+  for (const earlier of events) for (const later of events) {
+    if (earlier.unit.order < later.unit.order && earlier.atMs > later.atMs) {
+      throw contractError('PROPOSAL_SOURCE_ORDER_REVERSED', `${later.unit.id}(${later.unit.order})가 ${earlier.unit.id}(${earlier.unit.order})보다 이른 ${later.atMs}ms에 공개됩니다.`, []);
+    }
+  }
 }
 
 function allocateDurations(duration: number, weights: readonly number[]): number[] {
@@ -77,15 +115,16 @@ export function applySegmentProposal(project: Project, segmentId: string, input:
     || oldShots.some((shot: Shot): boolean => shot.sourceLinks.some((link: ShotSourceLink): boolean => link.status === 'mapping-required'))) throw contractError('SEGMENT_MAPPING_REVIEW_REQUIRED', `${segmentId}: 자막 또는 Source Mapping 검토를 먼저 끝내세요.`, []);
   validateProposalSources(project, segmentId, proposal);
   const durations: number[] = allocateDurations(segment.endMs - segment.startMs, proposal.shots.map((shot): number => shot.durationWeight));
-  validateProposalInformation(project, segment, proposal, durations);
   const shots: Shot[] = proposal.shots.map((shot, index): Shot => {
     const startMs: number = segment.startMs + durations.slice(0, index).reduce((sum: number, value: number): number => sum + value, 0);
     return { id: `${proposalId}:shot:${index + 1}`, segmentId, startMs, endMs: startMs + (durations[index] as number),
-      sourceLinks: shot.sourceLinks.map((link): ShotSourceLink => ({ ...link, status: 'confirmed', temporalAnchor: { kind: 'shot-offset', startOffsetMs: 0, endOffsetMs: durations[index] as number, basis: 'proposal', status: 'confirmed' } })), visualLocationId: shot.visualLocationId, action: shot.action, camera: shot.camera,
+      sourceLinks: shot.sourceLinks.map((link): ShotSourceLink => ({ unitId: link.unitId, usage: link.usage, status: 'confirmed', temporalAnchor: proposalAnchor(durations[index] as number, link.anchor) })), visualLocationId: shot.visualLocationId, action: shot.action, camera: shot.camera,
       presence: shot.presence, propIds: shot.propIds, continuityBefore: [], continuityAfter: [], cameraAxis: shot.cameraAxis,
       screenDirection: shot.screenDirection, informationIds: shot.informationIds, transitionOut: shot.transitionOut,
       proposalOrigin: 'model', approvalStatus: 'proposed', lockedFields: [] };
   });
+  validateProposalInformation(project, shots);
+  validateProposalSourceOrder(project, shots);
   const frames: StoryboardFrame[] = proposal.shots.map((shot, index): StoryboardFrame => ({ id: `${proposalId}:frame:${index + 1}`,
     shotId: `${proposalId}:shot:${index + 1}`, offsetMs: 0, role: 'start', description: shot.frameDescription, imageAssetId: null, visualReview: 'pending' }));
   const firstIndex: number = project.shots.findIndex((shot: Shot): boolean => shot.segmentId === segmentId);

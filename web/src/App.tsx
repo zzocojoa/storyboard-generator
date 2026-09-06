@@ -13,11 +13,12 @@ import type { TextPlacementInformationInput } from '../../src/domain/placement-i
 import type { Asset, AudioCue, Issue, LockedField, Profile, Project, Segment, Shot, ShotContent, ShotSourceLink, SourceTemporalAnchor, SourceUnit, StoryboardFrame, TextCue, TextMappingDecision, TextPlacement, TextPlacementInformationDecision } from '../../src/domain/schema.js';
 import type { AudioCueTimingInput, TextCueTimingInput } from '../../src/domain/tracks.js';
 import type { TextCueAuthorityResolutionInput } from '../../src/domain/text.js';
-import { frameDisplayAbsoluteMs, frameEvaluationAbsoluteMs } from '../../src/domain/time.js';
-import { apiErrorMessage, fetchProject, fetchStatus, importProject, isStorageRecoveryError, listProjects, mutateProject, normalizeAudioAsset, previewSourceUpdate, queueCodexRequest, updateProjectSource, uploadAudioAsset } from './api.js';
+import { formatProjectTimecode, frameDisplayAbsoluteMs, frameEvaluationAbsoluteMs } from '../../src/domain/time.js';
+import { ApiError, apiErrorMessage, fetchProject, fetchStatus, importProject, listProjects, mutateProject, normalizeAudioAsset, previewSourceUpdate, queueCodexRequest, updateProjectSource, uploadAudioAsset } from './api.js';
 import type { AppStatus, CodexRequest, ProjectSummary, SourceImpact } from './api.js';
 import { BrowserAudioController } from './audio-lifecycle.js';
-import { importButtonState, mutationControlsDisabled } from './ui-policy.js';
+import { emptyRecoveryUiState, importButtonState, mutationControlsDisabled, projectAssetIntegrityIssues, projectRecoveryBlocked, reconcileBlockedProjects, recordRecoveryUiError } from './ui-policy.js';
+import type { AssetIntegrityUiIssue, RecoveryUiState } from './ui-policy.js';
 
 type Notice = { tone: 'info' | 'error'; text: string };
 type ReferenceDraft = { kind: 'character' | 'location' | 'prop'; subjectId: string; description: string; file: File | null };
@@ -33,14 +34,6 @@ function contentFromShot(shot: Shot): ShotContent {
 
 function readableError(error: unknown): string {
   return apiErrorMessage(error);
-}
-
-function clock(milliseconds: number): string {
-  const totalSeconds: number = Math.floor(milliseconds / 1000);
-  const minutes: number = Math.floor(totalSeconds / 60);
-  const seconds: number = totalSeconds % 60;
-  const frames: number = Math.floor((milliseconds % 1000) * 30 / 1000);
-  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}:${String(frames).padStart(2, '0')}`;
 }
 
 function percent(value: number, total: number): number {
@@ -141,7 +134,9 @@ function ProjectRail(props: { summaries: ProjectSummary[]; currentId: string | n
     <div className="rail-label">PROJECTS · {String(props.summaries.length).padStart(2, '0')}</div>
     <div className="project-list">{props.summaries.map((summary: ProjectSummary): ReactElement =>
       <button key={summary.projectId} className={summary.projectId === props.currentId ? 'project-tile active' : 'project-tile'} onClick={(): void => { void props.onSelect(summary.projectId); }}>
-        <span className="project-index">{clock(summary.durationMs)}</span><strong>{summary.title}</strong>
+        <span className="project-index">{formatProjectTimecode(summary.durationMs, { fpsNumerator: summary.frameRateNumerator,
+          fpsDenominator: summary.frameRateDenominator, dropFrame: summary.dropFrame, startTimecode: summary.startTimecode,
+          sampleRate: summary.sampleRate })}</span><strong>{summary.title}</strong>
         <span>{summary.shots} CUTS · ASSET {summary.framesWithAsset} · REVIEWED {summary.framesAccepted} · OUTPUT SAFE {summary.framesOutputSafe}{summary.audioRepairRequired > 0 ? ` · AUDIO REPAIR ${summary.audioRepairRequired}` : ''}</span>
       </button>)}</div>
     <details className="rail-import"><summary>＋ 프로젝트 불러오기</summary><ImportPanel working={props.working} onImport={props.onImport} /></details>
@@ -154,7 +149,7 @@ function SceneRail(props: { project: Project; segmentId: string; onSelect: (segm
       const segments: Segment[] = props.project.dataset.segments.filter((segment: Segment): boolean => segment.sceneId === scene.id);
       return <section className="scene-group" key={scene.id}><header><span>{String(sceneIndex + 1).padStart(2, '0')}</span><div><strong>{scene.title}</strong><small>{segments.length} SEGMENTS</small></div></header>
         {segments.map((segment: Segment): ReactElement => <button key={segment.id} className={segment.id === props.segmentId ? 'segment-row active' : 'segment-row'} onClick={(): void => { props.onSelect(segment.id); }}>
-          <span>{segment.mode}</span><time>{clock(segment.startMs)}</time>
+          <span>{segment.mode}</span><time>{formatProjectTimecode(segment.startMs, props.project.handoff.timebase)}</time>
         </button>)}</section>;
     })}{props.project.importIssues.length > 0 && <section className="issue-stack"><header>INPUT REVIEW · {props.project.importIssues.length}</header>{props.project.importIssues.map((issue, index: number): ReactElement => <article key={`${issue.code}:${issue.entityId}:${index}`}><b>{issue.severity.toUpperCase()}</b><span>{issue.code}</span><p>{issue.message}</p></article>)}</section>}</div></aside>;
 }
@@ -185,7 +180,7 @@ function ShotBoard(props: { project: Project; shot: Shot; selected: boolean; onS
   const frame: StoryboardFrame | null = props.project.frames.filter((candidate: StoryboardFrame): boolean => candidate.shotId === props.shot.id).sort((left, right): number => left.offsetMs - right.offsetMs)[0] ?? null;
   return <article className={props.selected ? 'shot-card selected' : 'shot-card'} onClick={(): void => { props.onSelect(props.shot.id); }}>
     <div className="shot-frame" style={{ aspectRatio: aspectRatio(props.project) }}><FrameImage project={props.project} frame={frame} alt={`${props.shot.id} 콘티 프레임`} />
-      <span className="frame-time">{clock(props.shot.startMs)}</span><span className={`review-dot ${frame?.visualReview ?? 'pending'}`}></span>
+      <span className="frame-time">{formatProjectTimecode(props.shot.startMs, props.project.handoff.timebase)}</span><span className={`review-dot ${frame?.visualReview ?? 'pending'}`}></span>
       {frame !== null && <span className="frame-output-state">{reviewFrameLabel(props.project, frame)}</span>}
       {frame !== null && <button className="frame-generate" disabled={props.busy} onClick={(event): void => { event.stopPropagation(); void props.onGenerate(frame.id); }}>{frame.imageAssetId === null ? 'CODEX IMAGE' : 'RETAKE'}</button>}
     </div>
@@ -198,7 +193,7 @@ function ShotBoard(props: { project: Project; shot: Shot; selected: boolean; onS
 function Timeline(props: { project: Project; playhead: number; playing: boolean; onChange: (value: number) => void; onToggle: () => void }): ReactElement {
   const total: number = props.project.dataset.segments.at(-1)?.endMs ?? 1;
   return <section className="timeline"><header><button className={props.playing ? 'transport active' : 'transport'} onClick={props.onToggle} aria-label={props.playing ? '재생 일시 정지' : '시간순 재생'}>{props.playing ? 'Ⅱ' : '▶'}</button>
-    <time>{clock(props.playhead)}</time><span className="timeline-title">MASTER TIMELINE</span><span>{clock(total)}</span></header>
+    <time>{formatProjectTimecode(props.playhead, props.project.handoff.timebase)}</time><span className="timeline-title">MASTER TIMELINE</span><span>{formatProjectTimecode(total, props.project.handoff.timebase)}</span></header>
     <div className="timeline-canvas">
       <div className="track-label">CUT</div><div className="track cut-track">{props.project.shots.map((shot: Shot): ReactElement => <span key={shot.id} style={{ left: `${percent(shot.startMs, total)}%`, width: `${percent(shot.endMs - shot.startMs, total)}%` }} title={shot.id}></span>)}</div>
       <div className="track-label">TXT</div><div className="track text-track">{props.project.textCues.map((cue: TextCue): ReactElement => <span key={cue.id} style={{ left: `${percent(cue.startMs, total)}%`, width: `${percent(cue.endMs - cue.startMs, total)}%` }} title={cue.text}></span>)}</div>
@@ -228,7 +223,7 @@ function PlaybackMonitor(props: { project: Project; playhead: number; onClose: (
   const blocked: BlockedCue[] = [...textPlayback.blocked, ...audioPlayback.blocked];
   const frameDecision: FrameOutputDecision | null = frame === null ? null : reviewFrameOutput(props.project, frame.id, 'program-monitor');
   const frameIssues: Issue[] = frameDecision?.issues ?? [];
-  return <div className="monitor" role="dialog" aria-label="콘티 시간순 재생"><div className="monitor-bar"><span>PROGRAM MONITOR</span><time>{clock(props.playhead)}</time><button onClick={props.onClose}>CLOSE</button></div>
+  return <div className="monitor" role="dialog" aria-label="콘티 시간순 재생"><div className="monitor-bar"><span>PROGRAM MONITOR</span><time>{formatProjectTimecode(props.playhead, props.project.handoff.timebase)}</time><button onClick={props.onClose}>CLOSE</button></div>
     <div className="monitor-frame"><div className="monitor-layer" style={{ opacity: currentOpacity }}><SafeFrameImage project={props.project} frame={frame} decision={frameDecision} alt="현재 재생 프레임" /></div>{transitionActive && nextShot !== undefined && nextFrameSafe && shot?.transitionOut.kind !== 'fade' && <div className="monitor-layer next" style={{ opacity: nextOpacity, clipPath: nextClip }}><SafeFrameImage project={props.project} frame={nextFrame} decision={nextFrameDecision} alt="다음 재생 프레임" /></div>}{transitionActive && <span className="transition-indicator">{shot?.transitionOut.kind.toUpperCase()} · {Math.round(transitionProgress * 100)}%</span>}{textPlayback.playable.map((cue: TextCue): ReactElement => <div className="monitor-text" key={cue.id}>{cue.text}</div>)}</div>
     {(blocked.length > 0 || frameIssues.length > 0) && <div className="output-blocked"><b>OUTPUT BLOCKED</b>{frameIssues.length > 0 && <p>{frame?.id} · {frameIssues.map((item: Issue): string => item.code).join(', ')} · NOW {props.playhead}ms</p>}{blocked.map((entry: BlockedCue): ReactElement => <p key={`${entry.channel}:${entry.cueId}`}>{entry.cueId} · {entry.issues.map((item: Issue): string => item.code).join(', ')} · INFORMATION {entry.informationIds.join(', ') || 'NONE'} · NOW {entry.atMs}ms · ALLOWED {entry.issues.map((item: Issue): string | null => item.expected).filter((value: string | null): value is string => value !== null).join(', ') || 'REVIEW'}</p>)}</div>}
     <div className="monitor-caption"><b>{shot?.id ?? 'END'}</b><span>{shot?.action ?? '재생 종료'}</span><em>{shot === null ? '' : `${shot.transitionOut.kind.toUpperCase()} ${shot.transitionOut.durationMs}ms`}</em></div></div>;
@@ -461,7 +456,7 @@ function Inspector(props: { project: Project; segment: Segment; shot: Shot | nul
   useEffect((): void => { setProfileDraft(props.project.profile); }, [props.project.profile]);
   return <aside className="inspector"><div className="column-head"><span>SHOT INSPECTOR</span><b>{shot === null ? '—' : shot.approvalStatus.toUpperCase()}</b></div>
     {shot !== null && props.draft !== null && <div className="inspector-scroll">
-      <div className="inspector-title"><span>{shot.id}</span><time>{clock(shot.startMs)} — {clock(shot.endMs)}</time></div>
+      <div className="inspector-title"><span>{shot.id}</span><time>{formatProjectTimecode(shot.startMs, props.project.handoff.timebase)} — {formatProjectTimecode(shot.endMs, props.project.handoff.timebase)}</time></div>
       <label className="field wide">ACTION<textarea value={props.draft.action} onChange={(event): void => { props.onDraft({ ...props.draft as ShotContent, action: event.target.value }); }} /></label>
       <div className="field-grid">
         <label className="field">SIZE<input value={props.draft.camera.size} onChange={(event): void => { props.onDraft({ ...props.draft as ShotContent, camera: { ...(props.draft as ShotContent).camera, size: event.target.value } }); }} /></label>
@@ -512,11 +507,11 @@ export default function App(): ReactElement {
   const [shotId, setShotId] = useState<string>('');
   const [draft, setDraft] = useState<ShotContent | null>(null);
   const [working, setWorking] = useState<boolean>(false);
-  const [storageRecoveryRequired, setStorageRecoveryRequired] = useState<boolean>(false);
+  const [recoveryUi, setRecoveryUi] = useState<RecoveryUiState>(emptyRecoveryUiState());
   const [queuedRequest, setQueuedRequest] = useState<CodexRequest | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const showError = (error: unknown): void => {
-    if (isStorageRecoveryError(error)) setStorageRecoveryRequired(true);
+    if (error instanceof ApiError) setRecoveryUi((current: RecoveryUiState): RecoveryUiState => recordRecoveryUiError(current, error));
     setNotice({ tone: 'error', text: readableError(error) });
   };
   const [playhead, setPlayhead] = useState<number>(0);
@@ -536,7 +531,7 @@ export default function App(): ReactElement {
   const refreshSummaries = async (): Promise<void> => { setSummaries(await listProjects()); };
   const openProject = async (projectId: string): Promise<void> => {
     setWorking(true); setNotice(null); setSourceImpactReport(null);
-    try { setProject(await fetchProject(projectId)); setStorageRecoveryRequired(status?.storageRecoveryBlocks.some((block): boolean => block.projectId === projectId) ?? false); }
+    try { setProject(await fetchProject(projectId)); }
     catch (error: unknown) { showError(error); }
     finally { setWorking(false); }
   };
@@ -544,10 +539,11 @@ export default function App(): ReactElement {
   useEffect((): void => {
     void Promise.all([fetchStatus(), listProjects()]).then(async ([nextStatus, nextSummaries]): Promise<void> => {
       setStatus(nextStatus); setSummaries(nextSummaries);
+      setRecoveryUi((current: RecoveryUiState): RecoveryUiState => reconcileBlockedProjects(current,
+        nextStatus.storageRecoveryBlocks.map((block): string => block.projectId)));
       const first: ProjectSummary | undefined = nextSummaries[0];
       if (first !== undefined) {
         setProject(await fetchProject(first.projectId));
-        setStorageRecoveryRequired(nextStatus.storageRecoveryBlocks.some((block): boolean => block.projectId === first.projectId));
       }
     }).catch((error: unknown): void => { showError(error); });
   }, []);
@@ -599,7 +595,7 @@ export default function App(): ReactElement {
 
   const importHandoff = async (path: string, holdMs: number): Promise<void> => {
     setWorking(true); setNotice(null); setSourceImpactReport(null);
-    try { const next: Project = await importProject(path, holdMs); setProject(next); setStorageRecoveryRequired(false); await refreshSummaries(); setNotice({ tone: 'info', text: `${next.title} 원본을 검증하고 컷 초안을 만들었습니다.` }); }
+    try { const next: Project = await importProject(path, holdMs); setProject(next); await refreshSummaries(); setNotice({ tone: 'info', text: `${next.title} 원본을 검증하고 컷 초안을 만들었습니다.` }); }
     catch (error: unknown) { showError(error); }
     finally { setWorking(false); }
   };
@@ -607,7 +603,7 @@ export default function App(): ReactElement {
   const mutate = async (path: string, method: 'DELETE' | 'PATCH' | 'POST', body: object): Promise<void> => {
     if (project === null) return;
     setWorking(true); setNotice(null);
-    try { const next: Project = await mutateProject(project.projectId, path, method, body); setProject(next); setStorageRecoveryRequired(false); await refreshSummaries(); }
+    try { const next: Project = await mutateProject(project.projectId, path, method, body); setProject(next); await refreshSummaries(); }
     catch (error: unknown) { showError(error); }
     finally { setWorking(false); }
   };
@@ -628,7 +624,10 @@ export default function App(): ReactElement {
     setWorking(true); setNotice(null);
     try {
       const [nextProject, nextStatus, nextSummaries] = await Promise.all([fetchProject(project.projectId), fetchStatus(), listProjects()]);
-      setProject(nextProject); setStatus(nextStatus); setSummaries(nextSummaries); setStorageRecoveryRequired(nextStatus.storageRecoveryBlocks.some((block): boolean => block.projectId === nextProject.projectId)); setQueuedRequest(null); setNotice({ tone: 'info', text: 'Codex 결과와 프로젝트 상태를 새로 읽었습니다.' });
+      setProject(nextProject); setStatus(nextStatus); setSummaries(nextSummaries);
+      setRecoveryUi((current: RecoveryUiState): RecoveryUiState => reconcileBlockedProjects(current,
+        nextStatus.storageRecoveryBlocks.map((block): string => block.projectId)));
+      setQueuedRequest(null); setNotice({ tone: 'info', text: 'Codex 결과와 프로젝트 상태를 새로 읽었습니다.' });
     } catch (error: unknown) { showError(error); }
     finally { setWorking(false); }
   };
@@ -709,20 +708,21 @@ export default function App(): ReactElement {
     setMonitorOpen(true); setPlaying(true);
   };
 
-  const mutationDisabled: boolean = mutationControlsDisabled(working, storageRecoveryRequired);
-  if (project === null) return <main className="empty-shell"><ProjectRail summaries={summaries} currentId={null} working={mutationDisabled} onSelect={openProject} onImport={importHandoff} />
-    <div className="welcome"><div className="welcome-number">01</div><div className="eyebrow">SOURCE TO SEQUENCE</div><h1>원문에서<br/><em>촬영 가능한 콘티</em>까지.</h1><p>입력 계약을 검증하고, 컷·그림·가이드 음성·자막을 하나의 시간축에서 편집합니다.</p><ImportPanel working={mutationDisabled} onImport={importHandoff} /></div>
-    {storageRecoveryRequired && <div className="storage-recovery-banner" role="alert"><strong>STORAGE RECOVERY REQUIRED</strong><span>해당 Project는 저장소 복구 전 변경할 수 없습니다. 자동 재시도하지 마세요.</span></div>}
+  const mutationDisabled: boolean = mutationControlsDisabled(working, project?.projectId ?? null, recoveryUi);
+  const storageRecoveryRequired: boolean = projectRecoveryBlocked(recoveryUi, project?.projectId ?? null);
+  const assetIntegrityIssues: readonly AssetIntegrityUiIssue[] = projectAssetIntegrityIssues(recoveryUi, project?.projectId ?? null);
+  if (project === null) return <main className="empty-shell"><ProjectRail summaries={summaries} currentId={null} working={working} onSelect={openProject} onImport={importHandoff} />
+    <div className="welcome"><div className="welcome-number">01</div><div className="eyebrow">SOURCE TO SEQUENCE</div><h1>원문에서<br/><em>촬영 가능한 콘티</em>까지.</h1><p>입력 계약을 검증하고, 컷·그림·가이드 음성·자막을 하나의 시간축에서 편집합니다.</p><ImportPanel working={working} onImport={importHandoff} /></div>
     {notice !== null && <div className={`notice ${notice.tone}`}>{notice.text}</div>}</main>;
 
   const exportBase: string = `/api/projects/${encodeURIComponent(project.projectId)}`;
   const providerLabel: string = status === null ? 'Codex App 상태를 불러오는 중입니다.' : `Codex App 완료 ${status.completedRequests}건, 대기 ${status.pendingRequests}건, 실패 ${status.failedRequests}건, 평균 처리 ${elapsed(status.averageLatencyMs)}, 반복 생성 ${status.repeatedRequests}건, 저장 복구 ${status.storageRecovery.length}건${status.recentFailures.map((failure): string => `, 최근 실패 ${failure.error?.code ?? 'UNKNOWN'}: ${failure.error?.message ?? '오류 설명이 없습니다.'}`).join('')}`;
   return <main className="app-shell">
-    <ProjectRail summaries={summaries} currentId={project.projectId} working={mutationDisabled} onSelect={openProject} onImport={importHandoff} />
+    <ProjectRail summaries={summaries} currentId={project.projectId} working={working} onSelect={openProject} onImport={importHandoff} />
     <section className="workspace"><header className="topbar"><div><span className="eyebrow">ACTIVE PRODUCTION</span><h1>{project.title}</h1></div><div className="project-facts"><span>REV <b>{project.revision}</b></span><span>{project.profile.aspectWidth}:{project.profile.aspectHeight}</span><span>{project.profile.medium.toUpperCase()}</span></div>
       <div className="top-actions"><a href={`${exportBase}/export.json`}>JSON</a><a href={`${exportBase}/export.csv`}>CSV</a><a href={`${exportBase}/export.pdf`}>PDF</a><button onClick={(): void => { void refreshWorkspace(); }}>REFRESH</button><details className={status !== null && status.failedRequests > 0 ? 'provider-status failed' : 'provider-status'}><summary className="provider ready" aria-label={providerLabel}>CODEX APP · {status?.pendingRequests ?? 0} QUEUED · {status?.failedRequests ?? 0} FAILED</summary>{status !== null && <div className="status-popover"><div className="request-metrics"><span><b>{status.completedRequests}</b> 완료</span><span><b>{elapsed(status.averageLatencyMs)}</b> 평균</span><span><b>{elapsed(status.maximumLatencyMs)}</b> 최대</span><span><b>{status.repeatedRequests}</b> 반복 생성</span><span><b>{status.storageRecovery.length}</b> 저장 복구</span><span title={status.costNote}><b>N/A</b> 요청별 비용</span></div>{status.recentFailures.length > 0 && <div className="failure-list">{status.recentFailures.map((failure): ReactElement => <article key={failure.id}><b>{failure.error?.code ?? 'UNKNOWN'}</b><span>{failure.projectId} · {failure.kind} · {failure.targetId}</span><p>{failure.error?.message ?? '오류 설명이 없습니다.'}</p></article>)}</div>}{status.storageRecovery.length > 0 && <div className="recovery-list">{status.storageRecovery.map((recovery): ReactElement => <article key={`${recovery.projectId}:${recovery.transactionId}`}><b>{recovery.outcome.toUpperCase()}</b><span>{recovery.projectId} · {recovery.transactionId}</span></article>)}</div>}</div>}</details></div></header>
       <div className="edit-grid">{segment !== null && <SceneRail project={project} segmentId={segment.id} onSelect={(id: string): void => { setSegmentId(id); setShotId(''); }} />}
-        <section className="board-area">{segment !== null && <><header className="segment-header"><div><span>{segment.mode}</span><h2>{project.dataset.scenes.find((scene): boolean => scene.id === segment.sceneId)?.title}</h2><p>{clock(segment.startMs)} — {clock(segment.endMs)} · {shots.length} CUTS</p></div><button className="propose" disabled={mutationDisabled} onClick={(): void => { void queueGeneration(`/segments/${encodeURIComponent(segment.id)}/propose`); }}>◇ CODEX CUT PROPOSAL</button></header>
+        <section className="board-area">{segment !== null && <><header className="segment-header"><div><span>{segment.mode}</span><h2>{project.dataset.scenes.find((scene): boolean => scene.id === segment.sceneId)?.title}</h2><p>{formatProjectTimecode(segment.startMs, project.handoff.timebase)} — {formatProjectTimecode(segment.endMs, project.handoff.timebase)} · {shots.length} CUTS</p></div><button className="propose" disabled={mutationDisabled} onClick={(): void => { void queueGeneration(`/segments/${encodeURIComponent(segment.id)}/propose`); }}>◇ CODEX CUT PROPOSAL</button></header>
           <div className="board-grid">{shots.map((candidate: Shot): ReactElement => <ShotBoard key={candidate.id} project={project} shot={candidate} selected={candidate.id === shot?.id} onSelect={setShotId} busy={mutationDisabled} onGenerate={async (frameId: string): Promise<void> => { await queueGeneration(`/frames/${encodeURIComponent(frameId)}/generate`); }} />)}</div></>}
         </section>
         {segment !== null && <Inspector project={project} segment={segment} shot={shot} draft={draft} working={mutationDisabled} status={status} onDraft={setDraft}
@@ -750,6 +750,7 @@ export default function App(): ReactElement {
     </section>
     {monitorOpen && <PlaybackMonitor project={project} playhead={playhead} onClose={(): void => { audioController.reset(); setPlaying(false); setMonitorOpen(false); }} />}
     {storageRecoveryRequired && <div className="storage-recovery-banner" role="alert"><strong>STORAGE RECOVERY REQUIRED</strong><span>해당 Project는 저장소 복구 전 변경할 수 없습니다. 자동 재시도하지 마세요.</span></div>}
+    {assetIntegrityIssues.length > 0 && <div className="asset-integrity-banner" role="alert"><strong>ASSET REPAIR REQUIRED</strong><span>{assetIntegrityIssues.map((item: AssetIntegrityUiIssue): string => `${item.assetId} · ${item.code}`).join(' / ')}</span></div>}
     {notice !== null && <button className={`notice ${notice.tone}`} onClick={(): void => { setNotice(null); }}>{notice.text}<span>×</span></button>}
     {queuedRequest !== null && <div className="job-strip"><span></span>CODEX {queuedRequest.kind.toUpperCase()} · {queuedRequest.status.toUpperCase()}</div>}
   </main>;

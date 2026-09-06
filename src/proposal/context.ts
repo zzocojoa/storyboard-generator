@@ -19,6 +19,7 @@ export type ContextTextMapping = Pick<TextMappingDecision, 'id' | 'canonicalUnit
 export type ContextInformationGate = Pick<EffectiveInformationGate, 'id' | 'segmentId' | 'baseNotBeforeMs' | 'effectiveNotBeforeMs' | 'notBeforeUnitId' | 'notBeforeUnitOrder' | 'precision' | 'evidenceType' | 'evidenceId' | 'reviewRequired' | 'reviewReasons'>;
 export type SegmentContext = {
   projectId: string; profile: Profile; segment: Pick<Segment, 'id' | 'mode' | 'startMs' | 'endMs'>;
+  proposalTiming: { segmentDurationMs: number; durationWeightMeaning: string; sourceAnchorMeaning: string; lateRevealExample: { startPermille: number; endPermille: number } };
   storyLocationId: string | null; sourceUnits: ProposalUnit[]; people: ProposalPerson[];
   instructions: { kind: string; text: string }[]; informationAvailableBeforeSegment: string[];
   informationGates: ContextInformationGate[]; textMappings: ContextTextMapping[];
@@ -117,6 +118,12 @@ export function buildSegmentContext(project: Project, segmentId: string): Segmen
   return {
     projectId: project.projectId, profile: project.profile,
     segment: { id: segment.id, mode: segment.mode, startMs: segment.startMs, endMs: segment.endMs }, storyLocationId: scene.storyLocationId,
+    proposalTiming: {
+      segmentDurationMs: segment.endMs - segment.startMs,
+      durationWeightMeaning: '각 컷의 예상 길이 비율이며, 모든 durationWeight의 상대 비율로 구간 길이를 배분합니다.',
+      sourceAnchorMeaning: '선택 사항인 anchor는 컷 내부 시작·끝을 0..1000 퍼밀로 표시합니다. 생략하면 컷 전체 범위입니다.',
+      lateRevealExample: { startPermille: 700, endPermille: 1000 },
+    },
     sourceUnits: units.map((unit: SourceUnit): ProposalUnit => proposalUnit(project, unit)),
     people: promptPeople(project, [...scene.declaredCastIds, ...units.flatMap((unit: SourceUnit): string[] => unit.speakerId === null ? [] : [unit.speakerId])]),
     instructions: project.dataset.instructions.filter((instruction): boolean => instruction.segmentId === segmentId).map((instruction) => ({ kind: instruction.kind, text: instruction.text })),
