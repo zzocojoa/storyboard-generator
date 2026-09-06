@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import type { AudioNormalizer } from '../domain/audio-normalizer.js';
 import { contractError } from '../domain/errors.js';
 import { applyGeneratedImage, applyGeneratedProposal, applyGeneratedSpeech } from '../domain/media.js';
 import type { GenerationRecord, Project } from '../domain/schema.js';
@@ -73,6 +74,7 @@ export async function applyCodexImage(
 
 export async function applyCodexSpeech(
   requestId: string, inputPath: string, voice: string, store: ProjectStore, requests: CodexRequestStore, now: string,
+  normalizer: AudioNormalizer,
 ): Promise<Project> {
   const request: CodexRequest = await requests.read(requestId);
   requirePendingKind(request, 'speech');
@@ -84,6 +86,6 @@ export async function applyCodexSpeech(
   const speechWork: SpeechWork = work;
   const result: GeneratedSpeech = { bytes: await readFile(inputPath), provider: 'codex-app', prompt: speechWork.prompt,
     model: `macos-say:${voice}`, requestId: request.id, mimeType: 'audio/wav' };
-  const mutation: GeneratedMutation = applyGeneratedSpeech(project, request.targetId, generationId(request.id), request.createdAt, result);
+  const mutation: GeneratedMutation = await applyGeneratedSpeech(project, request.targetId, generationId(request.id), request.createdAt, result, normalizer);
   return applyMutation(request, mutation, store, requests, project.revision, now);
 }

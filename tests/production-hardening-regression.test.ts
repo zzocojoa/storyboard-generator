@@ -1,9 +1,12 @@
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, unlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CodexRequestStore } from '../src/codex/requests.js';
+import { attachAudioAsset } from '../src/domain/audio-asset.js';
+import { WorkerAudioNormalizer } from '../src/domain/audio-normalizer.js';
+import type { AudioNormalizer } from '../src/domain/audio-normalizer.js';
 import { inspectAudioBytes, inspectAudioFileBytes } from '../src/domain/media-inspection.js';
 import type { Asset, AudioCue, Project } from '../src/domain/schema.js';
 import { ProjectSchema } from '../src/domain/schema.js';
@@ -17,7 +20,7 @@ import type { AppConfig } from '../src/server/config.js';
 import { ProjectStore } from '../src/server/store.js';
 import { BrowserAudioController } from '../web/src/audio-lifecycle.js';
 import type { AudioElementPort, AudioLifecycleCue, AudioScheduler } from '../web/src/audio-lifecycle.js';
-import { nativePackage, pcmWav } from './helpers.js';
+import { nativePackage, pcmWav, testAudioNormalizer, TEST_AUDIO_NORMALIZATION_OPTIONS } from './helpers.js';
 
 const roots: string[] = [];
 
@@ -33,13 +36,33 @@ type LegacyFixture = {
 };
 
 type TransactionJournal = {
-  version: 1;
+  version: 2;
+  operation: 'update';
   transactionId: string;
   projectId: string;
+  owner: { host: string; pid: number; transactionId: string };
   expectedRevision: number;
   nextRevision: number;
-  assetRelativePaths: string[];
+  previousProjectSha256: string;
+  nextProjectSha256: string;
+  versionFile: { relativePath: string; sha256: string };
+  assets: Array<{ assetId: string; relativePath: string; sha256: string; stagedFileName: string }>;
 };
+
+type JournalAsset = { asset: Asset; bytes: Buffer };
+
+type CreateJournal = {
+  version: 2;
+  operation: 'create';
+  transactionId: string;
+  projectId: string;
+  owner: { host: string; pid: number; transactionId: string };
+  projectDirectoryName: string;
+  currentFile: { relativePath: 'project.json'; sha256: string };
+  versionFile: { relativePath: 'versions/000000.json'; sha256: string };
+};
+
+const DEAD_PROCESS_ID: number = 2_147_483_647;
 
 async function outline(): Promise<Project> {
   return createSourceOutline(importPackage(await nativePackage()), { proposedTextHoldMs: 2000 });
@@ -86,7 +109,8 @@ async function appForFixture(fixture: LegacyFixture): Promise<FastifyInstance> {
   await mkdir(webRoot);
   await writeFile(join(webRoot, 'index.html'), '<!doctype html><div id="root"></div>', 'utf8');
   const config: AppConfig = { host: '127.0.0.1', port: 4317, dataRoot: fixture.dataRoot, webRoot,
-    pdfFontPath: resolve('assets/fonts/NanumGothic-Regular.ttf'), codex: { requestRoot: join(fixture.root, 'requests'), speechVoice: 'Yuna' } };
+    pdfFontPath: resolve('assets/fonts/NanumGothic-Regular.ttf'), audioNormalization: TEST_AUDIO_NORMALIZATION_OPTIONS,
+    codex: { requestRoot: join(fixture.root, 'requests'), speechVoice: 'Yuna' } };
   return createApp(config, fixture.store, new CodexRequestStore(config.codex.requestRoot));
 }
 
@@ -102,21 +126,60 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-function transactionJournal(project: Project, transactionId: string, assetRelativePaths: string[]): TransactionJournal {
-  return { version: 1, transactionId, projectId: project.projectId, expectedRevision: project.revision,
-    nextRevision: project.revision + 1, assetRelativePaths };
+function transactionJournal(previous: Project, next: Project, transactionId: string, assets: readonly JournalAsset[]): TransactionJournal {
+  const previousContent: string = exportProjectJson(previous);
+  const nextContent: string = exportProjectJson(next);
+  return {
+    version: 2, operation: 'update', transactionId, projectId: previous.projectId,
+    owner: { host: hostname(), pid: DEAD_PROCESS_ID, transactionId }, expectedRevision: previous.revision,
+    nextRevision: next.revision, previousProjectSha256: sha256Text(previousContent), nextProjectSha256: sha256Text(nextContent),
+    versionFile: { relativePath: `versions/${String(next.revision).padStart(6, '0')}.json`, sha256: sha256Text(nextContent) },
+    assets: assets.map((item: JournalAsset, index: number) => ({ assetId: item.asset.id, relativePath: item.asset.path,
+      sha256: sha256Bytes(item.bytes), stagedFileName: `asset-${index}.bin` })),
+  };
 }
 
 async function stageTransaction(dataRoot: string, previous: Project, next: Project, transactionId: string,
-  assetRelativePaths: string[]): Promise<string> {
+  assets: readonly JournalAsset[]): Promise<string> {
   const directory: string = projectDirectory(dataRoot, previous.projectId);
   const transactionPath: string = join(directory, '.transactions', transactionId);
   await mkdir(transactionPath, { recursive: true });
   await writeFile(join(transactionPath, 'project.previous.json'), exportProjectJson(previous));
   await writeFile(join(transactionPath, 'project.next.json'), exportProjectJson(next));
   await writeFile(join(transactionPath, 'version.next.json'), exportProjectJson(next));
-  await writeFile(join(transactionPath, 'journal.json'), JSON.stringify(transactionJournal(previous, transactionId, assetRelativePaths)));
+  await Promise.all(assets.map((item: JournalAsset, index: number): Promise<void> => writeFile(join(transactionPath, `asset-${index}.bin`), item.bytes)));
+  await writeFile(join(transactionPath, 'journal.json'), JSON.stringify(transactionJournal(previous, next, transactionId, assets)));
   return transactionPath;
+}
+
+async function publishStagedFile(stagedPath: string, finalPath: string, content: string | Buffer): Promise<void> {
+  await writeFile(finalPath, content);
+  await unlink(stagedPath);
+}
+
+async function publishVersionAndCurrent(dataRoot: string, next: Project, transactionId: string): Promise<string> {
+  const directory: string = projectDirectory(dataRoot, next.projectId);
+  const transactionPath: string = join(directory, '.transactions', transactionId);
+  const content: string = exportProjectJson(next);
+  const versionPath: string = join(directory, 'versions', `${String(next.revision).padStart(6, '0')}.json`);
+  await publishStagedFile(join(transactionPath, 'version.next.json'), versionPath, content);
+  await publishStagedFile(join(transactionPath, 'project.next.json'), join(directory, 'project.json'), content);
+  return versionPath;
+}
+
+function createJournal(project: Project, transactionId: string): CreateJournal {
+  const content: string = exportProjectJson(project);
+  const sha256: string = sha256Text(content);
+  return {
+    version: 2, operation: 'create', transactionId, projectId: project.projectId,
+    owner: { host: hostname(), pid: DEAD_PROCESS_ID, transactionId }, projectDirectoryName: sha256Text(project.projectId),
+    currentFile: { relativePath: 'project.json', sha256 }, versionFile: { relativePath: 'versions/000000.json', sha256 },
+  };
+}
+
+function imageAsset(id: string, relativePath: string, bytes: Buffer): Asset {
+  return { id, kind: 'image', subjectId: null, path: relativePath, mimeType: 'image/png', sha256: sha256Bytes(bytes),
+    description: 'Transaction 복구 검증 자산', durationMs: null, version: 1 };
 }
 
 function wavWithExcessiveChunks(): Buffer {
@@ -157,24 +220,51 @@ afterEach(async (): Promise<void> => {
 describe('오디오 자원 한계', (): void => {
   it('비정상적으로 낮은 sample rate를 정규화 전에 거부한다', async (): Promise<void> => {
     const project: Project = await outline();
-    expect((): void => { inspectAudioBytes(project, pcmWav(1000, 1, 1, 16), 'audio/wav'); }).toThrowError(expect.objectContaining({ code: 'AUDIO_SAMPLE_RATE_UNSUPPORTED' }));
+    await expect(inspectAudioBytes(project, pcmWav(1000, 1, 1, 16), 'audio/wav', testAudioNormalizer())).rejects.toThrowError(expect.objectContaining({ code: 'AUDIO_SAMPLE_RATE_UNSUPPORTED' }));
   });
 
   it('정규화 예상 출력이 한도를 넘으면 Buffer 할당 전에 거부한다', async (): Promise<void> => {
     const base: Project = await outline();
     const project: Project = parseProject({ ...base, handoff: { ...base.handoff,
       timebase: { ...base.handoff.timebase, sampleRate: 96000 } } });
-    expect((): void => { inspectAudioBytes(project, pcmWav(140000, 8000, 2, 16), 'audio/wav'); }).toThrowError(expect.objectContaining({ code: 'AUDIO_NORMALIZED_SIZE_LIMIT' }));
+    let workerCalled: boolean = false;
+    const normalizer: AudioNormalizer = { normalize: async (): Promise<Buffer> => {
+      workerCalled = true;
+      throw new Error('사전 검사 전에 Worker를 호출했습니다.');
+    } };
+    await expect(inspectAudioBytes(project, pcmWav(140000, 8000, 2, 16), 'audio/wav', normalizer)).rejects.toThrowError(expect.objectContaining({ code: 'AUDIO_NORMALIZED_SIZE_LIMIT' }));
+    expect(workerCalled).toBe(false);
   });
 
   it('빈 data 청크를 오디오로 허용하지 않는다', async (): Promise<void> => {
     const project: Project = await outline();
-    expect((): void => { inspectAudioBytes(project, pcmWav(0, 48000, 1, 16), 'audio/wav'); }).toThrowError(expect.objectContaining({ code: 'ASSET_CONTENT_CORRUPT' }));
+    await expect(inspectAudioBytes(project, pcmWav(0, 48000, 1, 16), 'audio/wav', testAudioNormalizer())).rejects.toThrowError(expect.objectContaining({ code: 'ASSET_CONTENT_CORRUPT' }));
   });
 
   it('과도한 WAV 청크 순회를 제한한다', async (): Promise<void> => {
     const project: Project = await outline();
-    expect((): void => { inspectAudioBytes(project, wavWithExcessiveChunks(), 'audio/wav'); }).toThrowError(expect.objectContaining({ code: 'AUDIO_WAV_CHUNK_LIMIT' }));
+    await expect(inspectAudioBytes(project, wavWithExcessiveChunks(), 'audio/wav', testAudioNormalizer())).rejects.toThrowError(expect.objectContaining({ code: 'AUDIO_WAV_CHUNK_LIMIT' }));
+  });
+
+  it('큰 PCM24 정규화 중에도 메인 이벤트 루프가 응답한다', async (): Promise<void> => {
+    const project: Project = await outline(); let completed: boolean = false;
+    const normalization: Promise<void> = inspectAudioBytes(project, pcmWav(20_000, 48_000, 2, 24), 'audio/wav', testAudioNormalizer())
+      .then((): void => { completed = true; });
+    await new Promise<void>((resolveTick: () => void): void => { setImmediate(resolveTick); });
+    expect(completed).toBe(false);
+    await normalization;
+  });
+
+  it('Worker 시간 초과는 Project revision과 Asset 디렉터리를 바꾸지 않는다', async (): Promise<void> => {
+    const root: string = await temporaryRoot('storyboard-audio-timeout-'); const dataRoot: string = join(root, 'data');
+    const store: ProjectStore = new ProjectStore(dataRoot); const project: Project = await store.create(await outline());
+    const cue: AudioCue = sfxCue(project);
+    const normalizer: WorkerAudioNormalizer = new WorkerAudioNormalizer({ ...TEST_AUDIO_NORMALIZATION_OPTIONS, timeoutMs: 1 });
+    await expect(attachAudioAsset(project, cue.id, 'timeout-audio', {
+      originalFileName: 'timeout.wav', declaredMimeType: 'audio/wav', bytes: pcmWav(20_000, 48_000, 2, 24),
+    }, normalizer)).rejects.toMatchObject({ code: 'AUDIO_NORMALIZATION_TIMEOUT' });
+    expect((await store.read(project.projectId)).revision).toBe(0);
+    expect(await readdir(join(projectDirectory(dataRoot, project.projectId), 'assets'))).toEqual([]);
   });
 });
 
@@ -266,11 +356,15 @@ describe('저장 Transaction journal 복구', (): void => {
   it('현재 revision 게시 전 중단된 Transaction의 Asset과 version을 제거한다', async (): Promise<void> => {
     const root: string = await temporaryRoot('storyboard-transaction-'); const dataRoot: string = join(root, 'data');
     const store: ProjectStore = new ProjectStore(dataRoot); const previous: Project = await store.create(await outline());
-    const next: Project = parseProject({ ...previous, revision: 1 }); const transactionId: string = '00000000-0000-4000-8000-000000000001';
-    const transactionPath: string = await stageTransaction(dataRoot, previous, next, transactionId, ['assets/orphan.wav']);
-    const directory: string = projectDirectory(dataRoot, previous.projectId); const assetPath: string = join(directory, 'assets', 'orphan.wav');
+    const assetBytes: Buffer = Buffer.from('transaction-owned-asset');
+    const asset: Asset = imageAsset('orphan-image', 'assets/orphan.png', assetBytes);
+    const next: Project = parseProject({ ...previous, revision: 1, assets: [...previous.assets, asset] });
+    const transactionId: string = '00000000-0000-4000-8000-000000000001';
+    const transactionPath: string = await stageTransaction(dataRoot, previous, next, transactionId, [{ asset, bytes: assetBytes }]);
+    const directory: string = projectDirectory(dataRoot, previous.projectId); const assetPath: string = join(directory, asset.path);
     const versionPath: string = join(directory, 'versions', '000001.json');
-    await writeFile(assetPath, pcmWav(10, 48000, 1, 16)); await writeFile(versionPath, exportProjectJson(next));
+    await publishStagedFile(join(transactionPath, 'asset-0.bin'), assetPath, assetBytes);
+    await publishStagedFile(join(transactionPath, 'version.next.json'), versionPath, exportProjectJson(next));
     const recovered: ProjectStore = new ProjectStore(dataRoot);
     expect((await recovered.read(previous.projectId)).revision).toBe(0);
     expect(await exists(assetPath)).toBe(false); expect(await exists(versionPath)).toBe(false); expect(await exists(transactionPath)).toBe(false);
@@ -282,8 +376,7 @@ describe('저장 Transaction journal 복구', (): void => {
     const store: ProjectStore = new ProjectStore(dataRoot); const previous: Project = await store.create(await outline());
     const next: Project = parseProject({ ...previous, revision: 1 }); const transactionId: string = '00000000-0000-4000-8000-000000000002';
     const transactionPath: string = await stageTransaction(dataRoot, previous, next, transactionId, []);
-    const directory: string = projectDirectory(dataRoot, previous.projectId); const versionPath: string = join(directory, 'versions', '000001.json');
-    await writeFile(versionPath, exportProjectJson(next)); await writeFile(join(directory, 'project.json'), exportProjectJson(next));
+    const versionPath: string = await publishVersionAndCurrent(dataRoot, next, transactionId);
     const recovered: ProjectStore = new ProjectStore(dataRoot);
     expect((await recovered.read(previous.projectId)).revision).toBe(1);
     expect(await exists(versionPath)).toBe(true); expect(await exists(transactionPath)).toBe(false);
@@ -297,9 +390,9 @@ describe('저장 Transaction journal 복구', (): void => {
       sha256: sha256Bytes(Buffer.from('missing')), description: '게시 실패 검증', durationMs: null, version: 1 };
     const next: Project = parseProject({ ...previous, revision: 1, assets: [...previous.assets, missing] });
     const transactionId: string = '00000000-0000-4000-8000-000000000003';
-    const transactionPath: string = await stageTransaction(dataRoot, previous, next, transactionId, [missing.path]);
-    const directory: string = projectDirectory(dataRoot, previous.projectId); const versionPath: string = join(directory, 'versions', '000001.json');
-    await writeFile(versionPath, exportProjectJson(next)); await writeFile(join(directory, 'project.json'), exportProjectJson(next));
+    const transactionPath: string = await stageTransaction(dataRoot, previous, next, transactionId, [{ asset: missing, bytes: Buffer.from('missing') }]);
+    await unlink(join(transactionPath, 'asset-0.bin'));
+    const versionPath: string = await publishVersionAndCurrent(dataRoot, next, transactionId);
     const recovered: ProjectStore = new ProjectStore(dataRoot);
     const project: Project = await recovered.read(previous.projectId);
     expect(project.revision).toBe(0); expect(project.assets.some((asset: Asset): boolean => asset.id === missing.id)).toBe(false);
@@ -314,25 +407,38 @@ describe('저장 Transaction journal 복구', (): void => {
       sha256: sha256Bytes(Buffer.from('missing-retry')), description: '복구 재시도 검증', durationMs: null, version: 1 };
     const next: Project = parseProject({ ...previous, revision: 1, assets: [...previous.assets, missing] });
     const transactionId: string = '00000000-0000-4000-8000-000000000007';
-    await stageTransaction(dataRoot, previous, next, transactionId, [missing.path]);
+    const transactionPath: string = await stageTransaction(dataRoot, previous, next, transactionId, [{ asset: missing, bytes: Buffer.from('missing-retry') }]);
+    await unlink(join(transactionPath, 'asset-0.bin'));
     const directory: string = projectDirectory(dataRoot, previous.projectId);
-    await writeFile(join(directory, 'versions', '000001.json'), exportProjectJson(next));
-    await writeFile(join(directory, 'project.json'), exportProjectJson(next));
+    await publishVersionAndCurrent(dataRoot, next, transactionId);
     await writeFile(join(directory, `project.json.${transactionId}.recovery`), exportProjectJson(previous));
     const recovered: ProjectStore = new ProjectStore(dataRoot);
     expect((await recovered.read(previous.projectId)).revision).toBe(0);
     expect(await exists(join(directory, `project.json.${transactionId}.recovery`))).toBe(false);
   });
 
-  it('journal이 없는 staging 디렉터리를 제거한다', async (): Promise<void> => {
+  it('journal이 없는 staging 디렉터리는 자동 삭제하지 않는다', async (): Promise<void> => {
     const root: string = await temporaryRoot('storyboard-transaction-'); const dataRoot: string = join(root, 'data');
     const store: ProjectStore = new ProjectStore(dataRoot); const project: Project = await store.create(await outline());
     const transactionId: string = '00000000-0000-4000-8000-000000000004';
     const transactionPath: string = join(projectDirectory(dataRoot, project.projectId), '.transactions', transactionId);
     await mkdir(transactionPath); await writeFile(join(transactionPath, 'asset-0.bin'), 'partial');
-    const recovered: ProjectStore = new ProjectStore(dataRoot); await recovered.initialize();
-    expect(await exists(transactionPath)).toBe(false);
-    expect(recovered.recoveryEvents()).toContainEqual({ projectId: project.projectId, transactionId, outcome: 'staging-removed' });
+    await expect(new ProjectStore(dataRoot).initialize()).rejects.toMatchObject({ code: 'STORE_RECOVERY_REQUIRED' });
+    expect(await exists(transactionPath)).toBe(true);
+  });
+
+  it('같은 Transaction lock이 있어도 journal 없는 파일은 삭제하지 않는다', async (): Promise<void> => {
+    const root: string = await temporaryRoot('storyboard-transaction-'); const dataRoot: string = join(root, 'data');
+    const store: ProjectStore = new ProjectStore(dataRoot); const project: Project = await store.create(await outline());
+    const transactionId: string = '00000000-0000-4000-8000-000000000017';
+    const directory: string = projectDirectory(dataRoot, project.projectId);
+    const transactionPath: string = join(directory, '.transactions', transactionId);
+    const lockPath: string = join(directory, 'write.lock');
+    await mkdir(transactionPath); await writeFile(join(transactionPath, 'asset-0.bin'), 'unproven');
+    await writeFile(lockPath, JSON.stringify({ version: 2, projectId: project.projectId, host: hostname(), pid: DEAD_PROCESS_ID,
+      transactionId, createdAt: '2026-09-06T00:00:00.000Z' }));
+    await expect(new ProjectStore(dataRoot).initialize()).rejects.toMatchObject({ code: 'STORE_RECOVERY_REQUIRED' });
+    expect(await exists(transactionPath)).toBe(true); expect(await exists(lockPath)).toBe(true);
   });
 
   it('손상된 journal을 조용히 무시하지 않는다', async (): Promise<void> => {
@@ -340,35 +446,118 @@ describe('저장 Transaction journal 복구', (): void => {
     const store: ProjectStore = new ProjectStore(dataRoot); const project: Project = await store.create(await outline());
     const transactionPath: string = join(projectDirectory(dataRoot, project.projectId), '.transactions', '00000000-0000-4000-8000-000000000005');
     await mkdir(transactionPath); await writeFile(join(transactionPath, 'journal.json'), '{broken');
-    await expect(new ProjectStore(dataRoot).initialize()).rejects.toMatchObject({ code: 'TRANSACTION_JOURNAL_CORRUPT' });
+    await expect(new ProjectStore(dataRoot).initialize()).rejects.toMatchObject({ code: 'STORE_RECOVERY_REQUIRED' });
+    expect(await exists(transactionPath)).toBe(true);
   });
 
   it('journal의 assets 상위 경로 탈출을 거부하고 현재 Project를 보존한다', async (): Promise<void> => {
     const root: string = await temporaryRoot('storyboard-transaction-'); const dataRoot: string = join(root, 'data');
     const store: ProjectStore = new ProjectStore(dataRoot); const project: Project = await store.create(await outline());
     const next: Project = parseProject({ ...project, revision: 1 }); const transactionId: string = '00000000-0000-4000-8000-000000000006';
-    await stageTransaction(dataRoot, project, next, transactionId, ['assets/../project.json']);
-    await expect(new ProjectStore(dataRoot).initialize()).rejects.toMatchObject({ code: 'TRANSACTION_JOURNAL_PATH_UNSAFE' });
+    const transactionPath: string = await stageTransaction(dataRoot, project, next, transactionId, []);
+    const unsafeJournal: TransactionJournal = { ...transactionJournal(project, next, transactionId, []),
+      assets: [{ assetId: 'unsafe', relativePath: 'assets/../project.json', sha256: '0'.repeat(64), stagedFileName: 'asset-0.bin' }] };
+    await writeFile(join(transactionPath, 'journal.json'), JSON.stringify(unsafeJournal));
+    await expect(new ProjectStore(dataRoot).initialize()).rejects.toMatchObject({ code: 'STORE_RECOVERY_REQUIRED' });
     expect((await store.read(project.projectId)).revision).toBe(0);
   });
 
   it('종료된 process의 write lock을 제거하고 복구 사실을 남긴다', async (): Promise<void> => {
     const root: string = await temporaryRoot('storyboard-transaction-'); const dataRoot: string = join(root, 'data');
     const store: ProjectStore = new ProjectStore(dataRoot); const project: Project = await store.create(await outline());
+    const transactionId: string = '00000000-0000-4000-8000-000000000008';
     const lockPath: string = join(projectDirectory(dataRoot, project.projectId), 'write.lock');
-    await writeFile(lockPath, JSON.stringify({ version: 1, pid: 2147483647, createdAt: '2026-09-06T00:00:00.000Z' }));
+    await writeFile(lockPath, JSON.stringify({ version: 2, projectId: project.projectId, host: hostname(), pid: DEAD_PROCESS_ID,
+      transactionId, createdAt: '2026-09-06T00:00:00.000Z' }));
     const recovered: ProjectStore = new ProjectStore(dataRoot); await recovered.initialize();
     expect(await exists(lockPath)).toBe(false);
-    expect(recovered.recoveryEvents()).toContainEqual({ projectId: project.projectId, transactionId: 'lock', outcome: 'stale-lock-removed' });
+    expect(recovered.recoveryEvents()).toContainEqual({ projectId: project.projectId, transactionId, outcome: 'stale-lock-removed' });
   });
 
   it('살아 있는 process의 write lock을 임의로 제거하지 않는다', async (): Promise<void> => {
     const root: string = await temporaryRoot('storyboard-transaction-'); const dataRoot: string = join(root, 'data');
     const store: ProjectStore = new ProjectStore(dataRoot); const project: Project = await store.create(await outline());
+    const transactionId: string = '00000000-0000-4000-8000-000000000009';
     const lockPath: string = join(projectDirectory(dataRoot, project.projectId), 'write.lock');
-    await writeFile(lockPath, JSON.stringify({ version: 1, pid: process.pid, createdAt: '2026-09-06T00:00:00.000Z' }));
+    await writeFile(lockPath, JSON.stringify({ version: 2, projectId: project.projectId, host: hostname(), pid: process.pid,
+      transactionId, createdAt: '2026-09-06T00:00:00.000Z' }));
     await expect(new ProjectStore(dataRoot).initialize()).rejects.toMatchObject({ code: 'PROJECT_BUSY' });
     expect(await exists(lockPath)).toBe(true); await unlink(lockPath);
+  });
+
+  it('다른 Host의 lock을 자동 삭제하지 않는다', async (): Promise<void> => {
+    const root: string = await temporaryRoot('storyboard-transaction-'); const dataRoot: string = join(root, 'data');
+    const store: ProjectStore = new ProjectStore(dataRoot); const project: Project = await store.create(await outline());
+    const lockPath: string = join(projectDirectory(dataRoot, project.projectId), 'write.lock');
+    await writeFile(lockPath, JSON.stringify({ version: 2, projectId: project.projectId, host: 'other-host', pid: DEAD_PROCESS_ID,
+      transactionId: '00000000-0000-4000-8000-000000000010', createdAt: '2026-09-06T00:00:00.000Z' }));
+    await expect(new ProjectStore(dataRoot).initialize()).rejects.toMatchObject({ code: 'STORE_RECOVERY_REQUIRED' });
+    expect(await exists(lockPath)).toBe(true);
+  });
+
+  it('해석할 수 없는 lock을 자동 삭제하지 않는다', async (): Promise<void> => {
+    const root: string = await temporaryRoot('storyboard-transaction-'); const dataRoot: string = join(root, 'data');
+    const store: ProjectStore = new ProjectStore(dataRoot); const project: Project = await store.create(await outline());
+    const lockPath: string = join(projectDirectory(dataRoot, project.projectId), 'write.lock');
+    await writeFile(lockPath, '{broken');
+    await expect(new ProjectStore(dataRoot).initialize()).rejects.toMatchObject({ code: 'STORE_RECOVERY_REQUIRED' });
+    expect(await exists(lockPath)).toBe(true);
+  });
+
+  it('journal 해시와 다른 기존 Asset을 삭제하지 않는다', async (): Promise<void> => {
+    const root: string = await temporaryRoot('storyboard-transaction-'); const dataRoot: string = join(root, 'data');
+    const store: ProjectStore = new ProjectStore(dataRoot); const previous: Project = await store.create(await outline());
+    const expectedBytes: Buffer = Buffer.from('expected-asset'); const existingBytes: Buffer = Buffer.from('existing-asset');
+    const asset: Asset = imageAsset('hash-conflict', 'assets/hash-conflict.png', expectedBytes);
+    const next: Project = parseProject({ ...previous, revision: 1, assets: [...previous.assets, asset] });
+    const transactionId: string = '00000000-0000-4000-8000-000000000011';
+    const transactionPath: string = await stageTransaction(dataRoot, previous, next, transactionId, [{ asset, bytes: expectedBytes }]);
+    const assetPath: string = join(projectDirectory(dataRoot, previous.projectId), asset.path);
+    await writeFile(assetPath, existingBytes); await unlink(join(transactionPath, 'asset-0.bin'));
+    await publishStagedFile(join(transactionPath, 'version.next.json'), join(projectDirectory(dataRoot, previous.projectId), 'versions', '000001.json'), exportProjectJson(next));
+    await expect(new ProjectStore(dataRoot).initialize()).rejects.toMatchObject({ code: 'STORE_RECOVERY_REQUIRED' });
+    expect((await readFile(assetPath)).equals(existingBytes)).toBe(true);
+    expect((await store.read(previous.projectId)).revision).toBe(0);
+    expect(await exists(transactionPath)).toBe(true);
+  });
+
+  it('journal 해시와 다른 기존 revision snapshot을 삭제하지 않는다', async (): Promise<void> => {
+    const root: string = await temporaryRoot('storyboard-transaction-'); const dataRoot: string = join(root, 'data');
+    const store: ProjectStore = new ProjectStore(dataRoot); const previous: Project = await store.create(await outline());
+    const next: Project = parseProject({ ...previous, revision: 1 });
+    const transactionId: string = '00000000-0000-4000-8000-000000000012';
+    const transactionPath: string = await stageTransaction(dataRoot, previous, next, transactionId, []);
+    const versionPath: string = join(projectDirectory(dataRoot, previous.projectId), 'versions', '000001.json');
+    const existingContent: string = `${exportProjectJson(next)}\n`;
+    await writeFile(versionPath, existingContent); await unlink(join(transactionPath, 'version.next.json'));
+    await expect(new ProjectStore(dataRoot).initialize()).rejects.toMatchObject({ code: 'STORE_RECOVERY_REQUIRED' });
+    expect(await readFile(versionPath, 'utf8')).toBe(existingContent);
+    expect((await store.read(previous.projectId)).revision).toBe(0);
+  });
+
+  it('현재 Project가 참조하는 Asset을 rollback으로 삭제하지 않는다', async (): Promise<void> => {
+    const root: string = await temporaryRoot('storyboard-transaction-'); const dataRoot: string = join(root, 'data');
+    const assetBytes: Buffer = Buffer.from('preserved-asset'); const asset: Asset = imageAsset('preserved', 'assets/preserved.png', assetBytes);
+    const initial: Project = parseProject({ ...await outline(), assets: [asset] });
+    const store: ProjectStore = new ProjectStore(dataRoot); const previous: Project = await store.create(initial);
+    const assetPath: string = join(projectDirectory(dataRoot, previous.projectId), asset.path); await writeFile(assetPath, assetBytes);
+    const next: Project = parseProject({ ...previous, revision: 1 }); const transactionId: string = '00000000-0000-4000-8000-000000000013';
+    const transactionPath: string = await stageTransaction(dataRoot, previous, next, transactionId, [{ asset, bytes: assetBytes }]);
+    await unlink(join(transactionPath, 'asset-0.bin'));
+    await expect(new ProjectStore(dataRoot).initialize()).rejects.toMatchObject({ code: 'STORE_RECOVERY_REQUIRED' });
+    expect((await readFile(assetPath)).equals(assetBytes)).toBe(true);
+    expect((await store.read(previous.projectId)).revision).toBe(0);
+  });
+
+  it('복구를 다시 실행해도 이미 복구된 저장 상태가 바뀌지 않는다', async (): Promise<void> => {
+    const root: string = await temporaryRoot('storyboard-transaction-'); const dataRoot: string = join(root, 'data');
+    const store: ProjectStore = new ProjectStore(dataRoot); const previous: Project = await store.create(await outline());
+    const next: Project = parseProject({ ...previous, revision: 1 }); const transactionId: string = '00000000-0000-4000-8000-000000000014';
+    await stageTransaction(dataRoot, previous, next, transactionId, []);
+    const first: ProjectStore = new ProjectStore(dataRoot); await first.initialize();
+    const second: ProjectStore = new ProjectStore(dataRoot); await second.initialize();
+    expect((await second.read(previous.projectId)).revision).toBe(0);
+    expect(second.recoveryEvents()).toEqual([]);
   });
 
   it('정상 update는 journal과 lock을 남기지 않는다', async (): Promise<void> => {
@@ -378,6 +567,35 @@ describe('저장 Transaction journal 복구', (): void => {
     const directory: string = projectDirectory(dataRoot, project.projectId);
     expect(updated.revision).toBe(1); expect(await exists(join(directory, 'write.lock'))).toBe(false);
     expect(await readdir(join(directory, '.transactions'))).toEqual([]);
+  });
+});
+
+describe('Initial Project 생성 복구', (): void => {
+  it('게시 전 중단된 부분 staging만 제거한다', async (): Promise<void> => {
+    const root: string = await temporaryRoot('storyboard-create-'); const dataRoot: string = join(root, 'data');
+    await new ProjectStore(dataRoot).initialize();
+    const project: Project = await outline(); const transactionId: string = '00000000-0000-4000-8000-000000000015';
+    const transactionPath: string = join(dataRoot, '.create-transactions', transactionId);
+    const stagedPath: string = join(transactionPath, 'project');
+    await mkdir(join(stagedPath, 'versions'), { recursive: true }); await mkdir(join(stagedPath, 'assets'));
+    await mkdir(join(stagedPath, '.transactions')); await writeFile(join(transactionPath, 'journal.json'), JSON.stringify(createJournal(project, transactionId)));
+    await writeFile(join(stagedPath, 'versions', '000000.json'), exportProjectJson(project));
+    const recovered: ProjectStore = new ProjectStore(dataRoot); await recovered.initialize();
+    expect(await exists(projectDirectory(dataRoot, project.projectId))).toBe(false);
+    expect(await exists(transactionPath)).toBe(false);
+    expect(recovered.recoveryEvents()).toContainEqual({ projectId: project.projectId, transactionId, outcome: 'create-rolled-back' });
+  });
+
+  it('완전히 게시된 Initial Project를 보존하고 journal만 정리한다', async (): Promise<void> => {
+    const root: string = await temporaryRoot('storyboard-create-'); const dataRoot: string = join(root, 'data');
+    const store: ProjectStore = new ProjectStore(dataRoot); const project: Project = await store.create(await outline());
+    const transactionId: string = '00000000-0000-4000-8000-000000000016';
+    const transactionPath: string = join(dataRoot, '.create-transactions', transactionId);
+    await mkdir(transactionPath); await writeFile(join(transactionPath, 'journal.json'), JSON.stringify(createJournal(project, transactionId)));
+    const recovered: ProjectStore = new ProjectStore(dataRoot); await recovered.initialize();
+    expect((await recovered.read(project.projectId)).revision).toBe(0);
+    expect(await exists(transactionPath)).toBe(false);
+    expect(recovered.recoveryEvents()).toContainEqual({ projectId: project.projectId, transactionId, outcome: 'create-committed' });
   });
 });
 

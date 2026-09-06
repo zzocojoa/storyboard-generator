@@ -21,7 +21,11 @@
 | Source Update의 Text Anchor | 과거 자동 후보 Anchor가 남을 수 있었다 | 현재 Mapping으로 다시 만들고 실패하면 `unresolved/source-update`로 둔다 |
 | 유효한 이전 WAV | 프로젝트 sample rate 차이를 손상과 구분하지 못했다 | `AUDIO_ASSET_NORMALIZATION_REQUIRED`로 표시하고 새 Asset 버전으로 복구한다 |
 | 악성 WAV 정규화 | 입력 한도 안에서도 큰 출력 Buffer와 과도한 chunk 순회를 유발할 수 있었다 | sample rate·chunk 수·예상 정규화 크기를 할당 전에 제한한다 |
+| PCM24·sample rate 변환 | 동기 Sample loop가 서버 Event Loop를 점유했다 | 제한된 Worker Thread에서 변환하고 시간·메모리 한도를 적용한다 |
 | 저장 중 process 종료 | Asset·revision·현재본의 일부만 게시될 수 있었다 | 내구성 journal과 시작 복구로 commit 또는 이전 revision을 확정한다 |
+| Rollback 파일 충돌 | journal 경로만으로 기존 Asset·revision을 삭제할 수 있었다 | ID·경로·SHA-256·현재 참조로 Transaction 소유가 증명된 파일만 삭제한다 |
+| 최초 Project 생성 중 종료 | 완성되지 않은 최종 Project 디렉터리가 남을 수 있었다 | create journal 안에서 완성한 디렉터리를 원자적으로 게시하고 시작 시 복구한다 |
+| Source Update의 복수 Text Cue | 같은 Unit의 첫 Cue를 임의로 Anchor에 사용할 수 있었다 | 후보가 정확히 하나일 때만 Anchor를 확정하고 복수 후보는 재검토로 보낸다 |
 | 브라우저 Audio 종료 | Cue 종료·프로젝트 변경 뒤 Audio가 남을 수 있었다 | 종료 timer와 중앙 controller가 활성 Audio와 비동기 완료를 정리한다 |
 
 각 조건은 `tests/media-workflow-regression.test.ts`의 지정된 회귀 이름으로 재현하고 수정 후 통과시켰다.
@@ -37,7 +41,8 @@
 
 - 지원 형식은 mono/stereo 16/24-bit PCM WAV다. AIFF·MP3와 다른 컨테이너·코덱은 명시적으로 거부한다.
 - `POST /api/projects/:projectId/audio/:cueId/asset`은 `multipart/form-data`, 파일 한 개, `expectedRevision`, 50MB 한도를 요구한다. 파일명은 설명에만 쓰며 저장 경로는 새 Asset ID의 hash로 만든다.
-- WAV chunk 구조, MIME, codec, 채널, 실제 duration, sample rate, 1시간 상한을 검사한다. 입력 sample rate는 8,000–384,000Hz, chunk는 최대 4,096개이며 정규화 결과는 50MB 이하여야 한다. 예상 결과 크기를 먼저 계산한 뒤 프로젝트 `handoff.timebase.sampleRate`의 PCM16 WAV로 정규화하고 결과를 다시 검사한다.
+- WAV chunk 구조, MIME, codec, 채널, 실제 duration, sample rate, 1시간 상한을 검사한다. 입력 sample rate는 8,000–384,000Hz, chunk는 최대 4,096개이며 정규화 결과는 50MB 이하여야 한다. 출력 Frame·Byte·Sample 연산량을 먼저 계산한 뒤 프로젝트 `handoff.timebase.sampleRate`의 PCM16 WAV로 정규화하고 결과를 다시 검사한다.
+- 정규화 Sample loop는 서버 Event Loop 밖의 Worker Thread에서 실행한다. `storyboard.config.json`의 `maxWorkers`, `timeoutMs`와 V8 세대·stack 메모리 한도를 적용하며, Worker 시작·실행·응답 실패는 구체적인 오류로 끝난다. 실패 시 ProjectStore update가 시작되지 않아 revision과 Asset 디렉터리가 바뀌지 않는다.
 - 실제 duration으로 `endMs`를 계산하고 `timingStatus=measured`, 신규 `assetId`를 설정한 뒤 Audio Relation과 Information Gate를 다시 검사한다. 교체 시 기존 Asset을 보존하고 신규 version을 올린다.
 - 저장된 Audio는 실제 WAV의 duration·sample rate·channel·codec이 Asset metadata와 맞고 Asset 길이가 Cue 타임라인과 맞아야 안전 출력된다.
 - `POST /api/projects/:projectId/audio/:cueId/normalize`는 hash와 구조가 유효한 이전 WAV를 읽어 프로젝트 PCM 형식의 새 Asset 버전으로 복구한다. 이전 Asset과 파일은 감사용으로 보존한다.
@@ -52,9 +57,11 @@
 
 ## 6 저장과 브라우저 재생
 
-- ProjectStore는 이전/다음 Project, 새 revision, 새 Asset을 transaction 디렉터리에 기록하고 각 파일과 디렉터리를 동기화한다. journal을 준비 완료 표식으로 마지막에 저장한 뒤 Asset → revision → 현재본 순서로 게시한다.
-- 서버 시작 시 현재 revision과 journal을 대조한다. 게시 전 중단은 신규 파일을 제거하고, 유효하게 완료된 게시는 유지하며, 현재본만 바뀌고 Asset 또는 revision이 불완전하면 이전 Project를 복원한다.
-- journal Asset 경로는 해당 Project의 `assets` 디렉터리 안으로 제한한다. 종료된 PID의 lock은 제거하고 살아 있는 PID의 lock은 `PROJECT_BUSY`로 유지한다. 복구 결과는 구조화 로그와 `/api/status.storageRecovery`에 남는다.
+- ProjectStore는 이전/다음 Project, 새 revision, 새 Asset을 transaction 디렉터리에 기록하고 각 파일과 디렉터리를 동기화한다. journal version 2를 준비 완료 표식으로 마지막에 저장한 뒤 hard link로 Asset → revision을 게시하고 현재본의 원자 rename을 commit point로 사용한다.
+- journal은 이전·다음 Project, revision, 각 Asset의 SHA-256과 Asset ID·상대경로·staging 이름을 기록한다. 서버 시작 시 현재 revision, 파일 해시와 현재 Project 참조를 모두 대조한다. 게시 전 중단은 증명된 신규 파일만 제거하고, 유효하게 완료된 게시는 유지하며, 현재본만 바뀌고 게시 파일이 없으면 증명된 이전 Project를 복원한다.
+- 기존 Asset·revision이 journal 해시와 다르거나 현재 Project가 참조하면 삭제하지 않는다. journal·lock이 손상됐거나 소유권을 정할 수 없는 상태도 보존하고 `STORE_RECOVERY_REQUIRED`로 차단한다. journal Asset 경로는 해당 Project의 `assets` 디렉터리 안으로 제한한다.
+- lock은 Project ID, Host, PID와 transaction ID를 기록한다. 같은 Host의 종료된 PID와 정확한 소유권만 자동 정리하고, 살아 있는 PID는 `PROJECT_BUSY`, 다른 Host나 해석할 수 없는 lock은 `STORE_RECOVERY_REQUIRED`로 유지한다.
+- 최초 Project는 `.create-transactions`에서 current·revision 파일과 빈 Asset·update transaction 디렉터리를 완성하고 동기화한 뒤 최종 Project 디렉터리로 원자 rename한다. 시작 복구는 게시 전 staging을 rollback하고 해시가 맞는 게시 후 Project를 보존한다. 복구 결과는 구조화 로그와 `/api/status.storageRecovery`에 남는다.
 - Browser Audio controller는 안전 선택자가 허용한 Cue를 현재 offset에서 시작하고 남은 Cue 길이만큼 종료 timer를 둔다. playhead가 Cue 밖으로 이동하거나 재생을 멈추고, 프로젝트·revision이 바뀌거나 Monitor가 닫히면 모든 활성 Audio를 정리한다. 이전 `play()` Promise나 timer는 현재 entry와 같을 때만 새 상태를 바꾼다.
 
 ## 7 PRJ-007 UNIT-045
@@ -78,12 +85,12 @@
 - `npm run schemas:write`: 생성 Schema 갱신
 - `npm run typecheck`: 서버·도메인 TypeScript 검사
 - `npm run typecheck:web`: Web TypeScript 검사
-- `npm test`: 23개 파일, 309개 테스트
+- `npm test`: 23개 파일, 321개 테스트
 - `npm run schemas:check`: Zod와 JSON Schema drift 검사
 - `npm run build:web`: 운영 웹 빌드
 - `npm run check`: 위 검사의 통합 실행
 
-기존 190개 검사를 유지하고 실제 미디어·Placement Information·1.5 Migration을 다루는 지정 회귀 88개와 WAV 자원·metadata·복구, transaction 복구, 브라우저 Audio 수명주기 회귀 31개를 적용했다. test skip/only와 metadata-only E2E 대체는 사용하지 않았다.
+기존 검사를 유지하고 Worker 이벤트 루프 응답·시간 초과 무변경, Hash·참조 기반 rollback, 다른 Host·손상 lock 보존, update·initial create crash 복구의 반복 실행, 복수 Text Cue Anchor를 포함해 23개 파일의 321개 검사를 적용했다. test skip/only와 metadata-only E2E 대체는 사용하지 않았다.
 
 ## 10 CI
 

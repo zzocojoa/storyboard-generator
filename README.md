@@ -23,9 +23,9 @@ npm run build:web
 npm start
 ```
 
-브라우저에서 `http://127.0.0.1:4317`을 연다. 프로젝트와 생성 자산은 `.local/data` 아래에 프로젝트별로 분리되며 Git에 포함되지 않는다. 각 변경은 현재본과 별개의 revision JSON으로 저장된다. 저장은 Project·revision·Asset을 하나의 journal transaction으로 게시하며, 서버 시작 때 중단된 transaction과 종료된 process의 잠금을 검사해 완료 상태를 확정하거나 이전 revision으로 복구한다. 복구 결과는 `/api/status`의 `storageRecovery`와 구조화 로그에서 확인한다.
+브라우저에서 `http://127.0.0.1:4317`을 연다. 프로젝트와 생성 자산은 `.local/data` 아래에 프로젝트별로 분리되며 Git에 포함되지 않는다. 각 변경은 현재본과 별개의 revision JSON으로 저장된다. 최초 Project는 전용 create journal에서 완성한 디렉터리를 원자적으로 게시한다. 이후 저장은 Project·revision·Asset을 journal version 2 transaction으로 게시하며 각 파일의 SHA-256, Asset ID·경로, Host·PID·transaction 소유권을 기록한다. 서버 시작 때 증명이 완전한 중단 작업만 commit 또는 rollback으로 확정하고, 소유권·해시·참조가 모호하면 파일을 보존한 채 `STORE_RECOVERY_REQUIRED`를 반환한다. 복구 결과는 `/api/status`의 `storageRecovery`와 구조화 로그에서 확인한다.
 
-웹 화면의 Audio Cue에서 PCM WAV를 선택하면 `multipart/form-data`로 서버에 등록한다. mono/stereo, 16/24-bit PCM WAV를 최대 50MB·1시간까지 읽고, 실제 구조·MIME·길이·sample rate·채널·codec·SHA-256을 확인한 뒤 프로젝트의 `handoff.timebase.sampleRate`에 맞춘 16-bit PCM WAV로 저장한다. 입력 sample rate, WAV chunk 수, 정규화 예상 크기를 Buffer 할당 전에 제한한다. AIFF와 MP3는 현재 `UNSUPPORTED_AUDIO_CONTAINER` 또는 `UNSUPPORTED_AUDIO_CODEC`으로 거부한다. 등록 실패 시 프로젝트 revision과 자산 파일을 함께 되돌린다.
+웹 화면의 Audio Cue에서 PCM WAV를 선택하면 `multipart/form-data`로 서버에 등록한다. mono/stereo, 16/24-bit PCM WAV를 최대 50MB·1시간까지 읽고, 실제 구조·MIME·길이·sample rate·채널·codec·SHA-256을 확인한 뒤 프로젝트의 `handoff.timebase.sampleRate`에 맞춘 16-bit PCM WAV로 저장한다. 입력 sample rate, WAV chunk 수, 출력 Frame·Byte·Sample 연산량을 Buffer 할당 전에 제한한다. 변환은 설정된 수의 Worker Thread에서 실행하며 각 Worker에 시간과 메모리 한도를 적용한다. AIFF와 MP3는 현재 `UNSUPPORTED_AUDIO_CONTAINER` 또는 `UNSUPPORTED_AUDIO_CODEC`으로 거부한다. 변환이 실패하거나 시간 제한을 넘으면 프로젝트 revision과 자산 파일은 바뀌지 않는다.
 
 이전 저장본의 WAV가 유효하지만 프로젝트 sample rate나 PCM16 형식과 다르면 손상으로 숨기지 않고 `AUDIO REPAIR`로 표시한다. Audio Cue의 **WAV 정규화 복구**는 원본 Asset과 파일을 보존하고, 실제 WAV에서 읽은 길이·형식을 적용한 새 Asset 버전을 만든다. Program Monitor 재생은 Cue 종료점에 도달하면 Audio를 멈추며 일시정지, playhead 탐색, 프로젝트 전환, revision 변경 때 이전 Audio와 늦게 끝난 재생 Promise를 정리한다.
 
@@ -39,7 +39,7 @@ $storyboard-workbench 대기 중인 콘티 생성 요청을 처리해 주세요.
 
 저장소 스킬 [storyboard-workbench](.agents/skills/storyboard-workbench/SKILL.md)이 현재 Codex 모델로 컷 JSON을 작성하고, 내장 `image_gen`으로 그림을 만들고, macOS `say`의 한국어 음성을 WAV로 변환해 프로젝트에 반영한다. `OPENAI_API_KEY`와 OpenAI SDK는 사용하지 않는다. 생성 중에도 웹 편집은 계속할 수 있으며, 결과 반영 후 화면의 `REFRESH`를 누르면 새 프로젝트 revision을 읽는다.
 
-요청 위치와 로컬 음성은 [`storyboard.config.json`](storyboard.config.json)에서 관리한다. 요청에는 대상 원문·컷·시각 기준의 해시가 들어간다. 요청 뒤 대상이 바뀌면 Codex 결과 적용을 거부하고 새 요청을 요구한다. 화면 상단의 Codex 상태에서 완료·대기·실패, 평균·최대 처리 시간, 같은 대상의 반복 생성 횟수와 최근 실패 원인을 확인한다. Codex App은 요청별 API 비용을 제공하지 않으므로 비용은 0으로 기록하지 않고 `N/A`로 표시한다.
+요청 위치, 로컬 음성, Audio Worker 수·시간·메모리 한도는 [`storyboard.config.json`](storyboard.config.json)에서 관리한다. 요청에는 대상 원문·컷·시각 기준의 해시가 들어간다. 요청 뒤 대상이 바뀌면 Codex 결과 적용을 거부하고 새 요청을 요구한다. 화면 상단의 Codex 상태에서 완료·대기·실패, 평균·최대 처리 시간, 같은 대상의 반복 생성 횟수와 최근 실패 원인을 확인한다. Codex App은 요청별 API 비용을 제공하지 않으므로 비용은 0으로 기록하지 않고 `N/A`로 표시한다.
 
 ## 프로젝트 불러오기
 
@@ -91,6 +91,6 @@ CSV에서 같은 오디오 이벤트가 여러 컷 행에 나타나면 하나의
 npm run check
 ```
 
-이 명령은 서버·도메인 타입 검사, 웹 타입 검사, 자동 테스트, 생성 스키마 정합성, 운영 웹 빌드를 순서대로 실행한다. 현재 자동 검사는 23개 파일의 309개 테스트다. 신규 119개 검사는 실제 미디어 바이트·HTTP 업로드·저장·안전 출력, Placement 정보 판정, 1.5 Migration과 원본 갱신, WAV 자원 한계·실제 metadata 결속·이전 WAV 복구·저장 transaction 복구·브라우저 Audio 수명주기를 다룬다. PRJ-007 Golden은 12개 Scene, 32개 Segment, 79개 screenplay Source Unit, 16개 Panel Turn, 1,500,000ms 전체 시간과 원문 불변을 확인한다. 실제 `UNIT-045` fixture는 48,000Hz mono PCM16 WAV 2,000ms이며, 849,000–851,000ms J-cut으로 저장한 뒤 849,500ms 선택자·안전 HTTP bytes·JSON 재열기·Gate 불변성을 검사한다. 기존의 메모리 metadata 검사는 도메인 판정 회귀로 유지하고 실제 자산 완료 근거는 이 파일 E2E 검사로 구분한다. 전체 분량의 제작 품질은 별도 사람 검토 대상이다.
+이 명령은 서버·도메인 타입 검사, 웹 타입 검사, 자동 테스트, 생성 스키마 정합성, 운영 웹 빌드를 순서대로 실행한다. 현재 자동 검사는 23개 파일의 321개 테스트다. 신규 131개 검사는 실제 미디어 바이트·HTTP 업로드·저장·안전 출력, Placement 정보 판정, 1.5 Migration과 원본 갱신, Worker 기반 WAV 정규화, 실제 metadata 결속·이전 WAV 복구, 파일 증명 기반 transaction·initial create 복구, lock 소유권, 복수 Text Cue Anchor, 브라우저 Audio 수명주기를 다룬다. PRJ-007 Golden은 12개 Scene, 32개 Segment, 79개 screenplay Source Unit, 16개 Panel Turn, 1,500,000ms 전체 시간과 원문 불변을 확인한다. 실제 `UNIT-045` fixture는 48,000Hz mono PCM16 WAV 2,000ms이며, 849,000–851,000ms J-cut으로 저장한 뒤 849,500ms 선택자·안전 HTTP bytes·JSON 재열기·Gate 불변성을 검사한다. 기존의 메모리 metadata 검사는 도메인 판정 회귀로 유지하고 실제 자산 완료 근거는 이 파일 E2E 검사로 구분한다. 전체 분량의 제작 품질은 별도 사람 검토 대상이다.
 
 스키마의 기준은 `src/domain/schema.ts`다. 타입 변경 후 `npm run schemas:write`로 JSON Schema를 갱신하고 `npm run schemas:check`로 일치 여부를 확인한다. 제품 범위와 구현 원칙은 [`AGENTS.md`](AGENTS.md), 데이터 흐름과 API 설계는 [Design](docs/02-design/features/storyboard-generator.design.md)을 따른다.

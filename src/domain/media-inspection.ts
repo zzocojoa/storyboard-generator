@@ -1,4 +1,5 @@
 import sharp from 'sharp';
+import type { AudioNormalizationPlan, AudioNormalizer } from './audio-normalizer.js';
 import { contractError } from './errors.js';
 import type { ContractError } from './errors.js';
 import type { Asset, Project } from './schema.js';
@@ -9,6 +10,7 @@ export const MAX_IMAGE_PIXELS: number = 40_000_000;
 export const MAX_AUDIO_BYTES: number = 50 * 1024 * 1024;
 export const MAX_AUDIO_DURATION_MS: number = 60 * 60 * 1000;
 export const MAX_AUDIO_NORMALIZED_BYTES: number = MAX_AUDIO_BYTES;
+export const MAX_AUDIO_NORMALIZATION_SAMPLE_OPERATIONS: number = Math.floor((MAX_AUDIO_NORMALIZED_BYTES - 44) / 2);
 export const MIN_AUDIO_SAMPLE_RATE: number = 8_000;
 export const MAX_AUDIO_SAMPLE_RATE: number = 384_000;
 export const MAX_WAV_CHUNKS: number = 4_096;
@@ -41,7 +43,7 @@ export type InspectedAudioFile = {
 
 type ParsedWav = {
   sampleRate: number;
-  channels: number;
+  channels: 1 | 2;
   bitsPerSample: 16 | 24;
   sampleFrames: number;
   data: Buffer;
@@ -155,56 +157,36 @@ function parsePcmWav(bytes: Buffer, declaredMimeType: string): ParsedWav {
   return { sampleRate, channels, bitsPerSample, sampleFrames: data.length / blockAlign, data };
 }
 
-function readSample(data: Buffer, byteOffset: number, bitsPerSample: 16 | 24): number {
-  if (bitsPerSample === 16) return data.readInt16LE(byteOffset) / 32768;
-  return data.readIntLE(byteOffset, 3) / 8388608;
-}
-
-function sampleAt(wav: ParsedWav, frame: number, channel: number): number {
-  const bytesPerSample: number = wav.bitsPerSample / 8;
-  return readSample(wav.data, (frame * wav.channels + channel) * bytesPerSample, wav.bitsPerSample);
-}
-
 function requireSupportedSampleRate(sampleRate: number, label: string): void {
   if (sampleRate < MIN_AUDIO_SAMPLE_RATE || sampleRate > MAX_AUDIO_SAMPLE_RATE) {
     throw contractError('AUDIO_SAMPLE_RATE_UNSUPPORTED', `${label} sample rate가 허용 범위를 벗어났습니다. sampleRate=${sampleRate}, allowed=${MIN_AUDIO_SAMPLE_RATE}..${MAX_AUDIO_SAMPLE_RATE}`, []);
   }
 }
 
-function targetFrameCount(wav: ParsedWav, targetSampleRate: number): number {
+function normalizationPlan(wav: ParsedWav, targetSampleRate: number): AudioNormalizationPlan {
   const sourceRate: bigint = BigInt(wav.sampleRate);
   const numerator: bigint = BigInt(wav.sampleFrames) * BigInt(targetSampleRate);
   const frames: bigint = (numerator + sourceRate / 2n) / sourceRate;
   const normalizedFrames: bigint = frames > 0n ? frames : 1n;
   const normalizedBytes: bigint = 44n + normalizedFrames * BigInt(wav.channels) * 2n;
+  const sampleOperations: bigint = normalizedFrames * BigInt(wav.channels);
   if (normalizedBytes > BigInt(MAX_AUDIO_NORMALIZED_BYTES)) {
     throw contractError('AUDIO_NORMALIZED_SIZE_LIMIT', `정규화 결과가 허용 크기를 초과합니다. estimatedBytes=${normalizedBytes.toString()}, maxBytes=${MAX_AUDIO_NORMALIZED_BYTES}`, []);
   }
-  if (normalizedFrames > BigInt(Number.MAX_SAFE_INTEGER)) {
-    throw contractError('AUDIO_NORMALIZATION_RESOURCE_LIMIT', `정규화 Frame 수가 안전한 정수 범위를 벗어났습니다. frames=${normalizedFrames.toString()}`, []);
+  if (sampleOperations > BigInt(MAX_AUDIO_NORMALIZATION_SAMPLE_OPERATIONS)) {
+    throw contractError('AUDIO_NORMALIZATION_RESOURCE_LIMIT', `정규화 Sample 연산량이 허용 범위를 초과합니다. operations=${sampleOperations.toString()}, maxOperations=${MAX_AUDIO_NORMALIZATION_SAMPLE_OPERATIONS}`, []);
   }
-  return Number(normalizedFrames);
-}
-
-function encodePcm16Wav(wav: ParsedWav, targetSampleRate: number, targetFrames: number): Buffer {
-  const dataLength: number = targetFrames * wav.channels * 2;
-  const result: Buffer = Buffer.alloc(44 + dataLength);
-  result.write('RIFF', 0); result.writeUInt32LE(36 + dataLength, 4); result.write('WAVE', 8); result.write('fmt ', 12);
-  result.writeUInt32LE(16, 16); result.writeUInt16LE(1, 20); result.writeUInt16LE(wav.channels, 22); result.writeUInt32LE(targetSampleRate, 24);
-  result.writeUInt32LE(targetSampleRate * wav.channels * 2, 28); result.writeUInt16LE(wav.channels * 2, 32); result.writeUInt16LE(16, 34);
-  result.write('data', 36); result.writeUInt32LE(dataLength, 40);
-  for (let targetFrame: number = 0; targetFrame < targetFrames; targetFrame += 1) {
-    const sourcePosition: number = targetFrame * wav.sampleRate / targetSampleRate;
-    const leftFrame: number = Math.min(wav.sampleFrames - 1, Math.floor(sourcePosition));
-    const rightFrame: number = Math.min(wav.sampleFrames - 1, leftFrame + 1);
-    const blend: number = sourcePosition - leftFrame;
-    for (let channel: number = 0; channel < wav.channels; channel += 1) {
-      const value: number = sampleAt(wav, leftFrame, channel) * (1 - blend) + sampleAt(wav, rightFrame, channel) * blend;
-      const integer: number = Math.max(-32768, Math.min(32767, Math.round(value * 32767)));
-      result.writeInt16LE(integer, 44 + (targetFrame * wav.channels + channel) * 2);
-    }
-  }
-  return result;
+  return {
+    sourceData: wav.data,
+    sourceSampleRate: wav.sampleRate,
+    sourceChannels: wav.channels,
+    sourceBitsPerSample: wav.bitsPerSample,
+    sourceFrames: wav.sampleFrames,
+    targetSampleRate,
+    targetFrames: Number(normalizedFrames),
+    outputBytes: Number(normalizedBytes),
+    sampleOperations: Number(sampleOperations),
+  };
 }
 
 function durationMs(wav: ParsedWav): number {
@@ -236,13 +218,15 @@ export function inspectAudioFileBytes(bytes: Buffer, declaredMimeType: string): 
 }
 
 /** PCM WAV를 프로젝트 샘플레이트의 16비트 PCM WAV로 정규화하고 결과를 다시 검사한다. */
-export function inspectAudioBytes(project: Pick<Project, 'handoff'>, bytes: Buffer, declaredMimeType: string): InspectedAudio {
+export async function inspectAudioBytes(
+  project: Pick<Project, 'handoff'>, bytes: Buffer, declaredMimeType: string, normalizer: AudioNormalizer,
+): Promise<InspectedAudio> {
   const { wav: source } = inspectParsedAudio(bytes, declaredMimeType);
   const targetRate: number = project.handoff.timebase.sampleRate;
   requireSupportedSampleRate(targetRate, 'Project');
-  const targetFrames: number = targetFrameCount(source, targetRate);
+  const plan: AudioNormalizationPlan = normalizationPlan(source, targetRate);
   const normalizedBytes: Buffer = source.sampleRate === targetRate && source.bitsPerSample === 16
-    ? Buffer.from(bytes) : encodePcm16Wav(source, targetRate, targetFrames);
+    ? Buffer.from(bytes) : await normalizer.normalize(plan);
   const normalized: InspectedAudioFile = inspectAudioFileBytes(normalizedBytes, 'audio/wav');
   if (normalized.sampleRate !== targetRate || normalized.codec !== 'pcm_s16le') {
     throw contractError('AUDIO_NORMALIZATION_FAILED', `정규화 결과가 프로젝트 형식과 다릅니다. expected=${targetRate}/pcm_s16le, actual=${normalized.sampleRate}/${normalized.codec}`, []);

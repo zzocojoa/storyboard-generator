@@ -26,7 +26,7 @@ import { CodexRequestStore } from '../src/codex/requests.js';
 import { createApp } from '../src/server/app.js';
 import type { AppConfig } from '../src/server/config.js';
 import { ProjectStore } from '../src/server/store.js';
-import { nativeData, nativePackage, pcmWav, png, productionPackage, withNativeData } from './helpers.js';
+import { nativeData, nativePackage, pcmWav, png, productionPackage, testAudioNormalizer, TEST_AUDIO_NORMALIZATION_OPTIONS, withNativeData } from './helpers.js';
 
 const roots: string[] = [];
 
@@ -52,7 +52,8 @@ async function temporaryApp(project: Project): Promise<{ app: FastifyInstance; r
   await mkdir(webRoot);
   await writeFile(join(webRoot, 'index.html'), '<!doctype html><div id="root"></div>', 'utf8');
   const config: AppConfig = { host: '127.0.0.1', port: 4317, dataRoot: join(root, 'data'), webRoot,
-    pdfFontPath: resolve('assets/fonts/NanumGothic-Regular.ttf'), codex: { requestRoot: join(root, 'requests'), speechVoice: 'Yuna' } };
+    pdfFontPath: resolve('assets/fonts/NanumGothic-Regular.ttf'), audioNormalization: TEST_AUDIO_NORMALIZATION_OPTIONS,
+    codex: { requestRoot: join(root, 'requests'), speechVoice: 'Yuna' } };
   return { app: await createApp(config, store, new CodexRequestStore(config.codex.requestRoot)), root, store };
 }
 
@@ -71,9 +72,9 @@ function sfxCue(project: Project): AudioCue {
   return cue;
 }
 
-function attach(project: Project, cue: AudioCue, durationMs: number, assetId: string): AttachedAudioAsset {
+async function attach(project: Project, cue: AudioCue, durationMs: number, assetId: string): Promise<AttachedAudioAsset> {
   return attachAudioAsset(project, cue.id, assetId, { originalFileName: 'recording.wav', declaredMimeType: 'audio/wav',
-    bytes: pcmWav(durationMs, project.handoff.timebase.sampleRate, 1, 16) });
+    bytes: pcmWav(durationMs, project.handoff.timebase.sampleRate, 1, 16) }, testAudioNormalizer());
 }
 
 async function saveMutation(store: ProjectStore, project: Project, mutation: AttachedAudioAsset): Promise<Project> {
@@ -163,8 +164,8 @@ async function unit045Mutation(): Promise<{ base: Project; prepared: Project; cu
   const prepared: Project = { ...base, audioCues: base.audioCues.map((candidate: AudioCue): AudioCue => candidate.id === cue.id
     ? { ...candidate, startMs: 849000, endMs: 851000, timingRelation: 'j-cut', timingStatus: 'proposed' } : candidate) };
   const bytes: Buffer = await readFile('tests/fixtures/media/unit045-intercom-48000.wav');
-  return { base, prepared, cue, bytes, mutation: attachAudioAsset(prepared, cue.id, 'unit045-audio', {
-    originalFileName: 'unit045-intercom-48000.wav', declaredMimeType: 'audio/wav', bytes }) };
+  return { base, prepared, cue, bytes, mutation: await attachAudioAsset(prepared, cue.id, 'unit045-audio', {
+    originalFileName: 'unit045-intercom-48000.wav', declaredMimeType: 'audio/wav', bytes }, testAudioNormalizer()) };
 }
 
 afterEach(async (): Promise<void> => {
@@ -173,54 +174,54 @@ afterEach(async (): Promise<void> => {
 
 describe('A. AUDIO INSPECTION', (): void => {
   it('valid_pcm_wav_reports_actual_duration', async (): Promise<void> => {
-    expect(inspectAudioBytes(await nativeOutline(), pcmWav(1250, 48000, 1, 16), 'audio/wav').durationMs).toBe(1250);
+    expect((await inspectAudioBytes(await nativeOutline(), pcmWav(1250, 48000, 1, 16), 'audio/wav', testAudioNormalizer())).durationMs).toBe(1250);
   });
   it('valid_pcm_wav_reports_sample_rate', async (): Promise<void> => {
-    expect(inspectAudioBytes(await nativeOutline(), pcmWav(200, 48000, 1, 16), 'audio/wav').sampleRate).toBe(48000);
+    expect((await inspectAudioBytes(await nativeOutline(), pcmWav(200, 48000, 1, 16), 'audio/wav', testAudioNormalizer())).sampleRate).toBe(48000);
   });
   it('valid_pcm_wav_reports_channels', async (): Promise<void> => {
-    expect(inspectAudioBytes(await nativeOutline(), pcmWav(200, 48000, 2, 24), 'audio/wav').channels).toBe(2);
+    expect((await inspectAudioBytes(await nativeOutline(), pcmWav(200, 48000, 2, 24), 'audio/wav', testAudioNormalizer())).channels).toBe(2);
   });
   it('truncated_wav_is_rejected', async (): Promise<void> => {
-    const project: Project = await nativeOutline(); expect(() => inspectAudioBytes(project, pcmWav(200, 48000, 1, 16).subarray(0, 50), 'audio/wav')).toThrowError();
+    const project: Project = await nativeOutline(); await expect(inspectAudioBytes(project, pcmWav(200, 48000, 1, 16).subarray(0, 50), 'audio/wav', testAudioNormalizer())).rejects.toThrowError();
   });
   it('declared_mime_mismatch_is_rejected', async (): Promise<void> => {
-    const project: Project = await nativeOutline(); expect(() => inspectAudioBytes(project, pcmWav(200, 48000, 1, 16), 'audio/mpeg')).toThrowError(expect.objectContaining({ code: 'ASSET_MIME_MISMATCH' }));
+    const project: Project = await nativeOutline(); await expect(inspectAudioBytes(project, pcmWav(200, 48000, 1, 16), 'audio/mpeg', testAudioNormalizer())).rejects.toThrowError(expect.objectContaining({ code: 'ASSET_MIME_MISMATCH' }));
   });
   it('unsupported_audio_codec_is_rejected', async (): Promise<void> => {
     const bytes: Buffer = pcmWav(200, 48000, 1, 16); bytes.writeUInt16LE(3, 20);
-    const project: Project = await nativeOutline(); expect(() => inspectAudioBytes(project, bytes, 'audio/wav')).toThrowError(expect.objectContaining({ code: 'UNSUPPORTED_AUDIO_CODEC' }));
+    const project: Project = await nativeOutline(); await expect(inspectAudioBytes(project, bytes, 'audio/wav', testAudioNormalizer())).rejects.toThrowError(expect.objectContaining({ code: 'UNSUPPORTED_AUDIO_CODEC' }));
   });
   it('project_sample_rate_is_enforced', async (): Promise<void> => {
-    expect(inspectAudioBytes(await nativeOutline(), pcmWav(200, 44100, 1, 16), 'audio/wav').sampleRate).toBe(48000);
+    expect((await inspectAudioBytes(await nativeOutline(), pcmWav(200, 44100, 1, 16), 'audio/wav', testAudioNormalizer())).sampleRate).toBe(48000);
   });
   it('normalized_audio_is_reinspected', async (): Promise<void> => {
-    const project: Project = await nativeOutline(); const first = inspectAudioBytes(project, pcmWav(200, 44100, 2, 24), 'audio/wav');
-    expect(inspectAudioBytes(project, first.normalizedBytes, first.mimeType)).toEqual(expect.objectContaining({ sampleRate: 48000, channels: 2, codec: 'pcm_s16le' }));
+    const project: Project = await nativeOutline(); const first = await inspectAudioBytes(project, pcmWav(200, 44100, 2, 24), 'audio/wav', testAudioNormalizer());
+    expect(await inspectAudioBytes(project, first.normalizedBytes, first.mimeType, testAudioNormalizer())).toEqual(expect.objectContaining({ sampleRate: 48000, channels: 2, codec: 'pcm_s16le' }));
   });
   it('audio_file_size_limit_is_enforced', async (): Promise<void> => {
-    const project: Project = await nativeOutline(); expect(() => inspectAudioBytes(project, Buffer.alloc(MAX_AUDIO_BYTES + 1), 'audio/wav')).toThrowError(expect.objectContaining({ code: 'AUDIO_FILE_SIZE_LIMIT' }));
+    const project: Project = await nativeOutline(); await expect(inspectAudioBytes(project, Buffer.alloc(MAX_AUDIO_BYTES + 1), 'audio/wav', testAudioNormalizer())).rejects.toThrowError(expect.objectContaining({ code: 'AUDIO_FILE_SIZE_LIMIT' }));
   });
 });
 
 describe('B. AUDIO ASSET IMPORT', (): void => {
   it('sfx_audio_asset_can_be_attached', async (): Promise<void> => {
     const project: Project = await nativeOutline(); const cue: AudioCue = sfxCue(project);
-    expect(attach(project, cue, 500, 'sfx').project.audioCues.find((value: AudioCue): boolean => value.id === cue.id)?.assetId).toBe('sfx');
+    expect((await attach(project, cue, 500, 'sfx')).project.audioCues.find((value: AudioCue): boolean => value.id === cue.id)?.assetId).toBe('sfx');
   });
   it('music_audio_asset_can_be_attached', async (): Promise<void> => {
     const project: Project = await nativeOutline(); const cue: AudioCue = sfxCue(project);
     const music: Project = { ...project, dataset: { ...project.dataset, units: project.dataset.units.map((unit: SourceUnit): SourceUnit => unit.id === cue.unitId ? { ...unit, kind: 'MUSIC' } : unit) },
       audioCues: project.audioCues.map((candidate: AudioCue): AudioCue => candidate.id === cue.id ? { ...candidate, kind: 'music' } : candidate) };
-    expect(attach(music, { ...cue, kind: 'music' }, 500, 'music').project.assets.at(-1)?.kind).toBe('audio');
+    expect((await attach(music, { ...cue, kind: 'music' }, 500, 'music')).project.assets.at(-1)?.kind).toBe('audio');
   });
   it('imported_audio_sets_measured_status', async (): Promise<void> => {
     const project: Project = await nativeOutline(); const cue: AudioCue = sfxCue(project);
-    expect(attach(project, cue, 500, 'measured').project.audioCues.find((value: AudioCue): boolean => value.id === cue.id)?.timingStatus).toBe('measured');
+    expect((await attach(project, cue, 500, 'measured')).project.audioCues.find((value: AudioCue): boolean => value.id === cue.id)?.timingStatus).toBe('measured');
   });
   it('imported_audio_updates_end_from_actual_duration', async (): Promise<void> => {
     const project: Project = await nativeOutline(); const cue: AudioCue = sfxCue(project);
-    expect(attach(project, cue, 750, 'duration').project.audioCues.find((value: AudioCue): boolean => value.id === cue.id)?.endMs).toBe(cue.startMs + 750);
+    expect((await attach(project, cue, 750, 'duration')).project.audioCues.find((value: AudioCue): boolean => value.id === cue.id)?.endMs).toBe(cue.startMs + 750);
   });
   it('imported_audio_creates_real_asset_file', async (): Promise<void> => {
     const project: Project = await nativeOutline(); const cue: AudioCue = sfxCue(project); const { app, store } = await temporaryApp(project);
@@ -236,26 +237,26 @@ describe('B. AUDIO ASSET IMPORT', (): void => {
     await app.close();
   });
   it('imported_audio_sha_matches_stored_file', async (): Promise<void> => {
-    const project: Project = await nativeOutline(); const { store } = await temporaryStore(project); const mutation = attach(project, sfxCue(project), 500, 'sha');
+    const project: Project = await nativeOutline(); const { store } = await temporaryStore(project); const mutation = await attach(project, sfxCue(project), 500, 'sha');
     const saved: Project = await saveMutation(store, project, mutation); const asset: Asset = saved.assets.find((value: Asset): boolean => value.id === 'sha') as Asset;
     expect(sha256Bytes(await readFile(await store.assetPath(project.projectId, asset.id)))).toBe(asset.sha256);
   });
   it('imported_audio_asset_subject_matches_cue', async (): Promise<void> => {
     const project: Project = await nativeOutline(); const cue: AudioCue = sfxCue(project);
-    expect(attach(project, cue, 500, 'subject').project.assets.at(-1)?.subjectId).toBe(cue.id);
+    expect((await attach(project, cue, 500, 'subject')).project.assets.at(-1)?.subjectId).toBe(cue.id);
   });
   it('replacing_audio_increments_asset_version', async (): Promise<void> => {
-    const project: Project = await nativeOutline(); const cue: AudioCue = sfxCue(project); const first = attach(project, cue, 500, 'v1');
-    expect(attach(first.project, first.project.audioCues.find((value: AudioCue): boolean => value.id === cue.id) as AudioCue, 600, 'v2').project.assets.at(-1)?.version).toBe(2);
+    const project: Project = await nativeOutline(); const cue: AudioCue = sfxCue(project); const first = await attach(project, cue, 500, 'v1');
+    expect((await attach(first.project, first.project.audioCues.find((value: AudioCue): boolean => value.id === cue.id) as AudioCue, 600, 'v2')).project.assets.at(-1)?.version).toBe(2);
   });
   it('replacing_audio_preserves_old_asset', async (): Promise<void> => {
-    const project: Project = await nativeOutline(); const cue: AudioCue = sfxCue(project); const first = attach(project, cue, 500, 'old');
-    expect(attach(first.project, first.project.audioCues.find((value: AudioCue): boolean => value.id === cue.id) as AudioCue, 600, 'new').project.assets.map((asset: Asset): string => asset.id)).toEqual(['old', 'new']);
+    const project: Project = await nativeOutline(); const cue: AudioCue = sfxCue(project); const first = await attach(project, cue, 500, 'old');
+    expect((await attach(first.project, first.project.audioCues.find((value: AudioCue): boolean => value.id === cue.id) as AudioCue, 600, 'new')).project.assets.map((asset: Asset): string => asset.id)).toEqual(['old', 'new']);
   });
   it('invalid_j_cut_after_duration_is_rejected', async (): Promise<void> => {
     const project: Project = await nativeOutline(); const cue: AudioCue = sfxCue(project);
     const jcut: Project = { ...project, audioCues: project.audioCues.map((value: AudioCue): AudioCue => value.id === cue.id ? { ...value, startMs: 4000, endMs: 6000, timingRelation: 'j-cut' } : value) };
-    expect(() => attach(jcut, { ...cue, startMs: 4000, endMs: 6000, timingRelation: 'j-cut' }, 10000, 'invalid')).toThrowError();
+    await expect(attach(jcut, { ...cue, startMs: 4000, endMs: 6000, timingRelation: 'j-cut' }, 10000, 'invalid')).rejects.toThrowError();
   });
   it('failed_audio_import_does_not_change_revision', async (): Promise<void> => {
     const project: Project = await nativeOutline(); const { app, store } = await temporaryApp(project); const request = multipartAudio(Buffer.from('bad'), 0);
@@ -276,7 +277,7 @@ describe('B. AUDIO ASSET IMPORT', (): void => {
 
 describe('C. SAFE AUDIO OUTPUT', (): void => {
   async function storedAudio(): Promise<{ app: FastifyInstance; store: ProjectStore; project: Project; cue: AudioCue; bytes: Buffer; path: string }> {
-    const base: Project = await nativeOutline(); const cue: AudioCue = sfxCue(base); const { app, store } = await temporaryApp(base); const mutation = attach(base, cue, 500, 'safe-audio');
+    const base: Project = await nativeOutline(); const cue: AudioCue = sfxCue(base); const { app, store } = await temporaryApp(base); const mutation = await attach(base, cue, 500, 'safe-audio');
     const project: Project = await saveMutation(store, base, mutation); return { app, store, project, cue, bytes: mutation.content as Buffer, path: await store.assetPath(base.projectId, 'safe-audio') };
   }
   it('safe_audio_endpoint_returns_actual_bytes', async (): Promise<void> => {
@@ -346,7 +347,7 @@ describe('D. PRJ-007 UNIT-045', (): void => {
   });
   it('unit045_within_segment_relation_is_rejected_for_cross_boundary_timing', async (): Promise<void> => {
     const fixture = await unit045Mutation(); const invalid: Project = { ...fixture.prepared, audioCues: fixture.prepared.audioCues.map((cue: AudioCue): AudioCue => cue.unitId === 'UNIT-045' ? { ...cue, timingRelation: 'within-segment' } : cue) };
-    expect(() => attachAudioAsset(invalid, fixture.cue.id, 'invalid-unit045', { originalFileName: 'unit045.wav', declaredMimeType: 'audio/wav', bytes: fixture.bytes })).toThrowError();
+    await expect(attachAudioAsset(invalid, fixture.cue.id, 'invalid-unit045', { originalFileName: 'unit045.wav', declaredMimeType: 'audio/wav', bytes: fixture.bytes }, testAudioNormalizer())).rejects.toThrowError();
   });
 });
 
@@ -519,6 +520,16 @@ describe('H. SOURCE UPDATE', (): void => {
     const changed: Project = { ...project, textCues: project.textCues.filter((cue: TextCue): boolean => cue.unitId !== link.unitId) }; const rebuilt: Shot = rebuildTextDerivedAnchors(changed).find((value: Shot): boolean => value.id === shot.id) as Shot;
     expect(rebuilt.sourceLinks.find((value: ShotSourceLink): boolean => value.unitId === link.unitId)?.temporalAnchor.status).toBe('review-required');
   });
+  it('multiple_text_cues_for_one_unit_become_review_required', async (): Promise<void> => {
+    const project: Project = await nativeOutline(); const shot: Shot = project.shots.find((value: Shot): boolean => value.sourceLinks.some((link: ShotSourceLink): boolean => link.temporalAnchor.kind === 'shot-offset' && link.temporalAnchor.basis === 'text-cue')) as Shot;
+    const link: ShotSourceLink = shot.sourceLinks.find((value: ShotSourceLink): boolean => value.temporalAnchor.kind === 'shot-offset' && value.temporalAnchor.basis === 'text-cue') as ShotSourceLink;
+    const cue: TextCue = project.textCues.find((value: TextCue): boolean => value.unitId === link.unitId && value.startMs >= shot.startMs && value.endMs <= shot.endMs) as TextCue;
+    const changed: Project = { ...project, textCues: [...project.textCues, { ...cue, id: `${cue.id}-duplicate` }] };
+    const rebuilt: Shot = rebuildTextDerivedAnchors(changed).find((value: Shot): boolean => value.id === shot.id) as Shot;
+    expect(rebuilt.sourceLinks.find((value: ShotSourceLink): boolean => value.unitId === link.unitId)).toEqual(expect.objectContaining({
+      status: 'mapping-required', temporalAnchor: { kind: 'unresolved', basis: 'source-update', status: 'review-required' },
+    }));
+  });
 });
 
 describe('I. READY METRICS', (): void => {
@@ -532,7 +543,7 @@ describe('I. READY METRICS', (): void => {
     expect((await fixture.store.list())[0]?.framesOutputSafe).toBe(0); await fixture.app.close();
   });
   it('proposed_audio_is_not_counted_as_playable', async (): Promise<void> => {
-    const base: Project = await nativeOutline(); const { store } = await temporaryStore(base); const cue: AudioCue = sfxCue(base); const saved = await saveMutation(store, base, attach(base, cue, 500, 'metric-proposed'));
+    const base: Project = await nativeOutline(); const { store } = await temporaryStore(base); const cue: AudioCue = sfxCue(base); const saved = await saveMutation(store, base, await attach(base, cue, 500, 'metric-proposed'));
     await store.update(base.projectId, saved.revision, (project: Project): Project => ({ ...project, audioCues: project.audioCues.map((value: AudioCue): AudioCue => value.id === cue.id ? { ...value, timingStatus: 'proposed' } : value) }), []); expect((await store.list())[0]?.audioPlayable).toBe(0);
   });
   it('gate_blocked_audio_is_not_counted_as_playable', async (): Promise<void> => {
@@ -541,7 +552,7 @@ describe('I. READY METRICS', (): void => {
     expect((await store.list())[0]?.audioPlayable).toBe(0);
   });
   it('valid_measured_audio_is_counted_as_playable', async (): Promise<void> => {
-    const base: Project = await nativeOutline(); const { store } = await temporaryStore(base); const cue: AudioCue = sfxCue(base); await saveMutation(store, base, attach(base, cue, 500, 'metric-valid'));
+    const base: Project = await nativeOutline(); const { store } = await temporaryStore(base); const cue: AudioCue = sfxCue(base); await saveMutation(store, base, await attach(base, cue, 500, 'metric-valid'));
     expect((await store.list())[0]?.audioPlayable).toBe(1);
   });
 });

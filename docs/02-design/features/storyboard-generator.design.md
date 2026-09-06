@@ -1,6 +1,6 @@
 # 범용 콘티 도구 — Design
 
-상태: 1.5.0 도메인 계약, 독립 Placement 정보 판정, 실제 미디어 무결성·자원 검사, 이전 WAV 복구, journal 저장 복구, Cue 범위 Audio 수명주기, 안전 Frame·Audio 출력, 명시적 J/L-cut과 PRJ-007 실제 UNIT-045 WAV Golden을 반영한 현재 설계. 전체 분량의 제작 판단은 별도 검토가 필요하다.
+상태: 1.5.0 도메인 계약, 독립 Placement 정보 판정, 실제 미디어 무결성·자원 검사, Worker 기반 WAV 정규화, 파일 증명 기반 journal version 2 저장·Initial Project 복구, Cue 범위 Audio 수명주기, 안전 Frame·Audio 출력, 명시적 J/L-cut과 PRJ-007 실제 UNIT-045 WAV Golden을 반영한 현재 설계. 전체 분량의 제작 판단은 별도 검토가 필요하다.
 
 ## 1. 목표와 결정 근거
 
@@ -27,12 +27,12 @@ flowchart LR
     I --> H[저장·JSON·CSV·PDF·재생]
 ```
 
-- `src/domain`: 타입·스키마, 정규화된 프로젝트, Text/Source Mapping, 시간·원문·정보 Gate 검사, 출력 인터록, 안전한 재생 선택자, 순수 편집 함수.
+- `src/domain`: 타입·스키마, 정규화된 프로젝트, Text/Source Mapping, 시간·원문·정보 Gate 검사, 출력 인터록, 안전한 재생 선택자, 순수 편집 함수와 제한된 Audio Worker connector.
 - `src/importers`: 패키지 검사, 범용 native 입력, 기존 production 입력의 명시적 변환.
 - `src/proposal`: 구간의 허용된 원문을 이용한 컷 제안과 모델 요청 경계.
 - `src/exporters`: 검증된 프로젝트의 JSON·CSV·PDF 출력.
 - `src/io`: 입력 파일과 프로젝트 JSON 읽기·쓰기. 입력 경로는 패키지 루트 안으로 제한한다.
-- `src/server`: 프로젝트별 현재본·불변 revision·자산의 journal transaction 저장과 시작 복구, 낙관적 revision 검사와 로컬 HTTP API.
+- `src/server`: 프로젝트별 현재본·불변 revision·자산의 파일 증명 기반 journal transaction 저장과 create/update 시작 복구, 낙관적 revision 검사와 로컬 HTTP API.
 - `src/codex`: Codex 요청 영속화, 최소 생성 문맥, 대상 해시, 결과 검증·반영과 명령행 브리지.
 - `.agents/skills/storyboard-workbench`: Codex App이 컷·내장 이미지 생성·로컬 가이드 음성 요청을 처리하는 저장소 스킬.
 - `web`: 공통 프로젝트 모델을 표시하고 편집·생성·Cue 범위 Audio 재생·원본 갱신·내보내기를 API에 요청하는 React 화면.
@@ -128,9 +128,9 @@ Information Emission Interlock은 이미지, 글자 오버레이, 음성 재생�
 | GET /api/status, /api/codex/requests/:id | 영속 생성 요청 지표·오류·결과 revision과 시작 시 저장 복구 결과 |
 | GET /api/projects/:id/export.json, .csv, .pdf | 검토 상태를 포함한 결과 출력 |
 
-서버는 로컬 주소에 바인딩한다. 업로드 파일명은 저장 경로에 사용하지 않고 프로젝트 디렉터리 밖의 경로를 거부한다. PCM WAV는 최대 50MB·1시간, mono/stereo, 16/24-bit만 지원하며 입력 sample rate·WAV chunk 수·정규화 예상 크기를 먼저 제한하고 프로젝트 샘플레이트의 PCM16 WAV로 정규화해 다시 검사한다. 저장 WAV의 실제 duration·sample rate·channel·codec은 Asset metadata 및 Cue 길이와 연결된다. 유효하지만 프로젝트 형식과 다른 이전 WAV는 `AUDIO_ASSET_NORMALIZATION_REQUIRED`로 구분하며 복구할 때 기존 Asset을 보존한다. AIFF·MP3는 명시적으로 거부한다.
+서버는 로컬 주소에 바인딩한다. 업로드 파일명은 저장 경로에 사용하지 않고 프로젝트 디렉터리 밖의 경로를 거부한다. PCM WAV는 최대 50MB·1시간, mono/stereo, 16/24-bit만 지원하며 입력 sample rate·WAV chunk 수와 출력 Frame·Byte·Sample 연산량을 먼저 제한한다. Sample 변환은 설정된 수의 Worker Thread에서 실행하고 실행 시간과 V8 메모리를 제한한다. 프로젝트 샘플레이트의 PCM16 WAV로 정규화한 결과는 다시 검사한다. 저장 WAV의 실제 duration·sample rate·channel·codec은 Asset metadata 및 Cue 길이와 연결된다. 유효하지만 프로젝트 형식과 다른 이전 WAV는 `AUDIO_ASSET_NORMALIZATION_REQUIRED`로 구분하며 복구할 때 기존 Asset을 보존한다. AIFF·MP3는 명시적으로 거부한다.
 
-ProjectStore는 이전/다음 Project와 새 revision·Asset을 transaction 디렉터리에 fsync하고 journal을 마지막에 기록한다. Asset, revision, 현재본 순서로 게시하고 각 디렉터리를 동기화한다. 서버 시작 때 현재 revision과 journal을 비교해 게시 전 중단은 제거하고, 완전히 게시된 결과는 확정하며, 게시 결과가 불완전하면 이전 Project로 되돌린다. 종료된 process의 lock은 제거하되 살아 있는 process의 lock은 유지한다. journal Asset 경로는 해당 프로젝트의 `assets` 아래로 제한한다. 복구는 구조화 로그와 `/api/status`에 기록한다.
+ProjectStore는 이전/다음 Project와 새 revision·Asset을 transaction 디렉터리에 fsync하고 journal version 2를 마지막에 기록한다. journal은 파일 SHA-256과 Asset ID·경로, Host·PID·transaction 소유권을 포함한다. Asset과 revision은 기존 파일을 덮어쓰지 않는 hard link로 게시하고 현재본의 원자 rename을 commit point로 사용한다. 서버 시작 때 현재 revision, journal, 파일 해시와 현재 참조를 비교해 증명된 게시 전 중단만 rollback하고 완전히 게시된 결과는 유지한다. 불완전한 게시의 이전 Project 복원에도 같은 증명을 적용한다. 살아 있는 process는 `PROJECT_BUSY`로 유지하고 다른 Host, 해석할 수 없는 lock, 기존 파일 충돌은 `STORE_RECOVERY_REQUIRED`로 보존한다. Initial Project는 create journal에서 완성한 디렉터리를 원자적으로 게시한다. journal Asset 경로는 해당 프로젝트의 `assets` 아래로 제한한다. 복구는 구조화 로그와 `/api/status`에 기록한다.
 
 API는 생성 버튼을 누른 시점의 최소 문맥 해시와 대상을 영속 요청으로 저장하며 외부 생성 서비스를 직접 호출하지 않는다. 웹 편집과 생성 실행은 서로 막지 않는다. Codex App 결과를 적용할 때 현재 대상 문맥 해시가 다르면 오래된 요청으로 거부한다. 빈 자산이나 다른 제공자로 자동 대체하지 않는다.
 
@@ -145,7 +145,7 @@ API는 생성 버튼을 누른 시점의 최소 문맥 해시와 대상을 영�
 3. 컷·시작/키/끝 프레임·독립 트랙·전환 생성과 편집·잠금, Text Mapping 상태 기계·Source Temporal Anchor·동적 Information Gate, JSON/CSV/PDF 보존: 구현 및 자동 검증됨.
 4. 로컬 저장/API·Mapping 편집 UI, 프로젝트 분리·재열기·원본 차이: 구현 및 자동 검증됨.
 5. 시각 기준, Codex App 컷·이미지·음성 요청과 결과 반영, 재생, PDF 출력: 구현 및 자동 검증됨. 합성 범용 사례와 PRJ-007 `SEG-008`의 실제 생성 흐름을 확인했다.
-6. 두 가지 이상의 구성으로 회귀·브라우저 검증, 전체 요구사항 감사: 23개 파일의 309개 자동 테스트로 합성 자료와 초기 회귀 자료의 가져오기·편집·출력을 검증했다. 신규 119개 검사는 독립 Placement 정보 판정, 실제 PCM WAV HTTP 등록·저장·재열기, 저장 미디어 해시·디코딩, 안전 출력, 1.5 Migration, 악성 WAV 자원 한계, 이전 WAV 정규화 복구, transaction 시작 복구와 브라우저 Audio 수명주기를 포함한다. PRJ-007 Golden은 실제 48,000Hz 2초 WAV를 `UNIT-045`의 849,000–851,000ms J-cut에 연결한다. 전체 분량의 시각·낭독 검토는 남아 있다.
+6. 두 가지 이상의 구성으로 회귀·브라우저 검증, 전체 요구사항 감사: 23개 파일의 321개 자동 테스트로 합성 자료와 초기 회귀 자료의 가져오기·편집·출력을 검증했다. 신규 131개 검사는 독립 Placement 정보 판정, 실제 PCM WAV HTTP 등록·저장·재열기, 저장 미디어 해시·디코딩, 안전 출력, 1.5 Migration, Worker 이벤트 루프 격리·시간 초과, 악성 WAV 자원 한계, 이전 WAV 정규화 복구, update·initial create 시작 복구, lock 소유권, 복수 Text Cue Anchor와 브라우저 Audio 수명주기를 포함한다. PRJ-007 Golden은 실제 48,000Hz 2초 WAV를 `UNIT-045`의 849,000–851,000ms J-cut에 연결한다. 전체 분량의 시각·낭독 검토는 남아 있다.
 
 필수 자동 검증은 원문 100% 보존과 단위 연결, 영상 시간 공백·중복, 잘못된 ID·구간 소유권, 미지원 버전·손상 해시, 공개 시점 위반, 잠근 필드 변경, 프로젝트 혼입, 저장·출력 정합성이다. 실제 제작 사례 수치는 fixture에만 둔다. 패널·반전이 없는 다른 분량의 프로젝트와 원본 ID가 겹치는 프로젝트도 검증한다.
 

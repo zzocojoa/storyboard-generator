@@ -11,6 +11,7 @@ import type { CodexRequest, CodexRequestKind } from '../codex/schema.js';
 import { codexRequestBasis } from '../codex/work.js';
 import { approveShot, mergeShots, reorderShots, setShotLocks, splitShot, updateShotContent } from '../domain/edit.js';
 import { attachAudioAsset } from '../domain/audio-asset.js';
+import { WorkerAudioNormalizer } from '../domain/audio-normalizer.js';
 import { contractError } from '../domain/errors.js';
 import { addStoryboardFrame, setFrameReview, StoryboardFrameInputSchema, updateProjectProfile, updateStoryboardFrame } from '../domain/frame.js';
 import { mappingReviewIssues, MoveShotSourceLinkInputSchema, moveShotSourceLink, ShotSourceLinksInputSchema, TextMappingDecisionInputSchema, updateShotSourceLinks, updateTextMappingDecision } from '../domain/mapping.js';
@@ -120,6 +121,7 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
   await ensureWebRoot(config.webRoot);
   await store.initialize();
   await requests.initialize();
+  const audioNormalizer: WorkerAudioNormalizer = new WorkerAudioNormalizer(config.audioNormalization);
   const app: FastifyInstance = Fastify({ logger: { level: 'info' }, bodyLimit: MAX_AUDIO_BYTES + 1024 * 1024 });
   await app.register(fastifyMultipart, { limits: { fileSize: MAX_AUDIO_BYTES, files: 1, fields: 1, parts: 2 } });
 
@@ -274,9 +276,9 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
     const { projectId, cueId } = CueParamsSchema.parse(request.params);
     const upload: AudioUpload = await readAudioUpload(request);
     const current: Project = await store.read(projectId);
-    const mutation = attachAudioAsset(current, cueId, `${randomUUID()}:audio`, {
+    const mutation = await attachAudioAsset(current, cueId, `${randomUUID()}:audio`, {
       originalFileName: upload.originalFileName, declaredMimeType: upload.declaredMimeType, bytes: upload.bytes,
-    });
+    }, audioNormalizer);
     const project: Project = await store.update(projectId, upload.expectedRevision, (): Project => mutation.project, assets(mutation));
     reply.status(201);
     return { project, audio: mutation.inspection };
@@ -286,9 +288,9 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
     const body = RevisionSchema.parse(request.body);
     const current: Project = await store.read(projectId);
     const source = await store.audioRecoverySource(current, cueId);
-    const mutation = attachAudioAsset(current, cueId, `${randomUUID()}:audio`, {
+    const mutation = await attachAudioAsset(current, cueId, `${randomUUID()}:audio`, {
       originalFileName: `legacy-${source.asset.id}.wav`, declaredMimeType: source.asset.mimeType, bytes: source.content,
-    });
+    }, audioNormalizer);
     const project: Project = await store.update(projectId, body.expectedRevision, (): Project => mutation.project, assets(mutation));
     reply.status(201);
     return { project, audio: mutation.inspection, replacedAssetId: source.asset.id };

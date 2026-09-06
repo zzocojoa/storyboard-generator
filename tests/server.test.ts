@@ -7,6 +7,7 @@ import { CodexRequestStore } from '../src/codex/requests.js';
 import type { AppConfig } from '../src/server/config.js';
 import { createApp } from '../src/server/app.js';
 import { ProjectStore } from '../src/server/store.js';
+import { TEST_AUDIO_NORMALIZATION_OPTIONS } from './helpers.js';
 
 const roots: string[] = [];
 
@@ -19,7 +20,8 @@ async function fixtureApp(): Promise<{ app: FastifyInstance; root: string; reque
   await mkdir(join(webRoot, 'assets'));
   await writeFile(join(webRoot, 'assets', 'app.js'), 'document.body.dataset.ready="true";', 'utf8');
   const config: AppConfig = { host: '127.0.0.1', port: 4317, dataRoot: join(root, 'data'), webRoot,
-    pdfFontPath: resolve('assets/fonts/NanumGothic-Regular.ttf'), codex: { requestRoot: join(root, 'requests'), speechVoice: 'Yuna' } };
+    pdfFontPath: resolve('assets/fonts/NanumGothic-Regular.ttf'), audioNormalization: TEST_AUDIO_NORMALIZATION_OPTIONS,
+    codex: { requestRoot: join(root, 'requests'), speechVoice: 'Yuna' } };
   const requests: CodexRequestStore = new CodexRequestStore(config.codex.requestRoot);
   return { app: await createApp(config, new ProjectStore(config.dataRoot), requests), root, requests };
 }

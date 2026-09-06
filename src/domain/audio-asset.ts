@@ -1,4 +1,5 @@
 import { assertAudioTimingRelation } from './audio.js';
+import type { AudioNormalizer } from './audio-normalizer.js';
 import { reviewInformationEmission } from './emission.js';
 import { assertNoErrors, contractError } from './errors.js';
 import { inspectAudioBytes } from './media-inspection.js';
@@ -31,7 +32,9 @@ function finalize(before: Project, input: Project): Project {
 }
 
 /** 실제 WAV 파일을 Audio Cue에 연결하고 파생된 검토 상태를 갱신한다. */
-export function attachAudioAsset(project: Project, cueId: string, assetId: string, input: AudioAssetImportInput): AttachedAudioAsset {
+export async function attachAudioAsset(
+  project: Project, cueId: string, assetId: string, input: AudioAssetImportInput, normalizer: AudioNormalizer,
+): Promise<AttachedAudioAsset> {
   const cue: AudioCue | undefined = project.audioCues.find((candidate: AudioCue): boolean => candidate.id === cueId);
   if (cue === undefined) throw contractError('AUDIO_CUE_NOT_FOUND', `오디오 큐를 찾을 수 없습니다. cueId=${cueId}`, []);
   if (project.assets.some((asset: Asset): boolean => asset.id === assetId)) {
@@ -39,7 +42,7 @@ export function attachAudioAsset(project: Project, cueId: string, assetId: strin
   }
   const unit = project.dataset.units.find((candidate): boolean => candidate.id === cue.unitId);
   if (unit === undefined) throw contractError('SOURCE_UNIT_NOT_FOUND', `오디오 큐의 원문을 찾을 수 없습니다. cueId=${cueId}, unitId=${cue.unitId}`, []);
-  const inspected = inspectAudioBytes(project, input.bytes, input.declaredMimeType);
+  const inspected = await inspectAudioBytes(project, input.bytes, input.declaredMimeType, normalizer);
   const measuredCue: AudioCue = { ...cue, endMs: cue.startMs + inspected.durationMs, timingStatus: 'measured', assetId };
   assertAudioTimingRelation(project, measuredCue);
   const gateIssues: Issue[] = reviewInformationEmission(project, { entityId: cue.id, channel: 'audio-playback', informationIds: [...unit.informationIds], atMs: cue.startMs });

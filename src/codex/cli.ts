@@ -2,6 +2,7 @@ import { parseArgs } from 'node:util';
 import { dirname } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import { ZodError } from 'zod';
+import { WorkerAudioNormalizer } from '../domain/audio-normalizer.js';
 import { contractError } from '../domain/errors.js';
 import type { Project } from '../domain/schema.js';
 import { writeNewText } from '../io/project.js';
@@ -68,7 +69,8 @@ async function applyImage(args: string[], store: ProjectStore, requests: CodexRe
 
 async function applySpeech(args: string[], config: AppConfig, store: ProjectStore, requests: CodexRequestStore): Promise<void> {
   const { values } = parseArgs({ args, options: { request: { type: 'string' }, input: { type: 'string' } }, strict: true, allowPositionals: false });
-  output({ project: projectResult(await applyCodexSpeech(required(values.request, '--request'), required(values.input, '--input'), config.codex.speechVoice, store, requests, new Date().toISOString())) });
+  const normalizer: WorkerAudioNormalizer = new WorkerAudioNormalizer(config.audioNormalization);
+  output({ project: projectResult(await applyCodexSpeech(required(values.request, '--request'), required(values.input, '--input'), config.codex.speechVoice, store, requests, new Date().toISOString(), normalizer)) });
 }
 
 async function fail(args: string[], requests: CodexRequestStore): Promise<void> {

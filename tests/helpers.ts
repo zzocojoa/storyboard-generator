@@ -3,6 +3,20 @@ import type { NativeDataset, PackagePayload } from '../src/domain/schema.js';
 import { parseJson, sha256Text } from '../src/importers/integrity.js';
 import { readPackage } from '../src/io/package.js';
 import sharp from 'sharp';
+import { WorkerAudioNormalizer } from '../src/domain/audio-normalizer.js';
+import type { AudioNormalizationWorkerOptions } from '../src/domain/audio-normalizer.js';
+
+export const TEST_AUDIO_NORMALIZATION_OPTIONS: AudioNormalizationWorkerOptions = {
+  maxWorkers: 2,
+  timeoutMs: 30_000,
+  maxOldGenerationSizeMb: 96,
+  maxYoungGenerationSizeMb: 16,
+  stackSizeMb: 4,
+};
+
+export function testAudioNormalizer(): WorkerAudioNormalizer {
+  return new WorkerAudioNormalizer(TEST_AUDIO_NORMALIZATION_OPTIONS);
+}
 
 export async function nativePackage(): Promise<PackagePayload> {
   return readPackage('tests/fixtures/native/storyboard_handoff.json');

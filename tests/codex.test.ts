@@ -10,7 +10,7 @@ import { importPackage } from '../src/importers/import-package.js';
 import type { Project } from '../src/domain/schema.js';
 import { createSourceOutline } from '../src/proposal/outline.js';
 import { ProjectStore } from '../src/server/store.js';
-import { nativePackage, png } from './helpers.js';
+import { nativePackage, png, testAudioNormalizer } from './helpers.js';
 
 const roots: string[] = [];
 
@@ -86,7 +86,7 @@ describe('Codex App 생성 브리지', (): void => {
     const speechRequest: CodexRequest = await requests.create('speech', proposed.projectId, cue.id, codexRequestBasis(proposed, 'speech', cue.id), '2026-09-06T00:00:02.000Z');
     const speechPath: string = join(root, 'speech.wav');
     await writeFile(speechPath, wav(200));
-    const spoken: Project = await applyCodexSpeech(speechRequest.id, speechPath, 'Yuna', store, requests, '2026-09-06T00:00:03.000Z');
+    const spoken: Project = await applyCodexSpeech(speechRequest.id, speechPath, 'Yuna', store, requests, '2026-09-06T00:00:03.000Z', testAudioNormalizer());
     expect(spoken.audioCues.find((candidate): boolean => candidate.id === cue.id)?.assetId).toBe(`codex:${speechRequest.id}:audio`);
     expect(spoken.generationRecords.at(-1)).toEqual(expect.objectContaining({ provider: 'codex-app', model: 'macos-say:Yuna' }));
   });

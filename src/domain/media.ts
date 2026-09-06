@@ -1,4 +1,5 @@
 import { attachAudioAsset } from './audio-asset.js';
+import type { AudioNormalizer } from './audio-normalizer.js';
 import { assertNoErrors, contractError } from './errors.js';
 import { inspectImageBytes, wavDurationMs } from './media-inspection.js';
 import type { Asset, AudioCue, GenerationRecord, Project, StoryboardFrame } from './schema.js';
@@ -81,16 +82,16 @@ export async function applyGeneratedImage(
   return { project: finalize(project, next), relativePath, content: result.bytes };
 }
 
-export function applyGeneratedSpeech(
-  project: Project, cueId: string, generationId: string, createdAt: string, result: GeneratedSpeech,
-): GeneratedMutation {
+export async function applyGeneratedSpeech(
+  project: Project, cueId: string, generationId: string, createdAt: string, result: GeneratedSpeech, normalizer: AudioNormalizer,
+): Promise<GeneratedMutation> {
   requireUniqueGenerationId(project, generationId);
   const cue: AudioCue | undefined = project.audioCues.find((candidate: AudioCue): boolean => candidate.id === cueId);
   if (cue === undefined) throw contractError('AUDIO_CUE_NOT_FOUND', `오디오 큐를 찾을 수 없습니다: ${cueId}`, []);
   if (!['dialogue', 'voiceover', 'panel'].includes(cue.kind)) throw contractError('SPEECH_CUE_REQUIRED', `${cueId}: 대사·내레이션·패널 발화만 가이드 음성으로 만들 수 있습니다.`, []);
-  const attached = attachAudioAsset(project, cueId, `${generationId}:audio`, {
+  const attached = await attachAudioAsset(project, cueId, `${generationId}:audio`, {
     originalFileName: `${generationId}.wav`, declaredMimeType: result.mimeType, bytes: result.bytes,
-  });
+  }, normalizer);
   const unit = project.dataset.units.find((candidate): boolean => candidate.id === cue.unitId);
   if (unit === undefined) throw contractError('SOURCE_UNIT_NOT_FOUND', `오디오 큐의 원문을 찾을 수 없습니다: ${cue.unitId}`, []);
   const shotIds: string[] = project.shots.filter((shot): boolean => shot.sourceLinks.some((link): boolean => link.unitId === unit.id)).map((shot): string => shot.id);

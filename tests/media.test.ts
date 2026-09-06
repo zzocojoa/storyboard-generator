@@ -3,7 +3,7 @@ import type { Project } from '../src/domain/schema.js';
 import { addReferenceAsset, applyGeneratedImage, applyGeneratedSpeech, wavDurationMs } from '../src/domain/media.js';
 import { importPackage } from '../src/importers/import-package.js';
 import { createSourceOutline } from '../src/proposal/outline.js';
-import { nativePackage, png } from './helpers.js';
+import { nativePackage, png, testAudioNormalizer } from './helpers.js';
 
 function wav(durationMs: number): Buffer {
   const sampleRate: number = 8000;
@@ -26,7 +26,7 @@ describe('생성 미디어 반영', (): void => {
     if (cue === undefined) throw new Error('오디오 검증 자료가 없습니다.');
     const bytes: Buffer = wav(500);
     expect(wavDurationMs(bytes)).toBe(500);
-    const mutation = applyGeneratedSpeech(project, cue.id, 'speech-generation', '2026-09-06T00:00:00.000Z', { bytes, provider: 'codex-app', prompt: '가이드', model: 'speech-model', requestId: 'request-1', mimeType: 'audio/wav' });
+    const mutation = await applyGeneratedSpeech(project, cue.id, 'speech-generation', '2026-09-06T00:00:00.000Z', { bytes, provider: 'codex-app', prompt: '가이드', model: 'speech-model', requestId: 'request-1', mimeType: 'audio/wav' }, testAudioNormalizer());
     expect(mutation.project.audioCues.find((candidate): boolean => candidate.id === cue.id)).toEqual(expect.objectContaining({ assetId: 'speech-generation:audio', timingStatus: 'measured', endMs: cue.startMs + 500 }));
     expect(mutation.project.generationRecords[0]).toEqual(expect.objectContaining({ provider: 'codex-app', requestId: 'request-1', resultAssetIds: ['speech-generation:audio'] }));
     expect(project.audioCues.find((candidate): boolean => candidate.id === cue.id)?.assetId).toBeNull();

@@ -13,7 +13,7 @@ import { importPackage } from '../src/importers/import-package.js';
 import { migrateProjectInput, parseProject } from '../src/io/project.js';
 import { buildFrameImageContext } from '../src/proposal/context.js';
 import { createSourceOutline } from '../src/proposal/outline.js';
-import { nativeData, nativePackage, withNativeData } from './helpers.js';
+import { nativeData, nativePackage, testAudioNormalizer, withNativeData } from './helpers.js';
 
 function wav(durationMs: number): Buffer {
   const sampleRate: number = 8000;
@@ -335,7 +335,7 @@ describe('J-cut and L-cut contract', (): void => {
     const project: Project = await outline();
     const cue: AudioCue = project.audioCues.find((candidate: AudioCue): boolean => candidate.unitId === '안내-1') as AudioCue;
     const prepared: Project = { ...project, audioCues: project.audioCues.map((candidate: AudioCue): AudioCue => candidate.id === cue.id ? { ...candidate, startMs: 4000, endMs: 6000, timingRelation: 'j-cut' } : candidate) };
-    const mutation = applyGeneratedSpeech(prepared, cue.id, 'j-cut-speech', '2026-09-06T00:00:00.000Z', { bytes: wav(1500), provider: 'codex-app', prompt: '가이드', model: 'macos-say:test', requestId: 'request', mimeType: 'audio/wav' });
+    const mutation = await applyGeneratedSpeech(prepared, cue.id, 'j-cut-speech', '2026-09-06T00:00:00.000Z', { bytes: wav(1500), provider: 'codex-app', prompt: '가이드', model: 'macos-say:test', requestId: 'request', mimeType: 'audio/wav' }, testAudioNormalizer());
     expect(mutation.project.audioCues.find((candidate: AudioCue): boolean => candidate.id === cue.id)).toEqual(expect.objectContaining({ startMs: 4000, endMs: 5500, timingRelation: 'j-cut', timingStatus: 'measured' }));
   });
 });

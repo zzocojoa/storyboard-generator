@@ -134,8 +134,9 @@ export function mergePlacementInformationDecisions(
 export function rebuildTextDerivedAnchors(project: Project): Shot[] {
   return project.shots.map((shot: Shot): Shot => ({ ...shot, sourceLinks: shot.sourceLinks.map((link: ShotSourceLink): ShotSourceLink => {
     if (link.temporalAnchor.kind !== 'shot-offset' || link.temporalAnchor.basis !== 'text-cue') return link;
-    const cue: TextCue | undefined = project.textCues.find((candidate: TextCue): boolean => candidate.unitId === link.unitId
+    const candidates: TextCue[] = project.textCues.filter((candidate: TextCue): boolean => candidate.unitId === link.unitId
       && candidate.startMs >= shot.startMs && candidate.endMs <= shot.endMs);
+    const cue: TextCue | undefined = candidates.length === 1 ? candidates[0] : undefined;
     if (cue === undefined) return { ...link, status: 'mapping-required', temporalAnchor: { kind: 'unresolved', basis: 'source-update', status: 'review-required' } };
     return { ...link, status: 'confirmed', temporalAnchor: { kind: 'shot-offset', startOffsetMs: cue.startMs - shot.startMs,
       endOffsetMs: cue.endMs - shot.startMs, basis: 'text-cue', status: 'confirmed' } };

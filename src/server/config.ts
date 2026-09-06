@@ -1,11 +1,13 @@
 import { dirname, resolve } from 'node:path';
 import { z } from 'zod';
+import { AudioNormalizationWorkerOptionsSchema } from '../domain/audio-normalizer.js';
 import { parseJson } from '../importers/integrity.js';
 import { readUtf8 } from '../io/package.js';
 
 export const AppConfigSchema = z.strictObject({
   host: z.literal('127.0.0.1'), port: z.number().int().min(1024).max(65535),
   dataRoot: z.string().min(1), webRoot: z.string().min(1), pdfFontPath: z.string().min(1),
+  audioNormalization: AudioNormalizationWorkerOptionsSchema,
   codex: z.strictObject({ requestRoot: z.string().min(1), speechVoice: z.string().min(1) }),
 });
 
