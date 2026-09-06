@@ -1,86 +1,67 @@
-# 범용 콘티 도구 — 1.4.0 구현 보고서
+# 범용 콘티 도구 — 출력 안전성 구현 보고서
 
-## 1. 작업 기준
+## 1 작업 기준
 
 - Branch: `codex/storyboard-generator`
-- 구현 시작 HEAD: `34646b9261fff80aefe915944e742e72fa457663`
-- 구현 종료 HEAD: `fdc24dc19f065a73b424074553ab56878e6b7ae1`
-- Project Schema: `1.3.0 → 1.4.0`
+- 구현 시작 HEAD: `c985dd24671747e29ebe92b0c0dd921839c48cd2`
+- Project Schema: `1.4.0`
 - 실행 경계: Codex App의 현재 모델, 내장 `image_gen`, 설정된 macOS 음성을 사용한다. `OPENAI_API_KEY`, OpenAI SDK, 외부 생성 fallback은 사용하지 않는다.
-- 범위: 특정 프로젝트에 종속되지 않는 최종 정보 출력 경계다. PRJ-007은 fixture와 Golden 회귀로만 사용한다.
+- 범위: 범용 Text·Frame 출력 안전성이다. PRJ-007 ID와 시각은 production fixture와 Golden 회귀에서만 사용한다.
 
-## 2. 재현한 결함
+## 2 재현한 결함
 
-| 재현 테스트 | 기존 동작 | 수정 | 수정 후 결과 |
-|---|---|---|---|
-| `playback_does_not_render_review_required_text` 외 Text 9개 | Text Cue의 본문 권한과 Gate가 실제 Monitor 출력 경로에서 강제되지 않았다. | Cue authority와 공통 출력 판정, 안전 선택자를 추가했다. | 권한 미확정·조기 정보는 본문 없이 code와 ID만 표시된다. |
-| `proposed_audio_asset_is_not_playable` 외 Audio 7개 | proposed 또는 자산·Gate가 유효하지 않은 Audio를 실제 재생할 수 있었다. | measured Asset·관계·정보 Gate를 함께 검사하는 재생 선택자를 연결했다. | 안전한 Cue만 `Audio.play()`에 도달한다. |
-| `end_frame_uses_last_inside_instant` 외 End Frame 6개 | `offsetMs === shot duration`인 End Frame을 반열린 범위 밖으로 평가했다. | 표시 시각과 평가 시각을 분리했다. | End Frame은 종료점에 표시되고 마지막 내부 ms에서 Source·Mapping·Gate를 평가한다. |
-| `j_cut_requires_previous_adjacent_segment` 외 J/L 13개 | Cross-Segment Audio의 의도를 구조적으로 구분하지 못했고 Gate 증거가 될 수 있었다. | 세 관계와 인접 범위 검사를 추가하고 J/L을 Gate 증거에서 제외했다. | 합법 J/L만 저장·재생되고 범위 위반과 Gate 조기화는 차단된다. |
-| `migration_130_to_140_preserves_data` 외 Migration 5개 | 1.3 저장본에 새 권한·관계 필드가 없었다. | 기존 근거에서 보수적으로 값을 복원하는 1.4 Migration을 추가했다. | 원문·컷·자산은 보존되고 모호한 Text Cue는 review-required가 된다. |
+- 미해결 Placement Mapping은 Information ID가 빈 배열이어서 Program Monitor와 내보내기 검사를 우회할 수 있었다.
+- `separate-element` Placement가 별도 Canonical Cue의 Information ID를 잘못 상속했다.
+- Canonical Cue 재사용이 Mapping Decision이 아닌 Canonical Unit ID를 기준으로 해 같은 Unit을 쓰는 두 결정이 충돌했다.
+- Frame의 `imageAssetId`가 남아 있으면 pending·rejected·stale 상태에서도 Program Monitor와 PDF가 bitmap을 읽을 수 있었다.
+- PRJ-007 SEG-018 호출음 J-cut 회귀가 실제 SOUND Source 대신 SEG-018 NARRATION `UNIT-044`를 대상으로 했다.
 
-첫 출력 경계 실행은 import 누락으로 실패했고, 구현 후 40개 중 39개가 통과했다. 남은 End Frame 진단을 수정한 뒤 출력 경계 40개와 PRJ-007 Golden 4개가 모두 통과했다.
+## 3 Text 출력 수정
 
-## 3. 핵심 구현
+- `resolveTextCueMapping`이 Placement별 결정 수와 상태를 `resolved`, `review-required`, `missing`, `ambiguous`로 판정한다.
+- 결정이 유일하게 확정되지 않으면 `TEXT_MAPPING_REVIEW_REQUIRED`, `TEXT_MAPPING_DECISION_MISSING`, `TEXT_MAPPING_DECISION_AMBIGUOUS`로 본문을 차단한다.
+- exact·abbreviation·replacement Placement만 Canonical Information ID를 상속한다. separate-element·standalone Placement는 상속하지 않는다.
+- Canonical Cue는 `mappingDecisionId`로 생성·재사용한다.
+- review-required Text Cue는 `expectedRevision` API와 Inspector에서 Placement, Mapping Decision, Source Unit 권한으로 원문 기반 재구성하거나 필수 커버리지 검증 뒤 삭제할 수 있다.
 
-- **Information Emission Interlock:** 이미지, Text Overlay, Audio Playback, Speech Generation, Proposal, Export가 `reviewInformationEmission`의 원본 근거·Rule 존재·review 상태·유효 Gate 판정을 공유한다.
-- **TextCue authority:** `placement`, `mapping-decision`, `source-unit`, `review-required`와 연결 ID를 Schema에 저장한다. Mapping 파생 Cue의 직접 본문·시각 변경은 거부하고 Source Unit Cue 편집은 Gate를 검사한다.
-- **Safe Text playback:** Program Monitor는 `playableTextCuesAt`만 렌더링한다. 차단된 Cue는 본문 대신 cue ID, information ID, issue code를 표시한다.
-- **Safe Audio playback:** `playableAudioCuesAt`은 measured 상태, Audio Asset의 대상·길이, timing relation, 정보 Gate를 모두 검사한다. Timeline과 실제 Audio 요소가 같은 결과를 사용한다.
-- **End Frame:** display time은 `endMs`, evaluation time은 `max(startMs, endMs - 1)`다. 이미지 문맥, Source Anchor, Text Mapping, Gate, 재생, CSV·PDF에 같은 경계를 적용한다.
-- **J/L-cut:** Audio Cue는 `within-segment`, `j-cut`, `l-cut` 중 하나를 명시한다. J-cut은 바로 앞 Segment부터 원본 Segment 안까지, L-cut은 원본 Segment부터 바로 다음 Segment까지 허용한다. J/L은 Gate 증거가 아니다.
-- **Speech apply:** 요청 문맥에 timing relation·overhang·information IDs·Segment 범위를 넣는다. 생성 WAV의 측정 길이로 만든 후보가 관계·Gate 검사를 통과한 뒤에만 Asset과 measured Cue를 반영한다.
+## 4 Frame 출력 수정
 
-## 4. Schema와 Migration
+- `reviewFrameOutput`이 Program Monitor, transition preview, PDF, CSV의 자산 존재·종류·대상 Frame, 시각 승인, Source Mapping, Information Gate를 함께 검사한다.
+- 차단된 bitmap은 Program Monitor와 전환에서 placeholder로 보이고 PDF 자산 로더에 전달되지 않는다. PDF placeholder와 CSV에는 Frame ID와 Issue code가 남는다.
+- Shot Board와 Frame Editor는 이전 bitmap을 검토할 수 있으며 `CURRENT`, `PENDING REVIEW`, `STALE`, `REJECTED`, `OUTPUT BLOCKED` 상태를 표시한다.
+- JSON은 기존 `imageAssetId`와 Asset을 보존한다. Frame·Shot·Mapping·Source·프로필·기준 자산 변경은 관련 Frame을 pending, Shot을 proposed로 되돌린다.
 
-- `storyboard_project.schema.json`의 version은 `1.4.0`이다.
-- `AudioCue.timingRelation`은 필수다.
-- `TextCue.mappingDecisionId`와 `TextCue.authority`는 필수이며 Zod가 authority별 연결 불변식을 검사한다.
-- 저장본은 `1.0.0 → 1.1.0 → 1.2.0 → 1.3.0 → 1.4.0` 순서로 변환한다.
-- 1.3 Audio Cue는 기존 Segment 내부 계약에 따라 `within-segment`가 된다. Text Cue는 Placement, exact Mapping, Source Unit 순서로 권한을 복원하고 유일하지 않은 경우 `review-required`로 둔다.
-- Migration은 source snapshot, 원문·ID, Segment·Shot·Frame 시간, Asset, Generation Record를 보존한다. display/evaluation time은 유도값이라 저장하지 않고 다시 계산한다.
+## 5 PRJ-007 J-cut Traceability
 
-## 5. 변경 파일
+- 편집 원본의 SEG-018 지시는 호출음 J-cut으로 아파트 내부에 재진입하도록 요구한다.
+- 촬영 원본은 인터폰 호출음을 선행한 뒤 태균 표정으로 컷 인하도록 요구한다.
+- 실제 호출음 Source는 `SEG-019`, `UNIT-045`, `SOUND`이고 SEG-018→SEG-019 경계는 850,000ms다.
+- 849,000–851,000ms J-cut은 1초 선행하는 제작 결정으로 저장·재열기·재생되며 원본 절대시간 지시로 취급하지 않는다. `UNIT-044`는 SEG-018 NARRATION으로 유지한다.
 
-- 신규: `src/domain/audio.ts`, `src/domain/emission.ts`, `tests/output-boundary-regression.test.ts`
-- Domain/Codex: `schema.ts`, `time.ts`, `mapping.ts`, `tracks.ts`, `playback.ts`, `media.ts`, `validation.ts`, `proposal/context.ts`, `proposal/outline.ts`, `codex/work.ts`
-- IO/출력: `io/project.ts`, `importers/import-package.ts`, `exporters/csv.ts`, `exporters/pdf.ts`, 생성 Project Schema
-- UI: `web/src/App.tsx`, `web/src/styles.css`
-- 검증: 기존 7개 테스트 파일과 PRJ-007 Golden
-- 문서: `README.md`, `AGENTS.md`, Design, Analysis, Report, `storyboard-workbench` Skill
-- 사용자 소유 untracked 파일 `README 2.md`는 수정·추적하지 않았다.
+## 6 Schema와 Migration
 
-## 6. 테스트 결과
+- 새 안전성 정보는 저장 필드가 아니라 현재 Project에서 계산하는 출력 판정이다. 따라서 Schema와 Migration은 `1.4.0`을 유지한다.
+- Migration에서 보존한 review-required Cue는 새 권한 복구·삭제 API로 처리한다.
+- stale Frame Asset은 삭제하거나 덮어쓰지 않고 기존 Project JSON에 보존한다.
 
-| 명령 | 결과 | 파일/테스트 | 확인 내용 |
-|---|---:|---:|---|
-| `npm run schemas:write` | 성공 | 해당 없음 | 1.4.0 JSON Schema 생성 |
-| `npm run typecheck` | 성공 | 해당 없음 | Domain·Server strict type 검사 |
-| `npm run typecheck:web` | 성공 | 해당 없음 | React UI strict type 검사 |
-| `npm test` | 성공 | 20 / 142 | 기존 98개와 신규 44개 회귀 |
-| `npm run schemas:check` | 성공 | 해당 없음 | Zod와 생성 Schema 정합성 |
-| `npm run build:web` | 성공 | 해당 없음 | 운영 Vite bundle |
-| `npm run check` | 성공 | 20 / 142 | 전체 통합 검사 |
+## 7 테스트 결과
 
-## 7. PRJ-007 Golden
+필수 검증 명령은 `schemas:write`, 서버·웹 typecheck, 21개 파일의 190개 테스트, `schemas:check`, 운영 웹 build, 통합 `check`다. 회귀는 Placement Mapping 11개, Text 권한 8개, Canonical identity 3개, Frame 출력 13개, PRJ-007 Source fidelity 10개, Golden 격리·보고 3개를 포함하고 프로필·기준 자산 무효화도 확인한다.
 
-- 기존 구조: Scene 12, Segment 32, screenplay Source Unit 79, Panel Turn 16, 전체 1,500,000ms, 원문 변경 0건을 유지한다.
-- SEG-024 Text·Audio는 FACT-03 1,088,000ms, FACT-02·FACT-09 1,108,000ms, FACT-10 1,148,000ms의 3단계 Gate 전에는 출력되지 않는다.
-- SEG-018의 UNIT-044 Audio는 829,000–831,000ms J-cut으로 저장·JSON 재열기·재생되며 기존 Effective Gate 목록을 바꾸지 않는다.
-- End Frame은 마지막 내부 시각의 Source만 사용하며 다음 Shot의 정보와 후반 Text Mapping을 포함하지 않는다.
-- PRJ-007의 ID와 시각은 fixture와 Golden Test에만 있고 공통 로직에는 없다.
+## 8 PRJ-007 Golden
 
-## 8. CI
+- Scene 12, Segment 32, screenplay Source Unit 79, Panel Turn 16, 전체 1,500,000ms와 원문·참조를 유지한다.
+- SEG-024 Mapping helper는 명시한 Segment 결정만 변경한다.
+- SEG-024 Text는 세 공개 시점을 검증한다. Audio는 실제 발화 Source와 측정 Cue가 뒷받침하는 단계만 보고하며 전체 세 단계를 검증했다고 주장하지 않는다.
+- SEG-018 호출음은 `UNIT-045` J-cut으로 검증하고 Information Gate 목록을 변경하지 않는다.
 
-- Push HEAD: `fdc24dc19f065a73b424074553ab56878e6b7ae1`
-- Workflow Run ID: `34012724139`
-- 실행 결과: [GitHub Actions CI](https://github.com/zzocojoa/storyboard-generator/actions/runs/34012724139) 성공
-- GitHub는 깨끗한 Ubuntu runner와 Node.js 24에서 `npm ci`, `npm run check`를 실행했다.
-- 로컬은 Schema 생성 후 각 typecheck·test·Schema check·web build를 개별 실행하고 `npm run check`를 다시 실행했다. GitHub는 생성 파일을 수정하지 않고 저장소에 반영된 Schema의 drift를 검사했다.
+## 9 CI
 
-## 9. 남은 위험
+GitHub Actions는 깨끗한 Ubuntu runner와 Node.js 24에서 `npm ci`와 `npm run check`를 실행한다. 완료 보고에는 push한 최종 HEAD와 동일한 run의 결과만 기록한다.
 
-- 정보 ID와 원문 관계 검사는 이미지가 사실을 간접적으로 암시하는지 판단하지 못한다. 생성 그림의 사람 검토가 필요하다.
-- PRJ-007 전체 분량의 연출·시각 연속성·자막 가독성·가이드 음성 호흡은 제작 검토가 남아 있다.
+## 10 남은 위험
+
+- 정보 ID 검사는 bitmap이 사실을 간접 암시하는지 판정하지 못하므로 시각 검토가 필요하다.
+- PRJ-007 전체 분량의 연출·자막 가독성·가이드 음성 호흡은 제작 검토가 남아 있다.
 - 지원 입력은 `native-v1`, `production-v1`이다. 임의 문서 입력, 클라우드 협업, 완성 영상 렌더링은 현재 범위가 아니다.
 - Codex App은 요청별 비용을 노출하지 않아 비용을 `N/A`로 표시한다.

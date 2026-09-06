@@ -29,6 +29,21 @@ afterEach(async (): Promise<void> => {
 });
 
 describe('로컬 작업 API', (): void => {
+  it('authority_resolution_requires_expected_revision', async (): Promise<void> => {
+    const { app } = await fixtureApp();
+    try {
+      const imported = await app.inject({ method: 'POST', url: '/api/projects/import', payload: { handoffPath: 'tests/fixtures/native/storyboard_handoff.json', proposedTextHoldMs: 2000 } });
+      const cueId: string = imported.json<{ project: { textCues: Array<{ id: string }> } }>().project.textCues[0]?.id ?? '';
+      const missing = await app.inject({ method: 'POST', url: `/api/projects/plant-care-demo/text/${encodeURIComponent(cueId)}/authority`,
+        payload: { resolution: { authority: 'source-unit', unitId: '제목', startMs: 0, endMs: 500, kind: 'overlay' } } });
+      expect(missing.statusCode).toBe(400);
+      const stale = await app.inject({ method: 'POST', url: `/api/projects/plant-care-demo/text/${encodeURIComponent(cueId)}/authority`,
+        payload: { expectedRevision: 1, resolution: { authority: 'source-unit', unitId: '제목', startMs: 0, endMs: 500, kind: 'overlay' } } });
+      expect(stale.statusCode).toBe(409);
+      expect(stale.json().error.code).toBe('REVISION_CONFLICT');
+    } finally { await app.close(); }
+  });
+
   it('정적 자산·가져오기·리비전 충돌·PDF 내보내기를 함께 처리한다', async (): Promise<void> => {
     const { app } = await fixtureApp();
     try {

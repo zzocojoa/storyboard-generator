@@ -240,7 +240,7 @@ function canonicalCue(project: Project, decision: TextMappingDecision, existing:
     || decision.canonicalStartMs === null || decision.canonicalEndMs === null) return [];
   const unit: SourceUnit | undefined = project.dataset.units.find((value: SourceUnit): boolean => value.id === decision.canonicalUnitId);
   if (unit === undefined) throw contractError('SOURCE_UNIT_NOT_FOUND', `원문 단위를 찾을 수 없습니다: ${decision.canonicalUnitId}`, []);
-  const current: TextCue | undefined = existing.find((cue: TextCue): boolean => cue.unitId === unit.id && cue.placementId === null);
+  const current: TextCue | undefined = existing.find((cue: TextCue): boolean => cue.authority === 'mapping-decision' && cue.mappingDecisionId === decision.id);
   return [{
     id: current?.id ?? `${decision.id}:canonical`, segmentId: unit.segmentId, unitId: unit.id, placementId: null,
     mappingDecisionId: decision.id, authority: 'mapping-decision',

@@ -27,11 +27,11 @@ Unit 순서만으로 계산한 시각은 확인 근거가 생길 때까지 revie
 
 ## 최종 출력 경계
 
-Text Cue는 `placement`, `mapping-decision`, `source-unit`, `review-required` 권한과 필요한 연결 ID를 가진다. Canonical Mapping에서 유도한 Cue의 본문·시각을 직접 편집할 수 없으며 Source Unit 기반 Cue의 본문 변경은 같은 Information Gate 검사를 거친다. Program Monitor는 `playableTextCuesAt`만 사용하고 차단 항목은 ID·채널·정보 ID·Issue code로 설명한다.
+Text Cue는 `placement`, `mapping-decision`, `source-unit`, `review-required` 권한과 필요한 연결 ID를 가진다. Placement Cue는 Mapping Decision이 없거나 중복되거나 미해결이면 정보 ID가 비어 있어도 출력되지 않는다. exact·abbreviation·replacement만 Canonical 정보 ID를 상속하며 separate-element와 standalone Placement는 상속하지 않는다. 별도 Canonical Cue는 Mapping Decision ID로 구별한다. 검토 필요 Cue는 API와 Inspector에서 권한 Source로 재구성하거나 커버리지를 확인해 삭제한다. Program Monitor는 `playableTextCuesAt`만 사용한다.
 
 Audio Cue는 `within-segment`, `j-cut`, `l-cut` 관계를 명시한다. proposed 상태, 대상·길이가 맞지 않는 Asset, 관계 범위 위반, 미해결 정보 규칙, Gate 조기 재생은 실제 `Audio.play()` 경로에서 제외된다. 음성 요청 문맥에는 관계와 경계 초과량, 정보 ID, Segment 범위가 포함되고, 생성 WAV의 측정 길이로 만든 후보 Cue가 같은 검사를 통과해야 Asset을 등록한다.
 
-End Frame은 `endMs`에 표시하고 `endMs - 1`에서 평가한다. 이 구분은 이미지 문맥, 활성 Source·Text Mapping, Gate, 재생 선택, CSV·PDF 표시에서 동일하다. 이미지·글자·음성·제안·내보내기는 공통 `reviewInformationEmission` 판정을 공유한다.
+End Frame은 `endMs`에 표시하고 `endMs - 1`에서 평가한다. `reviewFrameOutput`은 이미지 자산의 종류와 대상, accepted 상태, 활성 Source·Text Mapping과 Gate를 Program Monitor·전환·PDF·CSV에 공통 적용한다. 변경으로 pending 또는 rejected가 된 bitmap은 JSON과 검토 화면에 남고 안전 출력에서는 placeholder와 Issue code로 대체된다.
 
 ## Mapping과 편집 의미
 
@@ -47,8 +47,8 @@ JSON은 기준 규칙과 모든 재계산 입력을 보존한다. CSV는 `source
 
 ## 검증 범위
 
-기존 정보 공개 회귀의 27개 이름을 유지한다. 출력 경계 회귀 44개는 Text Cue 권한·Gate, Audio 자산·관계·재생·음성 반영, End Frame 표시·평가, J/L 인접 범위와 Gate 비증거성, 1.3→1.4 Migration, PRJ-007의 SEG-024 Text·Audio Gate와 SEG-018 J-cut을 검사한다.
+기존 정보 공개 회귀를 유지하면서 Placement Mapping, Text 권한 복구·삭제, Canonical Cue identity, Frame 자산 무효화와 네 안전 출력 채널, PRJ-007 Source fidelity 검사를 추가했다.
 
-현재 로컬 자동 검사는 20개 파일의 142개 테스트를 통과한다. PRJ-007 Golden은 12 Scene, 32 Segment, screenplay Unit 79개, Panel Turn 16개, 1,500,000ms와 원문·시간·참조 보존을 검사한다. `SEG-024`의 공개 시각은 1,088,000ms, 1,108,000ms, 1,108,000ms, 1,148,000ms이며 Text·Audio도 이 Gate 전에는 출력되지 않는다. `SEG-018`의 J-cut은 앞 구간에서 재생되지만 Gate를 변경하지 않는다.
+현재 로컬 자동 검사는 21개 파일의 190개 테스트를 통과한다. PRJ-007 Golden은 12 Scene, 32 Segment, screenplay Unit 79개, Panel Turn 16개, 1,500,000ms와 원문·시간·참조 보존을 검사한다. `SEG-024` Text는 1,088,000ms, 1,108,000ms, 1,148,000ms 공개를 검사하고 Audio는 실제 발화 Source가 지원하는 단계만 보고한다. `SEG-018` 편집·촬영 지시는 850,000ms 다음 구간의 SOUND `UNIT-045`를 849,000–851,000ms J-cut으로 사용하며 1초 선행 재생이 Gate를 변경하지 않음을 검사한다.
 
 자동 검사는 구조·문자열·시간·참조·상태 무결성을 판정한다. 그림의 연출, 정보의 시각적 암시, 자막 가독성과 낭독 자연스러움은 사람이 실제 결과를 검토해야 한다. 지원 입력은 `native-v1`과 `production-v1`이며 임의 문서 가져오기, 클라우드 협업, 전체 영상 렌더링은 현재 범위가 아니다.

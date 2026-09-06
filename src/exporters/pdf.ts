@@ -1,6 +1,9 @@
 import PDFDocument from 'pdfkit';
 import { reviewIssuesForTextCue } from '../domain/emission.js';
-import { effectiveInformationGate, reviewIssuesForFrame } from '../domain/mapping.js';
+import { contractError } from '../domain/errors.js';
+import { frameOutputPlaceholderText, reviewFrameOutput } from '../domain/frame-output.js';
+import type { FrameOutputDecision } from '../domain/frame-output.js';
+import { effectiveInformationGate } from '../domain/mapping.js';
 import type { EffectiveInformationGate } from '../domain/mapping.js';
 import { reviewAudioPlaybackAt } from '../domain/playback.js';
 import type { BlockedCue } from '../domain/playback.js';
@@ -10,7 +13,7 @@ import { formatMilliseconds, frameDisplayAbsoluteMs, frameEvaluationAbsoluteMs }
 export type AssetLoader = (assetId: string) => Promise<Buffer>;
 
 type FramePageItem = {
-  frame: StoryboardFrame; shot: Shot; image: Buffer | null; sourceText: string; gateText: string; outputText: string;
+  frame: StoryboardFrame; shot: Shot; image: Buffer | null; sourceText: string; gateText: string; outputText: string; placeholderText: string;
 };
 type FrameRect = { x: number; y: number; width: number; height: number };
 
@@ -19,8 +22,10 @@ async function pageItems(project: Project, loadAsset: AssetLoader): Promise<Fram
     .filter((frame: StoryboardFrame): boolean => frame.shotId === shot.id)
     .sort((left: StoryboardFrame, right: StoryboardFrame): number => left.offsetMs - right.offsetMs));
   return Promise.all(orderedFrames.map(async (frame: StoryboardFrame): Promise<FramePageItem> => {
-    const shot: Shot = project.shots.find((candidate: Shot): boolean => candidate.id === frame.shotId) as Shot;
-    const frameIssues: Issue[] = reviewIssuesForFrame(project, frame.id);
+    const shot: Shot | undefined = project.shots.find((candidate: Shot): boolean => candidate.id === frame.shotId);
+    if (shot === undefined) throw contractError('SHOT_NOT_FOUND', `${frame.id}: PDF 출력용 Shot을 찾을 수 없습니다.`, []);
+    const frameDecision: FrameOutputDecision = reviewFrameOutput(project, frame.id, 'pdf-export');
+    const frameIssues: Issue[] = frameDecision.issues;
     const sourceText: string = frameIssues.length > 0 ? '[OUTPUT BLOCKED]' : shot.sourceLinks.map((link): string => `[${link.usage}/${link.status}/${link.temporalAnchor.kind}:${link.temporalAnchor.basis}] ${project.dataset.units.find((unit): boolean => unit.id === link.unitId)?.text ?? link.unitId}`).join(' / ');
     const gates: EffectiveInformationGate[] = project.dataset.informationRules.filter((rule): boolean => rule.segmentId === shot.segmentId)
       .map((rule): EffectiveInformationGate => effectiveInformationGate(project, rule.id));
@@ -31,7 +36,9 @@ async function pageItems(project: Project, loadAsset: AssetLoader): Promise<Fram
       .flatMap((cue: TextCue): Issue[] => reviewIssuesForTextCue(project, cue.id));
     const codes: string[] = [...new Set([...frameIssues, ...textIssues, ...audioBlocked.flatMap((entry: BlockedCue): Issue[] => entry.issues)].map((value: Issue): string => value.code))];
     const outputText: string = codes.length === 0 ? 'OUTPUT SAFE' : `DRAFT · OUTPUT INTERLOCK REVIEW REQUIRED · ${codes.join(', ')}`;
-    return { frame, shot, image: frame.imageAssetId === null ? null : await loadAsset(frame.imageAssetId), sourceText, gateText, outputText };
+    const placeholderText: string = frameOutputPlaceholderText(frameDecision, frame.description);
+    return { frame, shot, image: frameDecision.renderBitmap && frameDecision.imageAssetId !== null ? await loadAsset(frameDecision.imageAssetId) : null,
+      sourceText, gateText, outputText, placeholderText };
   }));
 }
 
@@ -65,7 +72,7 @@ function drawCard(document: PDFKit.PDFDocument, item: FramePageItem, index: numb
   const width: number = 381;
   const frame: FrameRect = frameRect(x, y, aspectWidth, aspectHeight);
   document.roundedRect(x, y, width, 230, 5).lineWidth(0.8).strokeColor('#b6bcc2').stroke();
-  if (item.image === null) drawPlaceholder(document, frame.x, frame.y, frame.width, frame.height, item.frame.description);
+  if (item.image === null) drawPlaceholder(document, frame.x, frame.y, frame.width, frame.height, item.placeholderText);
   else document.image(item.image, frame.x, frame.y, { fit: [frame.width, frame.height], align: 'center', valign: 'center' });
   const time: string = `${formatMilliseconds(item.shot.startMs)} – ${formatMilliseconds(item.shot.endMs)}`;
   document.fillColor('#d34b2e').fontSize(8).text(time, x + 228, y + 10, { width: 143 });

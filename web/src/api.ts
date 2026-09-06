@@ -60,7 +60,7 @@ export async function importProject(handoffPath: string, proposedTextHoldMs: num
   return z.strictObject({ project: ProjectSchema }).parse(await request('/api/projects/import', json('POST', { handoffPath, proposedTextHoldMs }))).project;
 }
 
-export async function mutateProject(projectId: string, path: string, method: 'PATCH' | 'POST', body: unknown): Promise<Project> {
+export async function mutateProject(projectId: string, path: string, method: 'DELETE' | 'PATCH' | 'POST', body: unknown): Promise<Project> {
   return z.strictObject({ project: ProjectSchema }).parse(await request(`/api/projects/${encodeURIComponent(projectId)}${path}`, json(method, body))).project;
 }
 

@@ -15,6 +15,7 @@ import { mappingReviewIssues, MoveShotSourceLinkInputSchema, moveShotSourceLink,
 import { addReferenceAsset } from '../domain/media.js';
 import { IdSchema, LockedFieldSchema, ProfileSchema, ShotContentSchema } from '../domain/schema.js';
 import type { Project } from '../domain/schema.js';
+import { deleteReviewTextCue, resolveTextCueAuthority, TextCueAuthorityResolutionInputSchema } from '../domain/text.js';
 import { applySourceUpdate, sourceImpact } from '../domain/source-update.js';
 import { AudioCueTimingInputSchema, TextCueTimingInputSchema, updateAudioCueTiming, updateTextCueTiming } from '../domain/tracks.js';
 import { exportShotCsv } from '../exporters/csv.js';
@@ -44,6 +45,7 @@ const CreateFrameBodySchema = z.strictObject({ expectedRevision: z.number().int(
 const FrameReviewBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), review: z.enum(['pending', 'accepted', 'rejected']) });
 const AudioCueBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), timing: AudioCueTimingInputSchema });
 const TextCueBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), timing: TextCueTimingInputSchema });
+const TextCueAuthorityBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), resolution: TextCueAuthorityResolutionInputSchema });
 const TextMappingBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), decision: TextMappingDecisionInputSchema });
 const SourceLinksBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), mapping: ShotSourceLinksInputSchema });
 const MoveSourceLinkBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), move: MoveShotSourceLinkInputSchema });
@@ -67,7 +69,7 @@ function statusCode(error: Error): number {
   const code: string = 'code' in error && typeof error.code === 'string' ? error.code : error.name;
   if (code.endsWith('_NOT_FOUND')) return 404;
   if (['REVISION_CONFLICT', 'PROJECT_ALREADY_EXISTS', 'PROJECT_BUSY'].includes(code)) return 409;
-  if (error instanceof ZodError || code.startsWith('INVALID_') || code.startsWith('MISSING_') || code.startsWith('DUPLICATE_') || code.startsWith('UNSAFE_') || code.startsWith('UNKNOWN_') || code.startsWith('FORBIDDEN_') || code.endsWith('_LOCKED') || code.endsWith('_REQUIRED') || code.endsWith('_BLOCKED')) return 400;
+  if (error instanceof ZodError || code.startsWith('INVALID_') || code.startsWith('MISSING_') || code.startsWith('DUPLICATE_') || code.startsWith('UNSAFE_') || code.startsWith('UNKNOWN_') || code.startsWith('FORBIDDEN_') || code.startsWith('TEXT_') || code.endsWith('_LOCKED') || code.endsWith('_REQUIRED') || code.endsWith('_BLOCKED') || code.endsWith('_DELETED')) return 400;
   return 500;
 }
 
@@ -242,6 +244,16 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
     const { projectId, cueId } = CueParamsSchema.parse(request.params);
     const body = TextCueBodySchema.parse(request.body);
     return { project: await store.update(projectId, body.expectedRevision, (project: Project): Project => updateTextCueTiming(project, cueId, body.timing), []) };
+  });
+  app.post('/api/projects/:projectId/text/:cueId/authority', async (request: FastifyRequest): Promise<object> => {
+    const { projectId, cueId } = CueParamsSchema.parse(request.params);
+    const body = TextCueAuthorityBodySchema.parse(request.body);
+    return { project: await store.update(projectId, body.expectedRevision, (project: Project): Project => resolveTextCueAuthority(project, cueId, body.resolution), []) };
+  });
+  app.delete('/api/projects/:projectId/text/:cueId', async (request: FastifyRequest): Promise<object> => {
+    const { projectId, cueId } = CueParamsSchema.parse(request.params);
+    const body = RevisionSchema.parse(request.body);
+    return { project: await store.update(projectId, body.expectedRevision, (project: Project): Project => deleteReviewTextCue(project, cueId), []) };
   });
   app.get('/api/codex/requests/:requestId', async (request: FastifyRequest): Promise<object> => {
     const { requestId } = CodexRequestParamsSchema.parse(request.params);

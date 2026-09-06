@@ -1,4 +1,7 @@
 import { reviewIssuesForTextCue } from '../domain/emission.js';
+import { contractError } from '../domain/errors.js';
+import { reviewFrameOutput } from '../domain/frame-output.js';
+import type { FrameOutputDecision } from '../domain/frame-output.js';
 import { reviewAudioPlaybackAt } from '../domain/playback.js';
 import type { BlockedCue } from '../domain/playback.js';
 import type { Issue, Project, Shot, ShotSourceLink, SourceUnit, StoryboardFrame, TextCue } from '../domain/schema.js';
@@ -28,9 +31,12 @@ function shotRow(project: Project, shot: Shot): string[] {
     return issues.length === 0 ? [] : [{ cue, issues }];
   });
   const shotIssues: Issue[] = reviewIssuesForShot(project, shot.id);
+  const frameDecisions: FrameOutputDecision[] = project.frames.filter((frame: StoryboardFrame): boolean => frame.shotId === shot.id)
+    .map((frame: StoryboardFrame): FrameOutputDecision => reviewFrameOutput(project, frame.id, 'csv-export'));
   const blockedCodes: string[] = [...new Set([...shotIssues.map((item: Issue): string => item.code),
     ...blockedAudio.flatMap((entry: BlockedCue): string[] => entry.issues.map((item: Issue): string => item.code)),
-    ...blockedText.flatMap((entry): string[] => entry.issues.map((item: Issue): string => item.code))])];
+    ...blockedText.flatMap((entry): string[] => entry.issues.map((item: Issue): string => item.code)),
+    ...frameDecisions.flatMap((decision: FrameOutputDecision): string[] => decision.issues.map((item: Issue): string => item.code))])];
   const frames: StoryboardFrame[] = project.frames.filter((frame: StoryboardFrame): boolean => frame.shotId === shot.id);
   const gates: EffectiveInformationGate[] = project.dataset.informationRules
     .filter((rule): boolean => rule.segmentId === shot.segmentId)
@@ -52,7 +58,12 @@ function shotRow(project: Project, shot: Shot): string[] {
       return blocked === undefined ? { ...cue, outputSafety: 'safe' } : { id: cue.id, authority: cue.authority, mappingDecisionId: cue.mappingDecisionId,
         startMs: cue.startMs, endMs: cue.endMs, outputSafety: 'blocked', issueCodes: blocked.issues.map((item: Issue): string => item.code) };
     })),
-    JSON.stringify(frames.map((frame: StoryboardFrame) => ({ ...frame, displayAbsoluteMs: frameDisplayAbsoluteMs(shot, frame), evaluationAbsoluteMs: frameEvaluationAbsoluteMs(shot, frame) }))),
+    JSON.stringify(frames.map((frame: StoryboardFrame) => {
+      const decision: FrameOutputDecision | undefined = frameDecisions.find((candidate: FrameOutputDecision): boolean => candidate.frameId === frame.id);
+      if (decision === undefined) throw contractError('FRAME_OUTPUT_DECISION_NOT_FOUND', `${frame.id}: CSV 출력 판정을 찾을 수 없습니다.`, []);
+      return { ...frame, historicalImageAssetId: frame.imageAssetId, displayAbsoluteMs: frameDisplayAbsoluteMs(shot, frame), evaluationAbsoluteMs: frameEvaluationAbsoluteMs(shot, frame),
+        outputSafety: decision.renderBitmap ? 'safe' : 'blocked', renderBitmap: decision.renderBitmap, issueCodes: decision.issues.map((item: Issue): string => item.code) };
+    })),
     shot.proposalOrigin, shot.approvalStatus, JSON.stringify(shot.lockedFields),
     JSON.stringify(shot.continuityBefore), JSON.stringify(shot.continuityAfter),
   ];

@@ -86,6 +86,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .frame-placeholder span { font: 8px 'IBM Plex Mono', monospace; letter-spacing: .13em; color: #e65a36; }
 .frame-placeholder p { margin: 9px 0 0; font: 500 11px 'Noto Serif KR', serif; line-height: 1.55; max-width: 240px; }
 .frame-time { position: absolute; left: 8px; top: 8px; background: rgba(10, 11, 9, .82); color: #f4efe5; padding: 4px 6px; font: 8px 'IBM Plex Mono', monospace; }
+.frame-output-state { position: absolute; left: 8px; bottom: 8px; max-width: calc(100% - 90px); padding: 4px 6px; color: #f5b39f; background: rgba(17,18,15,.82); font: 7px 'IBM Plex Mono', monospace; }
 .review-dot { position: absolute; right: 9px; top: 9px; width: 8px; height: 8px; border-radius: 50%; background: #9d9e96; border: 1px solid #fff; }
 .review-dot.accepted { background: #65a852; }.review-dot.rejected { background: #d54830; }
 .frame-generate { position: absolute; right: 8px; bottom: 8px; background: rgba(238, 84, 48, .92); color: white; border: 0; padding: 6px 8px; font: 7px 'IBM Plex Mono', monospace; cursor: pointer; }
@@ -123,6 +124,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .audio-block .disclosure { padding: 8px; background: #eee8dc; font: 9px Arial, sans-serif; color: #6a6357; }
 .track-actions { display: flex; justify-content: flex-end; gap: 5px; margin-top: 7px; }
 .track-actions button { padding: 6px; }
+.authority-resolution { margin-top: 8px; padding-top: 7px; border-top: 1px solid #cfcbc2; }
 .reference-form { margin: 18px 0 10px; padding-top: 11px; border-top: 2px solid #171815; display: grid; gap: 6px; }
 .reference-form button { background: #171815; color: white; }
 .profile-form { margin: 18px 0 12px; padding-top: 11px; border-top: 2px solid #171815; display: grid; gap: 7px; }.profile-form > header { font: 8px 'IBM Plex Mono', monospace; letter-spacing: .08em; }.profile-form > div { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 5px; }.profile-form label { display: grid; gap: 4px; color: #777870; font: 7px 'IBM Plex Mono', monospace; }.profile-form input, .profile-form select { min-width: 0; width: 100%; border: 1px solid #cbc8c0; background: white; padding: 7px; font: 10px Arial, sans-serif; }.profile-form button { border: 0; background: #171815; color: white; padding: 9px; font: 8px 'IBM Plex Mono', monospace; }

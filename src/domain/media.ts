@@ -170,5 +170,6 @@ export function addReferenceAsset(project: Project, input: ReferenceAssetInput):
     || (input.kind === 'location' && input.subjectId !== null && shot.visualLocationId === input.subjectId),
   ).map((shot): string => shot.id));
   return { project: finalize(project, { ...project, assets: [...project.assets, asset],
+    shots: project.shots.map((shot): typeof shot => affectedShotIds.has(shot.id) ? { ...shot, approvalStatus: 'proposed' } : shot),
     frames: project.frames.map((frame: StoryboardFrame): StoryboardFrame => affectedShotIds.has(frame.shotId) ? { ...frame, visualReview: 'pending' } : frame) }), relativePath, content: input.bytes };
 }

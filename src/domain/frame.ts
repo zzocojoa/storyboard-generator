@@ -56,5 +56,6 @@ export function setFrameReview(project: Project, frameId: string, review: Storyb
 
 export function updateProjectProfile(project: Project, profile: Project['profile']): Project {
   return finish(project, { ...project, profile,
+    shots: project.shots.map((shot): typeof shot => ({ ...shot, approvalStatus: 'proposed' })),
     frames: project.frames.map((frame: StoryboardFrame): StoryboardFrame => ({ ...frame, visualReview: 'pending' })) });
 }

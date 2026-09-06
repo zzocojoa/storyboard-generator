@@ -11,6 +11,11 @@ export type InformationEmissionInput = {
   informationIds: string[];
   atMs: number;
 };
+export type TextCueMappingResolution = {
+  decision: TextMappingDecision | null;
+  status: 'resolved' | 'review-required' | 'missing' | 'ambiguous';
+  inheritedInformationIds: string[];
+};
 
 function uniqueInformationIds(ids: readonly string[]): string[] {
   return [...new Set(ids)];
@@ -27,11 +32,35 @@ export function textCueInformationIds(project: Project, cue: TextCue): string[] 
     return uniqueInformationIds(unitInformationIds(project, decision?.canonicalUnitId ?? null));
   }
   if (cue.authority === 'placement') {
-    const decision: TextMappingDecision | undefined = project.textMappingDecisions.find((candidate: TextMappingDecision): boolean =>
-      candidate.placementId === cue.placementId && candidate.status === 'confirmed' && candidate.relation !== 'standalone-placement');
-    return uniqueInformationIds(unitInformationIds(project, decision?.canonicalUnitId ?? null));
+    return resolveTextCueMapping(project, cue).inheritedInformationIds;
   }
   return uniqueInformationIds(unitInformationIds(project, cue.unitId));
+}
+
+/** Placement Cue의 Mapping 상태와 상속 가능한 정보 ID를 하나의 출력 판정으로 계산한다. */
+export function resolveTextCueMapping(project: Project, cue: TextCue): TextCueMappingResolution {
+  if (cue.authority !== 'placement' || cue.placementId === null) {
+    return { decision: null, status: 'resolved', inheritedInformationIds: [] };
+  }
+  const decisions: TextMappingDecision[] = project.textMappingDecisions.filter((candidate: TextMappingDecision): boolean => candidate.placementId === cue.placementId);
+  if (decisions.length === 0) return { decision: null, status: 'missing', inheritedInformationIds: [] };
+  if (decisions.length > 1) return { decision: null, status: 'ambiguous', inheritedInformationIds: [] };
+  const decision: TextMappingDecision | undefined = decisions[0];
+  if (decision === undefined) return { decision: null, status: 'missing', inheritedInformationIds: [] };
+  if (decision.status !== 'confirmed') return { decision, status: 'review-required', inheritedInformationIds: [] };
+  const inheritsCanonical: boolean = ['exact', 'abbreviation', 'replacement'].includes(decision.relation);
+  return { decision, status: 'resolved', inheritedInformationIds: inheritsCanonical
+    ? uniqueInformationIds(unitInformationIds(project, decision.canonicalUnitId)) : [] };
+}
+
+function textCueMappingIssues(project: Project, cue: TextCue): Issue[] {
+  if (cue.authority !== 'placement') return [];
+  const resolution: TextCueMappingResolution = resolveTextCueMapping(project, cue);
+  if (resolution.status === 'resolved') return [];
+  const code: string = resolution.status === 'missing' ? 'TEXT_MAPPING_DECISION_MISSING'
+    : resolution.status === 'ambiguous' ? 'TEXT_MAPPING_DECISION_AMBIGUOUS' : 'TEXT_MAPPING_REVIEW_REQUIRED';
+  return [issue(code, 'conflict', cue.id, 'mappingDecisionId', 'Placement Text Cue의 Mapping을 확정해야 출력할 수 있습니다.',
+    'one confirmed mapping decision', resolution.status, [])];
 }
 
 function cueAuthorityIssue(code: string, cue: TextCue, message: string, expected: string, actual: string, refs: readonly SourceRef[]): Issue {
@@ -145,7 +174,7 @@ export function assertInformationEmissionAllowed(project: Project, input: Inform
 export function reviewIssuesForTextCue(project: Project, cueId: string): Issue[] {
   const cue: TextCue | undefined = project.textCues.find((candidate: TextCue): boolean => candidate.id === cueId);
   if (cue === undefined) return [issue('TEXT_CUE_NOT_FOUND', 'conflict', cueId, 'id', 'Text Cue를 찾을 수 없습니다.', 'existing text cue', cueId, [])];
-  return [...textCueAuthorityIssues(project, cue), ...reviewInformationEmission(project, {
+  return [...textCueAuthorityIssues(project, cue), ...textCueMappingIssues(project, cue), ...reviewInformationEmission(project, {
     entityId: cue.id, channel: 'text-overlay', informationIds: textCueInformationIds(project, cue), atMs: cue.startMs,
   })];
 }

@@ -65,7 +65,7 @@ native 파일은 일반적인 프로젝트 원본을 표현한다. ID는 불투�
 - 원문 `SourceUnit`은 발화, 내레이션, 패널 발화, 지문, 화면 글자, 채팅, 메모, 효과음, 음악을 구분한다. 원문 문자열과 출처는 편집 지시와 분리한다.
 - `Shot`은 구간, 화면 위치, 구도·각도·이동, 행동 제안, 출연 형태, 소품, 연속성 전후 상태, 다음 컷으로 나가는 전환, 원문 참조를 가진다.
 - `StoryboardFrame`은 컷의 시작·종료·중간 keyframe과 이미지 자산을 별도로 연결한다. 컷 하나에 이미지 하나를 강제하지 않는다.
-- `AudioCue`와 `TextCue`는 영상 컷과 독립된 시작·종료를 가진다. 오디오는 발화·VO·패널·SFX·음악을 구분하고 원본 Segment와의 관계를 `within-segment`, `j-cut`, `l-cut`으로 명시한다. Text Cue는 Placement, 확정 Mapping, Source Unit 또는 `review-required` 권한을 기록한다. 채팅·메모를 자동 낭독하지 않는다.
+- `AudioCue`와 `TextCue`는 영상 컷과 독립된 시작·종료를 가진다. 오디오는 발화·VO·패널·SFX·음악을 구분하고 원본 Segment와의 관계를 `within-segment`, `j-cut`, `l-cut`으로 명시한다. Text Cue는 Placement, 확정 Mapping, Source Unit 또는 `review-required` 권한을 기록한다. Placement 출력은 정확히 하나의 확정 Mapping Decision을 요구하고, `separate-element` Placement는 Canonical 정보를 상속하지 않는다. Canonical Cue는 `mappingDecisionId`로 식별한다. 채팅·메모를 자동 낭독하지 않는다.
 - `TextMappingDecision`은 자막 Placement와 Canonical 원문의 관계를 `exact`, `abbreviation`, `separate-element`, `replacement`, `standalone-placement`로 기록한다. 명시적 `placement.unitId`, 허용 종류의 유일한 정확 일치, 유일한 휴리스틱 후보 순서로 찾는다. 중복 정확 일치는 자동 선택하지 않는다. 관계마다 Canonical 연결·별도 렌더링·시간 범위의 불변식을 검사한다. `separate-element`의 Placement Cue는 Canonical Unit을 소유하지 않고, 별도 Canonical Cue만 명시한 시각과 Unit을 가진다.
 - `ShotSourceLink`는 컷과 원문 Unit의 권한 관계다. `primary-visual`, `continued-visual`, `audio-only`, `context-only` 용도와 `confirmed`, `mapping-required` 상태, `shot-offset`·`frame`·`unresolved` 시간 Anchor를 가진다. `SOUND`와 `MUSIC`은 직접 시각 근거가 될 수 없고 `continued-visual`은 앞선 `primary-visual`을 요구한다. `sourceUnitIds`는 1.4.0 프로젝트에 중복 저장하지 않는다.
 - 인물의 역할·시각 기준과 컷의 실제 출연 형태를 분리한다. 출연 형태는 VISIBLE, HAND_ONLY, SILHOUETTE, OFFSCREEN_VOICE, VOICE_OVER, IMPLIED, ARCHIVE_IMAGE다. 목록에 없으면 그 컷의 출연이 선언되지 않은 상태다.
@@ -81,7 +81,7 @@ native 파일은 일반적인 프로젝트 원본을 표현한다. ID는 불투�
 
 정보 공개 규칙은 information ID, 최초 Segment, 최초 Unit과 순서, 권한 하한 `baseNotBeforeMs`, `exact-time`·`unit-order`·`segment-start` 정밀도를 가진다. `effectiveNotBeforeMs`는 저장 필드가 아니며 확정 Text Mapping, 확정 Source Temporal Anchor, 같은 Segment의 유효한 `within-segment` 측정 Audio Cue, 유일한 Unit 순서 근거에서 매 검사마다 계산한다. 어떤 근거도 기준 하한을 앞당길 수 없다. Source나 Audio가 더 늦은 Unit-order 근거보다 앞서면 후반 근거를 유효 하한으로 유지하고 충돌을 검토 항목으로 만든다. Unit 순서만 있고 확정 시간 근거가 없으면 검토 필요 상태로 남겨 승인과 생성을 막는다.
 
-Information Emission Interlock은 이미지, 글자 오버레이, 음성 재생·생성, 컷 제안, PDF·CSV 출력에 같은 공개 판정을 적용한다. 출력 대상은 정보 ID의 원본 근거와 유효 Gate를 가져야 하며, 미해결 규칙·검토 필요 Gate·조기 공개는 차단한다. Program Monitor와 실제 오디오 요소는 안전 선택자의 결과만 렌더링하고 차단된 Cue는 본문 대신 ID와 Issue code를 표시한다. JSON은 재편집과 감사를 위해 원본 데이터와 재계산 입력을 보존한다.
+Information Emission Interlock은 이미지, 글자 오버레이, 음성 재생·생성, 컷 제안, PDF·CSV 출력에 같은 공개 판정을 적용한다. 출력 대상은 정보 ID의 원본 근거와 유효 Gate를 가져야 하며, 미해결 규칙·검토 필요 Gate·조기 공개는 차단한다. Program Monitor와 실제 오디오 요소는 안전 선택자의 결과만 렌더링하고 차단된 Cue는 본문 대신 ID와 Issue code를 표시한다. `reviewFrameOutput`은 Program Monitor, 전환 미리보기, PDF, CSV에서 자산 대상과 검토·Source·Gate 상태를 같은 방식으로 판정한다. bitmap이 차단돼도 JSON의 Frame 연결과 Asset은 감사용으로 유지한다.
 
 프레임 Prompt와 출력 검사는 해당 시각에 활성화된 직접 시각 Link 및 Text Mapping만 사용한다. 일반 프레임의 표시·평가 시각은 `shot.startMs + frame.offsetMs`다. End Frame은 컷 종료점에 표시하지만 `[startMs, endMs)` 계약에 따라 `endMs - 1`에서 평가한다. 금지 사실의 설명 자체를 이미지 prompt에 넣지 않는다. 기록된 정보 ID를 비교하는 검사는 의미적·시각적 반전 누설을 완전히 검증하지 못하므로 그림 검토 상태를 따로 둔다.
 
@@ -108,6 +108,8 @@ Information Emission Interlock은 이미지, 글자 오버레이, 음성 재생�
 | GET /api/projects/:id | 현재 revision과 작업 상태 |
 | PATCH/POST /api/projects/:id/profile, shots, frames, references | expected revision 검사 후 편집·잠금·검토·기준 자산 저장 |
 | PATCH /api/projects/:id/audio/:cueId, text/:cueId | 독립 트랙의 시작·종료와 글자 표현 방식 편집 |
+| POST /api/projects/:id/text/:cueId/authority | review-required Text Cue를 Placement·Mapping Decision·Source Unit 권한에서 재구성 |
+| DELETE /api/projects/:id/text/:cueId | expected revision과 필수 커버리지를 검사한 review-required Cue 삭제 |
 | GET /api/projects/:id/mapping-review | unresolved Text Mapping, mapping-required Source Link, 정보 조기 공개 항목 조회 |
 | PATCH /api/projects/:id/text-mappings/:decisionId | expected revision으로 자막 관계·상태·별도 표시 시각 수정 |
 | PATCH /api/projects/:id/shots/:shotId/source-links | expected revision으로 현재 컷 Source Link 전체 수정 |
@@ -131,7 +133,7 @@ Information Emission Interlock은 이미지, 글자 오버레이, 음성 재생�
 3. 컷·시작/키/끝 프레임·독립 트랙·전환 생성과 편집·잠금, Text Mapping 상태 기계·Source Temporal Anchor·동적 Information Gate, JSON/CSV/PDF 보존: 구현 및 자동 검증됨.
 4. 로컬 저장/API·Mapping 편집 UI, 프로젝트 분리·재열기·원본 차이: 구현 및 자동 검증됨.
 5. 시각 기준, Codex App 컷·이미지·음성 요청과 결과 반영, 재생, PDF 출력: 구현 및 자동 검증됨. 합성 범용 사례와 PRJ-007 `SEG-008`의 실제 생성 흐름을 확인했다.
-6. 두 가지 이상의 구성으로 회귀·브라우저 검증, 전체 요구사항 감사: 합성 자료와 초기 회귀 자료의 가져오기·편집·출력을 검증했다. 20개 파일의 142개 자동 테스트에는 44개 출력 경계 회귀가 포함된다. PRJ-007 Golden에서 전체 구조·원문·시간, `SEG-024`의 Text·Audio 3단계 공개, `SEG-018`의 J-cut 저장·재생과 Gate 비조기화를 검증했다. 실제 생성 사례에서는 5개 컷의 시간 합계, 첫 프레임 재생성·승인, 한 발화의 WAV 길이 반영을 확인했다. 전체 분량의 시각·낭독 검토는 남아 있다.
+6. 두 가지 이상의 구성으로 회귀·브라우저 검증, 전체 요구사항 감사: 21개 파일의 190개 자동 테스트로 합성 자료와 초기 회귀 자료의 가져오기·편집·출력을 검증했다. Placement Mapping 출력, Text 권한 복구·삭제, Canonical Cue 식별, stale Frame 채널 차단을 포함한다. PRJ-007 Golden은 `SEG-018` 지시에서 다음 구간 SOUND `UNIT-045`의 849,000–851,000ms J-cut을 추적하고, `SEG-024` Audio는 실제 Source가 뒷받침하는 Gate만 보고한다. 전체 분량의 시각·낭독 검토는 남아 있다.
 
 필수 자동 검증은 원문 100% 보존과 단위 연결, 영상 시간 공백·중복, 잘못된 ID·구간 소유권, 미지원 버전·손상 해시, 공개 시점 위반, 잠근 필드 변경, 프로젝트 혼입, 저장·출력 정합성이다. 실제 제작 사례 수치는 fixture에만 둔다. 패널·반전이 없는 다른 분량의 프로젝트와 원본 ID가 겹치는 프로젝트도 검증한다.
 
