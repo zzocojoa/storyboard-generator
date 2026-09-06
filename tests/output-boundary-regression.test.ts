@@ -70,7 +70,7 @@ describe('Text output interlock', (): void => {
     const project: Project = await informationOutline();
     const sourceCue: TextCue = { id: 'info-text', segmentId: 'demonstration', unitId: '안내-1', placementId: null,
       mappingDecisionId: null, authority: 'source-unit', text: project.dataset.units.find((unit) => unit.id === '안내-1')?.text ?? '',
-      startMs: 7500, endMs: 9000, kind: 'overlay', timingStatus: 'confirmed' };
+      startMs: 7500, endMs: 9000, kind: 'dialogue-subtitle', timingStatus: 'confirmed' };
     const changed: Project = { ...project, textCues: [...project.textCues, sourceCue] };
     expect(() => updateTextCueTiming(changed, sourceCue.id, { startMs: 6500, endMs: 8000, kind: sourceCue.kind })).toThrowError(expect.objectContaining({ code: 'TEXT_OUTPUT_GATE_BLOCKED' }));
   });
@@ -103,7 +103,7 @@ describe('Text output interlock', (): void => {
     const unit = project.dataset.units.find((candidate) => candidate.id === '안내-1');
     const shot: Shot = project.shots.find((candidate: Shot): boolean => candidate.segmentId === 'demonstration') as Shot;
     const cue: TextCue = { id: 'moving-info-text', segmentId: 'demonstration', unitId: unit?.id ?? null, placementId: null,
-      mappingDecisionId: null, authority: 'source-unit', text: unit?.text ?? '', startMs: 7500, endMs: 9000, kind: 'overlay', timingStatus: 'confirmed' };
+      mappingDecisionId: null, authority: 'source-unit', text: unit?.text ?? '', startMs: 7500, endMs: 9000, kind: 'dialogue-subtitle', timingStatus: 'confirmed' };
     const prepared: Project = { ...project, textCues: [...project.textCues, cue],
       shots: project.shots.map((candidate: Shot): Shot => candidate.id === shot.id ? { ...candidate, approvalStatus: 'approved',
         sourceLinks: candidate.sourceLinks.map((link) => link.unitId === cue.unitId ? { ...link, status: 'confirmed', temporalAnchor: { kind: 'shot-offset', startOffsetMs: 2500, endOffsetMs: 4000, basis: 'text-cue', status: 'confirmed' } } : link) } : candidate),
@@ -121,7 +121,7 @@ describe('Text output interlock', (): void => {
     const project: Project = await informationOutline();
     const unit = project.dataset.units.find((candidate) => candidate.id === '안내-1');
     const cue: TextCue = { id: 'early-text', segmentId: 'demonstration', unitId: unit?.id ?? null, placementId: null,
-      mappingDecisionId: null, authority: 'source-unit', text: unit?.text ?? '', startMs: 6000, endMs: 8000, kind: 'overlay', timingStatus: 'confirmed' };
+      mappingDecisionId: null, authority: 'source-unit', text: unit?.text ?? '', startMs: 6000, endMs: 8000, kind: 'dialogue-subtitle', timingStatus: 'confirmed' };
     const changed: Project = { ...project, textCues: [...project.textCues, cue] };
     expect(playableTextCuesAt(changed, 6500).map((candidate: TextCue): string => candidate.id)).not.toContain(cue.id);
     expect(reviewTextPlaybackAt(changed, 6500).blocked.find((entry) => entry.cueId === cue.id)?.issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'EARLY_INFORMATION_EMISSION' })]));
@@ -343,7 +343,7 @@ describe('J-cut and L-cut contract', (): void => {
 describe('1.3 to 1.4 migration', (): void => {
   it('migration_1_3_to_1_4_defaults_audio_to_within_segment', async (): Promise<void> => {
     const migrated: Project = parseProject(legacy13(await outline()));
-    expect(migrated.schemaVersion).toBe('1.4.0');
+    expect(migrated.schemaVersion).toBe('1.5.0');
     expect(migrated.audioCues.every((cue: AudioCue): boolean => cue.timingRelation === 'within-segment')).toBe(true);
   });
 

@@ -3,7 +3,7 @@ import type { Project } from '../src/domain/schema.js';
 import { addReferenceAsset, applyGeneratedImage, applyGeneratedSpeech, wavDurationMs } from '../src/domain/media.js';
 import { importPackage } from '../src/importers/import-package.js';
 import { createSourceOutline } from '../src/proposal/outline.js';
-import { nativePackage } from './helpers.js';
+import { nativePackage, png } from './helpers.js';
 
 function wav(durationMs: number): Buffer {
   const sampleRate: number = 8000;
@@ -37,18 +37,18 @@ describe('생성 미디어 반영', (): void => {
     const frame = project.frames[0];
     if (frame === undefined) throw new Error('프레임 검증 자료가 없습니다.');
     const result = { bytes: Buffer.from('not-png'), provider: 'codex-app' as const, prompt: 'frame', model: 'image-model', requestId: 'request-1', mimeType: 'image/png' as const, referenceHashes: [] };
-    expect(() => applyGeneratedImage(project, frame.id, 'image-generation', '2026-09-06T00:00:00.000Z', result)).toThrowError(expect.objectContaining({ code: 'INVALID_IMAGE_BYTES' }));
+    await expect(applyGeneratedImage(project, frame.id, 'image-generation', '2026-09-06T00:00:00.000Z', result)).rejects.toEqual(expect.objectContaining({ code: 'ASSET_CONTENT_CORRUPT' }));
     const locked: Project = { ...project, shots: project.shots.map((shot) => shot.id === frame.shotId ? { ...shot, lockedFields: ['frames'] } : shot) };
-    expect(() => applyGeneratedImage(locked, frame.id, 'image-generation', '2026-09-06T00:00:00.000Z', { ...result, bytes: Buffer.from('89504e470d0a1a0a', 'hex') })).toThrowError(expect.objectContaining({ code: 'SHOT_FIELD_LOCKED' }));
+    await expect(applyGeneratedImage(locked, frame.id, 'image-generation', '2026-09-06T00:00:00.000Z', { ...result, bytes: await png(1, 1) })).rejects.toEqual(expect.objectContaining({ code: 'SHOT_FIELD_LOCKED' }));
   });
 
   it('인물 기준 이미지를 버전으로 누적하고 입력 프로젝트를 바꾸지 않는다', async (): Promise<void> => {
     const project: Project = await outline();
     const person = project.dataset.people[0];
     if (person === undefined) throw new Error('인물 검증 자료가 없습니다.');
-    const image: Buffer = Buffer.from('89504e470d0a1a0a', 'hex');
-    const first = addReferenceAsset(project, { id: 'reference-1', kind: 'character', subjectId: person.id, description: '정면 기준', mimeType: 'image/png', bytes: image });
-    const second = addReferenceAsset(first.project, { id: 'reference-2', kind: 'character', subjectId: person.id, description: '측면 기준', mimeType: 'image/png', bytes: image });
+    const image: Buffer = await png(1, 1);
+    const first = await addReferenceAsset(project, { id: 'reference-1', kind: 'character', subjectId: person.id, description: '정면 기준', mimeType: 'image/png', bytes: image });
+    const second = await addReferenceAsset(first.project, { id: 'reference-2', kind: 'character', subjectId: person.id, description: '측면 기준', mimeType: 'image/png', bytes: image });
     expect(second.project.assets.map((asset): number => asset.version)).toEqual([1, 2]);
     expect(project.assets).toEqual([]);
   });

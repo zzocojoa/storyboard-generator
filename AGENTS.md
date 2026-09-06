@@ -24,7 +24,7 @@
 
 ## 현재 상태와 다음 작업
 
-- Plan과 [Design](docs/02-design/features/storyboard-generator.design.md), 1.4.0 공통 데이터 모델, `native-v1`·`production-v1` 입력 어댑터, 검증·편집 함수, CLI, 로컬 저장/API, 웹 편집 화면, Codex App 요청·결과 브리지, 다중 프레임·독립 오디오/글자 트랙·컷 전환 편집, Text Mapping·Source Temporal Anchor·동적 Information Gate·Text/Frame 공통 출력 인터록, 시간순 재생, JSON·CSV·PDF 출력이 있다. 검토 필요 Text Cue는 원본 권한으로 복구하거나 커버리지 검증 뒤 삭제할 수 있고 stale Frame 자산은 감사용으로 보존하면서 안전 출력에서 제외한다. 실행 방법은 `README.md`, 실제 명령과 의존성은 `package.json`을 기준으로 확인한다.
+- Plan과 [Design](docs/02-design/features/storyboard-generator.design.md), 1.5.0 공통 데이터 모델, `native-v1`·`production-v1` 입력 어댑터, 검증·편집 함수, CLI, 로컬 저장/API, 웹 편집 화면, Codex App 요청·결과 브리지, 다중 프레임·독립 오디오/글자 트랙·컷 전환 편집, Text Mapping·독립 Placement Information·Source Temporal Anchor·동적 Information Gate·Text/Frame/Audio 공통 출력 인터록, 실제 PCM WAV 등록, 시간순 재생, JSON·CSV·PDF 출력이 있다. 검토 필요 Text Cue는 원본 권한으로 복구하거나 커버리지 검증 뒤 삭제할 수 있고 stale 또는 손상된 미디어 자산은 감사용으로 보존하면서 안전 출력에서 제외한다. 실행 방법은 `README.md`, 실제 명령과 의존성은 `package.json`을 기준으로 확인한다.
 - 합성 범용 프로젝트와 실제 제작 프로젝트 PRJ-007의 `SEG-008`에서 Codex App의 컷 제안·내장 이미지·로컬 가이드 음성 요청과 결과 반영을 끝까지 확인했다. 실제 사례는 5개 컷의 시간 합계, 이미지 재생성과 시각 승인, 측정된 음성 길이를 확인했다. 생성 요청의 완료·실패·대기, 처리 시간, 반복 생성 횟수와 실패 원인을 영속 기록에서 집계해 화면에 표시한다. 요청별 비용은 Codex App에서 제공하지 않으므로 미측정으로 명시한다. 전체 제작 품질 검증은 계획서의 다른 대표 예외와 전체 분량으로 확대해야 한다.
 - 구현 요청을 받으면 현재 설계와 코드 상태를 확인하고, 누락된 설계를 요청 범위 안에서 구체화한 다음 구현한다. 이미 완료한 단계를 다시 시작하지 않는다.
 - 사용자가 생성 실행 환경을 Codex App으로 확정했다. `OPENAI_API_KEY`나 OpenAI SDK를 요구하지 않는다. 컷 제안은 현재 Codex 모델, 이미지는 내장 `image_gen`, 가이드 음성은 설정된 로컬 macOS 음성을 사용한다. 화면비·그림체·패널 표현·실사/AI/혼합 제작 방식은 프로젝트별 설정으로 다룬다.
@@ -88,6 +88,9 @@ Design에서는 실제 사용할 언어·런타임·라이브러리와 검증 �
 - 컷 생성 입력에는 선택한 프로젝트의 현재 원문, Unit 순서·종류·정보 ID·Mapping 상태, 필요한 시각 기준과 연출 제약만 전달한다. 이미지 직접 근거에는 `primary-visual`과 `continued-visual`만 포함한다. 각 직접 Link는 컷 내부의 반열린 구간 또는 프레임을 가리키는 확정 `temporalAnchor`를 가져야 한다. 프레임 입력에는 그 시각에 활성인 Text Mapping만 전달한다. Information Rule의 `baseNotBeforeMs`는 권한 하한이며 Mapping·Anchor·같은 구간의 측정 Audio Cue로 `effectiveNotBeforeMs`를 매번 계산한다. 더 늦은 Unit-order 근거보다 앞선 Source·Audio 근거는 Gate를 앞당기지 않고 검토 항목이 된다. 유도값은 프로젝트에 기준값처럼 저장하지 않는다. 미래 비밀을 모든 이미지 요청에 포함하지 않는다. 반전이 없는 프로젝트에 반전 구조를 만들어 넣지 않는다.
 - 원문 정보, 생성 제안, 사용자 확정, 미정 상태를 구분한다. 패널 세트나 대역 등 미정 제작 자원을 불필요 또는 비용 0으로 처리하지 않는다.
 - Text Cue는 Placement, 확정 Text Mapping, Source Unit 또는 `review-required` 중 본문 권한을 명시한다. Placement Mapping이 없거나 중복되거나 미해결이면 정보 ID가 비어 있어도 본문 출력을 차단한다. `separate-element` Placement는 Canonical 정보 ID를 상속하지 않으며 별도 Canonical Cue만 이를 가진다. Canonical Cue의 식별과 재사용은 Mapping Decision ID를 기준으로 한다. 직접 편집으로 파생 Cue의 원문·시각을 우회 변경하지 않는다.
+- `separate-element`와 `standalone-placement`는 프로젝트 편집 영역의 `TextPlacementInformationDecision`으로 정보성을 확정한다. `unresolved`는 안전 출력을 차단하고, `non-informational` 또는 하나 이상의 유효한 Information ID가 있는 `informational`만 허용한다. 관계가 Canonical 상속 관계로 바뀌면 독립 판정을 제거하고, 독립 관계로 바뀌면 과거 판정을 재사용하지 않고 새 `unresolved` 판정을 만든다.
+- 실제 오디오 등록은 mono/stereo 16/24-bit PCM WAV만 받는다. 파일에서 길이·샘플레이트·채널·코덱을 읽고 프로젝트 샘플레이트의 PCM16 WAV로 정규화한 결과를 다시 검사한다. AIFF·MP3와 지원하지 않는 코덱은 명시적으로 거부한다. 파일명은 저장 경로에 사용하지 않고 등록 실패 시 revision과 파일을 함께 되돌린다.
+- 이미지·오디오의 파일 존재, 프로젝트 내부 경로, SHA-256, MIME, 전체 디코딩과 연결 대상은 읽기 및 안전 출력 시점에 확인한다. Program Monitor와 PDF는 안전 출력 판정을 거친 경로를 사용한다. 무결성 상태와 Ready 수치는 현재 파일과 프로젝트에서 파생하며 저장된 성공 플래그를 신뢰하지 않는다.
 - Frame 이미지는 자산 존재·종류·대상 Frame, 시각 검토 상태, 활성 Source와 Mapping, Information Gate를 공통 출력 판정으로 검사한다. 의미가 달라지는 Frame·Shot·Mapping·Source·프로필·기준 자산 변경은 관련 Frame을 pending, Shot을 proposed로 돌리되 이전 imageAssetId와 Asset은 삭제하지 않는다. stale·pending·rejected bitmap은 검토 화면과 JSON에서만 보존하고 Program Monitor·전환·PDF에서는 placeholder로 대체하며 CSV에는 차단 상태와 코드를 기록한다.
 - End Frame의 표시 시각은 컷 종료점이지만 Source·Text Mapping·Information Gate 평가는 반열린 구간의 마지막 내부 시각에서 한다. 출력과 재생에서 표시 시각을 평가 시각으로 오용하지 않는다.
 - 확정 컷과 사용자 수정을 보존한다. 원본·기준 자산 변경 시 직접 영향과 후속 연속성 재검토 범위를 표시한다.
@@ -125,7 +128,7 @@ Design에서는 실제 사용할 언어·런타임·라이브러리와 검증 �
 - 자막이 있으면 원본의 확정된 시작 위치를 보존하고 종료 시각을 확정한다. 고지·최소 노출시간·무음 등은 해당 프로젝트에 정의된 조건으로 검사한다.
 - 사실·단서·반전의 공개 조건이 있으면 그 시점을 앞당기지 않는다. ID 검사 통과만으로 그림의 비노출 조건을 충족했다고 판정하지 않는다.
 - `unresolved` Text Mapping과 `mapping-required` Source Link는 초안에 저장할 수 있다. 관련 컷 승인·이미지 생성과 구간 제안 적용은 검토 항목을 구체적으로 표시하고 차단한다.
-- `1.0.0 → 1.1.0 → 1.2.0 → 1.3.0 → 1.4.0` 저장본 변환을 유지한다. 이전 `sourceUnitIds`는 자동 확정하지 않고 `context-only/mapping-required`로 변환하며, 1.2 Link에는 `unresolved/migration` 시간 Anchor를 부여해 사람이 확인하기 전 승인하지 않는다. Canonical 연결이 없는 이전 Text Mapping도 자동 확정하지 않는다. 1.3 Audio Cue는 `within-segment`로 이관하고 Text Cue 권한을 기존 근거에서 복원하며 모호한 경우 `review-required`로 둔다.
+- `1.0.0 → 1.1.0 → 1.2.0 → 1.3.0 → 1.4.0 → 1.5.0` 저장본 변환을 유지한다. 이전 `sourceUnitIds`는 자동 확정하지 않고 `context-only/mapping-required`로 변환하며, 1.2 Link에는 `unresolved/migration` 시간 Anchor를 부여해 사람이 확인하기 전 승인하지 않는다. Canonical 연결이 없는 이전 Text Mapping도 자동 확정하지 않는다. 1.3 Audio Cue는 `within-segment`로 이관하고 Text Cue 권한을 기존 근거에서 복원하며 모호한 경우 `review-required`로 둔다. 1.4의 독립 Placement에는 `unresolved` 정보 판정을 만들고 원문·시간·자산·생성 기록을 보존한다.
 - JSON 재열기와 PDF·CSV 출력에서 컷 순서·시간·텍스트·자산 연결·검토 상태·기준/유효 정보 Gate·재계산 근거가 보존되어야 한다. PDF·CSV는 출력 안전 상태와 차단 코드를 표시하고, 검토가 필요한 원문 본문을 출력하지 않는다.
 - 새 프로젝트를 불러와 처리하는 데 핵심 코드 수정이 필요하지 않아야 한다. 프로젝트를 전환·재열기해도 다른 프로젝트의 원문·설정·자산·작업 상태가 섞이지 않아야 한다.
 

@@ -381,7 +381,7 @@ describe('정보 공개 시점 안전장치 결함 재현', (): void => {
     for (const shot of legacy.shots) for (const link of shot.sourceLinks) delete link.temporalAnchor;
     legacy.textMappingDecisions[0] = { ...(legacy.textMappingDecisions[0] as Record<string, unknown>), canonicalUnitId: null, relation: 'separate-element', status: 'confirmed', renderCanonicalSeparately: true, canonicalStartMs: 100, canonicalEndMs: 200 };
     const migrated: Project = parseProject(legacy);
-    expect(migrated.schemaVersion).toBe('1.4.0');
+    expect(migrated.schemaVersion).toBe('1.5.0');
     expect(migrated.shots.every((shot: Shot): boolean => shot.approvalStatus === 'proposed' && shot.sourceLinks.every((link: ShotSourceLink): boolean => link.status === 'mapping-required' && link.temporalAnchor.kind === 'unresolved' && link.temporalAnchor.basis === 'migration'))).toBe(true);
     expect(migrated.textMappingDecisions[0]).toEqual(expect.objectContaining({ canonicalUnitId: null, relation: 'standalone-placement', status: 'unresolved', renderCanonicalSeparately: false, canonicalStartMs: null, canonicalEndMs: null }));
   });

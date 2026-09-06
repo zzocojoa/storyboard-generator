@@ -4,7 +4,7 @@
   "properties": {
     "schemaVersion": {
       "type": "string",
-      "const": "1.4.0"
+      "const": "1.5.0"
     },
     "projectId": {
       "$ref": "#/$defs/__schema0"
@@ -617,6 +617,119 @@
         "additionalProperties": false
       }
     },
+    "textPlacementInformationDecisions": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/__schema0"
+              },
+              "placementId": {
+                "$ref": "#/$defs/__schema0"
+              },
+              "status": {
+                "type": "string",
+                "const": "unresolved"
+              },
+              "informationIds": {
+                "type": "array",
+                "prefixItems": [],
+                "items": false,
+                "maxItems": 0
+              },
+              "note": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "placementId",
+              "status",
+              "informationIds",
+              "note"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/__schema0"
+              },
+              "placementId": {
+                "$ref": "#/$defs/__schema0"
+              },
+              "status": {
+                "type": "string",
+                "const": "non-informational"
+              },
+              "informationIds": {
+                "type": "array",
+                "prefixItems": [],
+                "items": false,
+                "maxItems": 0
+              },
+              "note": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "placementId",
+              "status",
+              "informationIds",
+              "note"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/__schema0"
+              },
+              "placementId": {
+                "$ref": "#/$defs/__schema0"
+              },
+              "status": {
+                "type": "string",
+                "const": "informational"
+              },
+              "informationIds": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/__schema0"
+                }
+              },
+              "note": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "placementId",
+              "status",
+              "informationIds",
+              "note"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
     "shots": {
       "type": "array",
       "items": {
@@ -733,7 +846,8 @@
                             "mapping-change",
                             "source-move",
                             "audio-change",
-                            "frame-change"
+                            "frame-change",
+                            "source-update"
                           ]
                         },
                         "status": {
@@ -1174,6 +1288,38 @@
             "type": "integer",
             "exclusiveMinimum": 0,
             "maximum": 9007199254740991
+          },
+          "audioMetadata": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "sampleRate": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "channels": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 2
+                  },
+                  "codec": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "sampleRate",
+                  "channels",
+                  "codec"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -1287,6 +1433,7 @@
     "dataset",
     "importIssues",
     "textMappingDecisions",
+    "textPlacementInformationDecisions",
     "shots",
     "frames",
     "audioCues",

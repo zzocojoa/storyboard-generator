@@ -1,6 +1,7 @@
 import { assertNoErrors, contractError } from './errors.js';
 import { reconcileTextCues } from './mapping.js';
-import type { AudioCue, Project, Segment, Shot, SourceUnit, StoryboardFrame, TextCue, TextMappingDecision, TextPlacement } from './schema.js';
+import { createInitialPlacementInformationDecisions, isIndependentTextRelation } from './placement-information.js';
+import type { AudioCue, Project, Segment, Shot, ShotSourceLink, SourceUnit, StoryboardFrame, TextCue, TextMappingDecision, TextPlacement, TextPlacementInformationDecision } from './schema.js';
 import { ProjectSchema } from './schema.js';
 import { validateProject } from './validation.js';
 
@@ -82,7 +83,14 @@ export function sourceImpact(current: Project, incoming: Project): SourceImpactR
 }
 
 function remapFrames(frames: readonly StoryboardFrame[], shotIds: ReadonlyMap<string, string>, frameIds: ReadonlyMap<string, string>): StoryboardFrame[] {
-  return frames.map((frame: StoryboardFrame): StoryboardFrame => ({ ...frame, id: frameIds.get(frame.id) as string, shotId: shotIds.get(frame.shotId) ?? frame.shotId }));
+  return frames.map((frame: StoryboardFrame): StoryboardFrame => ({ ...frame,
+    id: requiredRemappedId(frameIds, frame.id, 'Frame'), shotId: shotIds.get(frame.shotId) ?? frame.shotId }));
+}
+
+function requiredRemappedId(ids: ReadonlyMap<string, string>, sourceId: string, entityName: string): string {
+  const remappedId: string | undefined = ids.get(sourceId);
+  if (remappedId === undefined) throw contractError('SOURCE_UPDATE_ID_REMAP_MISSING', `원본 갱신 ${entityName} ID를 다시 연결할 수 없습니다. sourceId=${sourceId}`, []);
+  return remappedId;
 }
 
 function decisionStillValid(current: Project, incoming: Project, decision: TextMappingDecision): boolean {
@@ -104,6 +112,36 @@ function mergeTextMappingDecisions(current: Project, incoming: Project): TextMap
   });
 }
 
+export function mergePlacementInformationDecisions(
+  current: Project, incoming: Project, mappings: readonly TextMappingDecision[],
+): TextPlacementInformationDecision[] {
+  const initial: TextPlacementInformationDecision[] = createInitialPlacementInformationDecisions(mappings);
+  return initial.map((fallback: TextPlacementInformationDecision): TextPlacementInformationDecision => {
+    const prior: TextPlacementInformationDecision | undefined = current.textPlacementInformationDecisions
+      .find((decision: TextPlacementInformationDecision): boolean => decision.placementId === fallback.placementId);
+    const currentMapping: TextMappingDecision | undefined = current.textMappingDecisions
+      .find((decision: TextMappingDecision): boolean => decision.placementId === fallback.placementId);
+    const currentPlacement: TextPlacement | undefined = current.dataset.textPlacements
+      .find((placement: TextPlacement): boolean => placement.id === fallback.placementId);
+    const incomingPlacement: TextPlacement | undefined = incoming.dataset.textPlacements
+      .find((placement: TextPlacement): boolean => placement.id === fallback.placementId);
+    const preserved: boolean = prior !== undefined && currentMapping !== undefined && isIndependentTextRelation(currentMapping.relation)
+      && JSON.stringify(currentPlacement) === JSON.stringify(incomingPlacement);
+    return preserved && prior !== undefined ? prior : fallback;
+  });
+}
+
+export function rebuildTextDerivedAnchors(project: Project): Shot[] {
+  return project.shots.map((shot: Shot): Shot => ({ ...shot, sourceLinks: shot.sourceLinks.map((link: ShotSourceLink): ShotSourceLink => {
+    if (link.temporalAnchor.kind !== 'shot-offset' || link.temporalAnchor.basis !== 'text-cue') return link;
+    const cue: TextCue | undefined = project.textCues.find((candidate: TextCue): boolean => candidate.unitId === link.unitId
+      && candidate.startMs >= shot.startMs && candidate.endMs <= shot.endMs);
+    if (cue === undefined) return { ...link, status: 'mapping-required', temporalAnchor: { kind: 'unresolved', basis: 'source-update', status: 'review-required' } };
+    return { ...link, status: 'confirmed', temporalAnchor: { kind: 'shot-offset', startOffsetMs: cue.startMs - shot.startMs,
+      endOffsetMs: cue.endMs - shot.startMs, basis: 'text-cue', status: 'confirmed' } };
+  }) }));
+}
+
 /** 새 원본이 직접 영향을 주는 구간만 새 뼈대로 교체하고 나머지 사용자 편집은 보존한다. */
 export function applySourceUpdate(current: Project, incoming: Project, prefix: string): Project {
   const impact: SourceImpactReport = sourceImpact(current, incoming);
@@ -113,7 +151,7 @@ export function applySourceUpdate(current: Project, incoming: Project, prefix: s
   const shotIds: Map<string, string> = new Map(incomingImpactedShots.map((shot: Shot, index: number): [string, string] => [shot.id, `${prefix}:shot:${index + 1}`]));
   const incomingImpactedFrames: StoryboardFrame[] = incoming.frames.filter((frame: StoryboardFrame): boolean => incomingImpactedShots.some((shot: Shot): boolean => shot.id === frame.shotId));
   const frameIds: Map<string, string> = new Map(incomingImpactedFrames.map((frame: StoryboardFrame, index: number): [string, string] => [frame.id, `${prefix}:frame:${index + 1}`]));
-  const replacementShots: Shot[] = incomingImpactedShots.map((shot: Shot): Shot => ({ ...shot, id: shotIds.get(shot.id) as string,
+  const replacementShots: Shot[] = incomingImpactedShots.map((shot: Shot): Shot => ({ ...shot, id: requiredRemappedId(shotIds, shot.id, 'Shot'),
     sourceLinks: shot.sourceLinks.map((link) => link.temporalAnchor.kind === 'frame'
       ? { ...link, temporalAnchor: { ...link.temporalAnchor, frameId: frameIds.get(link.temporalAnchor.frameId) ?? link.temporalAnchor.frameId } } : link),
   }));
@@ -129,12 +167,14 @@ export function applySourceUpdate(current: Project, incoming: Project, prefix: s
   const preservedText: TextCue[] = current.textCues.filter((cue: TextCue): boolean => !impacted.has(cue.segmentId) && incoming.dataset.segments.some((segment: Segment): boolean => segment.id === cue.segmentId));
   const replacementText: TextCue[] = incoming.textCues.filter((cue: TextCue): boolean => impacted.has(cue.segmentId)).map((cue: TextCue, index: number): TextCue => ({ ...cue, id: `${prefix}:text:${index + 1}` }));
   const textMappingDecisions: TextMappingDecision[] = mergeTextMappingDecisions(current, incoming);
+  const textPlacementInformationDecisions: TextPlacementInformationDecision[] = mergePlacementInformationDecisions(current, incoming, textMappingDecisions);
   const combinedText: TextCue[] = [...preservedText, ...replacementText];
   const holdMs: number = Math.max(1, ...combinedText.map((cue: TextCue): number => cue.endMs - cue.startMs));
   const base: Project = { ...incoming, revision: current.revision, profile: current.profile,
     shots, frames: [...preservedFrames, ...replacementFrames], audioCues: [...preservedAudio, ...replacementAudio], textCues: [...preservedText, ...replacementText],
-    textMappingDecisions, assets: current.assets, generationRecords: current.generationRecords };
-  const next: Project = ProjectSchema.parse({ ...base, textCues: reconcileTextCues(base, textMappingDecisions, holdMs) });
+    textMappingDecisions, textPlacementInformationDecisions, assets: current.assets, generationRecords: current.generationRecords };
+  const withText: Project = ProjectSchema.parse({ ...base, textCues: reconcileTextCues(base, textMappingDecisions, holdMs) });
+  const next: Project = ProjectSchema.parse({ ...withText, shots: rebuildTextDerivedAnchors(withText) });
   assertNoErrors(validateProject(next, incoming.dataset), 'INVALID_SOURCE_UPDATE');
   return next;
 }

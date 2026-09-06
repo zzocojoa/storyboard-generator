@@ -17,6 +17,11 @@ type FramePageItem = {
 };
 type FrameRect = { x: number; y: number; width: number; height: number };
 
+function assetErrorCode(error: unknown): string | null {
+  if (!(error instanceof Error) || !('code' in error) || typeof error.code !== 'string') return null;
+  return error.code.startsWith('ASSET_') ? error.code : null;
+}
+
 async function pageItems(project: Project, loadAsset: AssetLoader): Promise<FramePageItem[]> {
   const orderedFrames: StoryboardFrame[] = project.shots.flatMap((shot: Shot): StoryboardFrame[] => project.frames
     .filter((frame: StoryboardFrame): boolean => frame.shotId === shot.id)
@@ -34,10 +39,22 @@ async function pageItems(project: Project, loadAsset: AssetLoader): Promise<Fram
       .flatMap((cue): BlockedCue[] => reviewAudioPlaybackAt(project, cue.startMs).blocked.filter((entry: BlockedCue): boolean => entry.cueId === cue.id));
     const textIssues: Issue[] = project.textCues.filter((cue: TextCue): boolean => cue.startMs < shot.endMs && cue.endMs > shot.startMs)
       .flatMap((cue: TextCue): Issue[] => reviewIssuesForTextCue(project, cue.id));
+    let image: Buffer | null = null;
+    let integrityCode: string | null = null;
+    if (frameDecision.renderBitmap && frameDecision.imageAssetId !== null) {
+      try {
+        image = await loadAsset(frameDecision.imageAssetId);
+      } catch (error: unknown) {
+        integrityCode = assetErrorCode(error);
+        if (integrityCode === null) throw error;
+      }
+    }
     const codes: string[] = [...new Set([...frameIssues, ...textIssues, ...audioBlocked.flatMap((entry: BlockedCue): Issue[] => entry.issues)].map((value: Issue): string => value.code))];
+    if (integrityCode !== null) codes.push(integrityCode);
     const outputText: string = codes.length === 0 ? 'OUTPUT SAFE' : `DRAFT · OUTPUT INTERLOCK REVIEW REQUIRED · ${codes.join(', ')}`;
-    const placeholderText: string = frameOutputPlaceholderText(frameDecision, frame.description);
-    return { frame, shot, image: frameDecision.renderBitmap && frameDecision.imageAssetId !== null ? await loadAsset(frameDecision.imageAssetId) : null,
+    const placeholderText: string = integrityCode === null ? frameOutputPlaceholderText(frameDecision, frame.description)
+      : `Frame ID: ${frame.id}\nAsset ID: ${frameDecision.imageAssetId ?? 'NONE'}\nIssue: ${integrityCode}`;
+    return { frame, shot, image,
       sourceText, gateText, outputText, placeholderText };
   }));
 }

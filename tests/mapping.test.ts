@@ -121,7 +121,7 @@ describe('Migration과 Source Update', (): void => {
     for (const rule of legacy.dataset.informationRules) { delete (rule as { segmentId?: string }).segmentId; }
     for (const shot of legacy.shots) { shot.sourceUnitIds = shot.sourceLinks.map((link: ShotSourceLink): string => link.unitId); delete (shot as { sourceLinks?: ShotSourceLink[] }).sourceLinks; }
     const migrated: Project = parseProject(legacy);
-    expect(migrated.schemaVersion).toBe('1.4.0');
+    expect(migrated.schemaVersion).toBe('1.5.0');
     expect(migrated.shots.every((shot: Shot): boolean => shot.sourceLinks.length > 0)).toBe(true);
   });
 

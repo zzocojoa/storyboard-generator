@@ -117,7 +117,7 @@ describe('로컬 작업 API', (): void => {
       const textEdit = await app.inject({ method: 'PATCH', url: `/api/projects/plant-care-demo/text/${encodeURIComponent(text.id)}`,
         payload: { expectedRevision: 2, timing: { startMs: text.startMs, endMs: text.endMs, kind: 'dialogue-subtitle' } } });
       expect(textEdit.statusCode).toBe(200);
-      expect(textEdit.json().project).toEqual(expect.objectContaining({ revision: 3, schemaVersion: '1.4.0' }));
+      expect(textEdit.json().project).toEqual(expect.objectContaining({ revision: 3, schemaVersion: '1.5.0' }));
     } finally { await app.close(); }
   });
 

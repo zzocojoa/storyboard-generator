@@ -1,7 +1,8 @@
 import { assertNoErrors, contractError } from '../domain/errors.js';
 import { createInitialTextMappingDecisions } from '../domain/mapping.js';
+import { createInitialPlacementInformationDecisions } from '../domain/placement-information.js';
 import { DatasetSchema, ProjectSchema } from '../domain/schema.js';
-import type { Dataset, Issue, Project, TextMappingDecision } from '../domain/schema.js';
+import type { Dataset, Issue, Project, TextMappingDecision, TextPlacementInformationDecision } from '../domain/schema.js';
 import { validateTimebase } from '../domain/time.js';
 import { validateDataset } from '../domain/validation.js';
 import { validatePackage } from './integrity.js';
@@ -16,14 +17,15 @@ export function importPackage(input: unknown): Project {
     : importProduction(payload.handoff, snapshots);
   const initialDataset: Dataset = DatasetSchema.parse(normalized.dataset);
   const textMappingDecisions: TextMappingDecision[] = createInitialTextMappingDecisions(initialDataset);
+  const textPlacementInformationDecisions: TextPlacementInformationDecision[] = createInitialPlacementInformationDecisions(textMappingDecisions);
   const dataset: Dataset = initialDataset;
   if (dataset.projectId !== payload.handoff.projectId) throw contractError('PROJECT_MISMATCH', `handoff=${payload.handoff.projectId}, dataset=${dataset.projectId}`, []);
   const issues: Issue[] = [...normalized.issues, ...validateDataset(dataset, snapshots)];
   assertNoErrors(issues, 'INVALID_SOURCE_DATASET');
   return ProjectSchema.parse({
-    schemaVersion: '1.4.0', projectId: dataset.projectId, title: dataset.title, revision: 0, profile: payload.handoff.profile,
+    schemaVersion: '1.5.0', projectId: dataset.projectId, title: dataset.title, revision: 0, profile: payload.handoff.profile,
     handoff: payload.handoff, sources: snapshots, dataset, importIssues: issues,
-    textMappingDecisions, shots: [], frames: [], audioCues: [], textCues: [], assets: [], generationRecords: [],
+    textMappingDecisions, textPlacementInformationDecisions, shots: [], frames: [], audioCues: [], textCues: [], assets: [], generationRecords: [],
   });
 }
 

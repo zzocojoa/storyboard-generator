@@ -67,7 +67,7 @@ export async function applyCodexImage(
   const imageWork: ImageWork = work;
   const result: GeneratedImage = { bytes: await readFile(inputPath), provider: 'codex-app', prompt: imageWork.prompt,
     model: 'codex-imagegen', requestId: request.id, mimeType: 'image/png', referenceHashes: imageWork.references.map((reference): string => reference.sha256) };
-  const mutation: GeneratedMutation = applyGeneratedImage(project, request.targetId, generationId(request.id), request.createdAt, result);
+  const mutation: GeneratedMutation = await applyGeneratedImage(project, request.targetId, generationId(request.id), request.createdAt, result);
   return applyMutation(request, mutation, store, requests, project.revision, now);
 }
 

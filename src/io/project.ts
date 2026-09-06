@@ -127,10 +127,23 @@ function migrate13To14(input: JsonObject): JsonObject {
   };
 }
 
-/** 1.0~1.3 저장본을 출력 권한과 Audio 관계가 명시된 1.4 형식으로 올린다. */
+function migratedPlacementInformationDecisions(input: JsonObject): JsonObject[] {
+  if (!Array.isArray(input.textMappingDecisions)) return [];
+  return input.textMappingDecisions.filter(isJsonObject).flatMap((decision: JsonObject): JsonObject[] => {
+    if (typeof decision.placementId !== 'string' || !['separate-element', 'standalone-placement'].includes(String(decision.relation))) return [];
+    return [{ id: `placement-info:${decision.placementId}`, placementId: decision.placementId, status: 'unresolved', informationIds: [], note: null }];
+  });
+}
+
+function migrate14To15(input: JsonObject): JsonObject {
+  if (input.schemaVersion !== '1.4.0') return input;
+  return { ...input, schemaVersion: '1.5.0', textPlacementInformationDecisions: migratedPlacementInformationDecisions(input) };
+}
+
+/** 1.0~1.4 저장본을 독립 Placement 정보 판정이 명시된 1.5 형식으로 올린다. */
 export function migrateProjectInput(input: unknown): unknown {
   if (!isJsonObject(input)) return input;
-  return migrate13To14(migrate12To13(migrate11To12(migrate10To11(input))));
+  return migrate14To15(migrate13To14(migrate12To13(migrate11To12(migrate10To11(input)))));
 }
 
 /** 저장된 원본 스냅샷에서 데이터를 다시 계산해 편집 가능한 값과 원문을 구분한다. */

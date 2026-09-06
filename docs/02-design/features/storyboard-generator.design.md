@@ -1,6 +1,6 @@
 # 범용 콘티 도구 — Design
 
-상태: 1.4.0 도메인 계약, 공통 정보 출력 인터록, Text Cue 권한, End Frame 평가 경계, 명시적 J/L-cut과 대표 실제 구간의 Codex App 생성·PRJ-007 Golden 검증을 반영한 현재 설계. 전체 분량의 제작 판단은 별도 검토가 필요하다.
+상태: 1.5.0 도메인 계약, 독립 Placement 정보 판정, 실제 미디어 무결성 검사, 안전 Frame·Audio 출력, 명시적 J/L-cut과 PRJ-007 실제 UNIT-045 WAV Golden을 반영한 현재 설계. 전체 분량의 제작 판단은 별도 검토가 필요하다.
 
 ## 1. 목표와 결정 근거
 
@@ -65,9 +65,10 @@ native 파일은 일반적인 프로젝트 원본을 표현한다. ID는 불투�
 - 원문 `SourceUnit`은 발화, 내레이션, 패널 발화, 지문, 화면 글자, 채팅, 메모, 효과음, 음악을 구분한다. 원문 문자열과 출처는 편집 지시와 분리한다.
 - `Shot`은 구간, 화면 위치, 구도·각도·이동, 행동 제안, 출연 형태, 소품, 연속성 전후 상태, 다음 컷으로 나가는 전환, 원문 참조를 가진다.
 - `StoryboardFrame`은 컷의 시작·종료·중간 keyframe과 이미지 자산을 별도로 연결한다. 컷 하나에 이미지 하나를 강제하지 않는다.
-- `AudioCue`와 `TextCue`는 영상 컷과 독립된 시작·종료를 가진다. 오디오는 발화·VO·패널·SFX·음악을 구분하고 원본 Segment와의 관계를 `within-segment`, `j-cut`, `l-cut`으로 명시한다. Text Cue는 Placement, 확정 Mapping, Source Unit 또는 `review-required` 권한을 기록한다. Placement 출력은 정확히 하나의 확정 Mapping Decision을 요구하고, `separate-element` Placement는 Canonical 정보를 상속하지 않는다. Canonical Cue는 `mappingDecisionId`로 식별한다. 채팅·메모를 자동 낭독하지 않는다.
+- `AudioCue`와 `TextCue`는 영상 컷과 독립된 시작·종료를 가진다. 오디오는 발화·VO·패널·SFX·음악을 구분하고 원본 Segment와의 관계를 `within-segment`, `j-cut`, `l-cut`으로 명시한다. 실제 Audio Asset 등록은 모든 Cue 종류에 열려 있고 파일에서 측정한 길이로 Cue 종료점을 다시 정한다. Text Cue는 Placement, 확정 Mapping, Source Unit 또는 `review-required` 권한을 기록한다. Placement 출력은 정확히 하나의 확정 Mapping Decision을 요구하고, `separate-element` Placement는 Canonical 정보를 상속하지 않는다. Canonical Cue는 `mappingDecisionId`로 식별한다. 채팅·메모를 자동 낭독하지 않는다.
 - `TextMappingDecision`은 자막 Placement와 Canonical 원문의 관계를 `exact`, `abbreviation`, `separate-element`, `replacement`, `standalone-placement`로 기록한다. 명시적 `placement.unitId`, 허용 종류의 유일한 정확 일치, 유일한 휴리스틱 후보 순서로 찾는다. 중복 정확 일치는 자동 선택하지 않는다. 관계마다 Canonical 연결·별도 렌더링·시간 범위의 불변식을 검사한다. `separate-element`의 Placement Cue는 Canonical Unit을 소유하지 않고, 별도 Canonical Cue만 명시한 시각과 Unit을 가진다.
-- `ShotSourceLink`는 컷과 원문 Unit의 권한 관계다. `primary-visual`, `continued-visual`, `audio-only`, `context-only` 용도와 `confirmed`, `mapping-required` 상태, `shot-offset`·`frame`·`unresolved` 시간 Anchor를 가진다. `SOUND`와 `MUSIC`은 직접 시각 근거가 될 수 없고 `continued-visual`은 앞선 `primary-visual`을 요구한다. `sourceUnitIds`는 1.4.0 프로젝트에 중복 저장하지 않는다.
+- `TextPlacementInformationDecision`은 독립 관계의 Placement마다 최대 하나 존재한다. `unresolved`는 출력 차단, `non-informational`은 정보 없음의 사용자 확정, `informational`은 하나 이상의 Information ID와 Gate 검사를 뜻한다. Canonical 상속 관계에는 이 판정을 두지 않는다. 관계 변경은 판정 생성·제거를 같은 project mutation에서 처리한다.
+- `ShotSourceLink`는 컷과 원문 Unit의 권한 관계다. `primary-visual`, `continued-visual`, `audio-only`, `context-only` 용도와 `confirmed`, `mapping-required` 상태, `shot-offset`·`frame`·`unresolved` 시간 Anchor를 가진다. `SOUND`와 `MUSIC`은 직접 시각 근거가 될 수 없고 `continued-visual`은 앞선 `primary-visual`을 요구한다. `sourceUnitIds`는 1.5.0 프로젝트에 중복 저장하지 않는다.
 - 인물의 역할·시각 기준과 컷의 실제 출연 형태를 분리한다. 출연 형태는 VISIBLE, HAND_ONLY, SILHOUETTE, OFFSCREEN_VOICE, VOICE_OVER, IMPLIED, ARCHIVE_IMAGE다. 목록에 없으면 그 컷의 출연이 선언되지 않은 상태다.
 - 장소는 이야기 장소와 화면 장소를 분리한다. 모호한 장소를 이야기 장소로 자동 확정하지 않는다.
 - `Asset`은 종류, 경로, SHA-256, 시각 설명, 원문과 독립된 버전을 가진다. 인물 의상·소품 상태·공간 축은 컷의 연속성 상태로 표현한다.
@@ -119,21 +120,27 @@ Information Emission Interlock은 이미지, 글자 오버레이, 음성 재생�
 | POST /api/projects/:id/segments/:segmentId/propose | 구간별 컷 제안 작업 |
 | POST /api/projects/:id/frames/:frameId/generate | 선택 프레임 이미지 생성 작업 |
 | POST /api/projects/:id/audio/:cueId/generate | 선택 발화 가이드 음성 생성 작업 |
+| POST /api/projects/:id/audio/:cueId/asset | expected revision과 PCM WAV 한 개를 multipart로 받아 실제 길이·형식·해시를 검사하고 저장 |
+| PATCH /api/projects/:id/text-placements/:placementId/information | 독립 Placement의 정보성·비정보성·미해결 판정 변경 |
+| GET /api/projects/:id/output/frame/:frameId | 현재 프로젝트와 실제 파일을 다시 검사한 안전 Frame bytes |
+| GET /api/projects/:id/output/audio/:cueId | 현재 프로젝트와 실제 파일을 다시 검사한 안전 Audio bytes |
 | GET /api/status, /api/codex/requests/:id | 영속 생성 요청의 완료·대기·실패, 처리 시간·반복 생성, 오류·결과 revision |
 | GET /api/projects/:id/export.json, .csv, .pdf | 검토 상태를 포함한 결과 출력 |
 
-서버는 로컬 주소에 바인딩한다. API는 생성 버튼을 누른 시점의 최소 문맥 해시와 대상을 영속 요청으로 저장하며 외부 생성 서비스를 직접 호출하지 않는다. 웹 편집과 생성 실행은 서로 막지 않는다. Codex App 결과를 적용할 때 현재 대상 문맥 해시가 다르면 오래된 요청으로 거부한다. 빈 자산이나 다른 제공자로 자동 대체하지 않는다.
+서버는 로컬 주소에 바인딩한다. 업로드 파일명은 저장 경로에 사용하지 않고 프로젝트 디렉터리 밖의 경로를 거부한다. PCM WAV는 최대 50MB·1시간, mono/stereo, 16/24-bit만 지원하며 프로젝트 샘플레이트의 PCM16 WAV로 정규화하고 다시 검사한다. AIFF·MP3는 명시적으로 거부한다. 업로드 파일과 새 revision은 임시 파일을 거쳐 게시하며 실패하면 둘 다 되돌린다. API는 생성 버튼을 누른 시점의 최소 문맥 해시와 대상을 영속 요청으로 저장하며 외부 생성 서비스를 직접 호출하지 않는다. 웹 편집과 생성 실행은 서로 막지 않는다. Codex App 결과를 적용할 때 현재 대상 문맥 해시가 다르면 오래된 요청으로 거부한다. 빈 자산이나 다른 제공자로 자동 대체하지 않는다.
+
+`sharp` 0.35.4(Apache-2.0)는 macOS·Linux에서 PNG·JPEG·WebP 전체 디코딩과 픽셀 상한 검사에 사용한다. `@fastify/multipart` 10.1.1(MIT)은 Node.js에서 파일 수와 크기를 제한한다. 안전 출력과 Raw Asset fetch는 저장 파일의 존재·프로젝트 내부 경로·SHA-256·실제 MIME·구조와 대상 연결을 다시 검사한다. 안전 Frame·Audio 응답은 `no-store`이고, PDF는 손상된 Frame을 ID와 오류 코드가 있는 placeholder로 대체한다. 무결성 및 Ready 지표는 영속하지 않고 현재 프로젝트와 파일에서 계산한다.
 
 생성은 Codex App의 현재 모델과 내장 `image_gen`에서 수행한다. 가이드 음성은 Codex App 작업이 원문 파일을 준비한 뒤 설정된 macOS 한국어 음성으로 만들고 PCM WAV로 변환한다. `OPENAI_API_KEY`와 OpenAI SDK를 사용하지 않는다. 생성 요청과 결과 revision은 `.local` 아래에 프로젝트별 데이터와 분리해 저장하고, 결과 자산에는 요청 ID·prompt·도구 이름·참조 해시를 기록한다. 요청의 생성·종료 시각으로 처리 시간을 집계하고 같은 프로젝트·종류·대상에 대한 추가 요청을 반복 생성으로 계산한다. Codex App이 요청별 비용을 노출하지 않는 상태는 0원이 아니라 미측정으로 표시한다.
 
 ## 8. 검증 계획과 구현 순서
 
-1. 버전 고정 패키지, 1.4.0 스키마·타입, 1.0.0→1.1.0→1.2.0→1.3.0→1.4.0 Migration, 파일 해시·경로·권한 검사, native 입력: 구현 및 자동 검증됨.
+1. 버전 고정 패키지, 1.5.0 스키마·타입, 1.0.0→1.1.0→1.2.0→1.3.0→1.4.0→1.5.0 Migration, 파일 해시·경로·권한 검사, native 입력: 구현 및 자동 검증됨.
 2. 실제 제작 자료의 production 어댑터, 최소 합성 native 프로젝트, 원문·시간·선택 요소 검증: 구현 및 자동 검증됨.
 3. 컷·시작/키/끝 프레임·독립 트랙·전환 생성과 편집·잠금, Text Mapping 상태 기계·Source Temporal Anchor·동적 Information Gate, JSON/CSV/PDF 보존: 구현 및 자동 검증됨.
 4. 로컬 저장/API·Mapping 편집 UI, 프로젝트 분리·재열기·원본 차이: 구현 및 자동 검증됨.
 5. 시각 기준, Codex App 컷·이미지·음성 요청과 결과 반영, 재생, PDF 출력: 구현 및 자동 검증됨. 합성 범용 사례와 PRJ-007 `SEG-008`의 실제 생성 흐름을 확인했다.
-6. 두 가지 이상의 구성으로 회귀·브라우저 검증, 전체 요구사항 감사: 21개 파일의 190개 자동 테스트로 합성 자료와 초기 회귀 자료의 가져오기·편집·출력을 검증했다. Placement Mapping 출력, Text 권한 복구·삭제, Canonical Cue 식별, stale Frame 채널 차단을 포함한다. PRJ-007 Golden은 `SEG-018` 지시에서 다음 구간 SOUND `UNIT-045`의 849,000–851,000ms J-cut을 추적하고, `SEG-024` Audio는 실제 Source가 뒷받침하는 Gate만 보고한다. 전체 분량의 시각·낭독 검토는 남아 있다.
+6. 두 가지 이상의 구성으로 회귀·브라우저 검증, 전체 요구사항 감사: 22개 파일의 278개 자동 테스트로 합성 자료와 초기 회귀 자료의 가져오기·편집·출력을 검증했다. 신규 88개 검사는 독립 Placement 정보 판정, 실제 PCM WAV HTTP 등록·저장·재열기, 저장 미디어 해시·디코딩, 안전 출력, 1.5 Migration을 포함한다. PRJ-007 Golden은 실제 48,000Hz 2초 WAV를 `UNIT-045`의 849,000–851,000ms J-cut에 연결한다. 전체 분량의 시각·낭독 검토는 남아 있다.
 
 필수 자동 검증은 원문 100% 보존과 단위 연결, 영상 시간 공백·중복, 잘못된 ID·구간 소유권, 미지원 버전·손상 해시, 공개 시점 위반, 잠근 필드 변경, 프로젝트 혼입, 저장·출력 정합성이다. 실제 제작 사례 수치는 fixture에만 둔다. 패널·반전이 없는 다른 분량의 프로젝트와 원본 ID가 겹치는 프로젝트도 검증한다.
 

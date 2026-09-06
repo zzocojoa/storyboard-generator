@@ -113,7 +113,8 @@
                       "mapping-change",
                       "source-move",
                       "audio-change",
-                      "frame-change"
+                      "frame-change",
+                      "source-update"
                     ]
                   },
                   "status": {

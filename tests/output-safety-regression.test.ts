@@ -14,7 +14,7 @@ import { exportProjectJson } from '../src/exporters/json.js';
 import { exportProjectPdf } from '../src/exporters/pdf.js';
 import { importPackage } from '../src/importers/import-package.js';
 import { createSourceOutline } from '../src/proposal/outline.js';
-import { nativePackage } from './helpers.js';
+import { nativePackage, png } from './helpers.js';
 
 async function outline(): Promise<Project> {
   return createSourceOutline(importPackage(await nativePackage()), { proposedTextHoldMs: 2000 });
@@ -43,6 +43,8 @@ function decisionProject(fixture: PlacementFixture, relation: TextMappingDecisio
     canonicalEndMs: relation === 'separate-element' ? fixture.placement.startMs + 500 : null };
   return { ...fixture.project,
     textMappingDecisions: fixture.project.textMappingDecisions.map((candidate: TextMappingDecision): TextMappingDecision => candidate.id === decision.id ? decision : candidate),
+    textPlacementInformationDecisions: ['separate-element', 'standalone-placement'].includes(relation)
+      ? [{ id: `placement-info:${fixture.placement.id}`, placementId: fixture.placement.id, status: 'non-informational', informationIds: [], note: null }] : [],
     textCues: fixture.project.textCues.map((candidate: TextCue): TextCue => candidate.id === fixture.cue.id ? { ...candidate,
       unitId: status === 'confirmed' && ['exact', 'abbreviation', 'replacement'].includes(relation) ? canonicalUnitId : null } : candidate),
   };
@@ -127,10 +129,10 @@ describe('Placement Text 출력 안전성', (): void => {
 describe('Text Cue 권한 복구', (): void => {
   it('review_required_text_can_resolve_to_source_unit', async (): Promise<void> => {
     const project: Project = await outline();
-    const unit: SourceUnit = project.dataset.units[0] as SourceUnit;
+    const unit: SourceUnit = project.dataset.units.find((candidate: SourceUnit): boolean => candidate.kind === 'NARRATION') as SourceUnit;
     const cue: TextCue = reviewCue(project, unit, 'review-source');
     const resolved: Project = resolveTextCueAuthority({ ...project, textCues: [...project.textCues, cue] }, cue.id,
-      { authority: 'source-unit', unitId: unit.id, startMs: cue.startMs, endMs: cue.endMs, kind: cue.kind });
+      { authority: 'source-unit', unitId: unit.id, startMs: cue.startMs, endMs: cue.endMs, kind: 'dialogue-subtitle' });
     expect(resolved.textCues.find((candidate: TextCue): boolean => candidate.id === cue.id)).toEqual(expect.objectContaining({ authority: 'source-unit', unitId: unit.id, text: unit.text }));
   });
 
@@ -155,10 +157,10 @@ describe('Text Cue 권한 복구', (): void => {
 
   it('authority_resolution_preserves_exact_source_text', async (): Promise<void> => {
     const project: Project = await outline();
-    const unit: SourceUnit = project.dataset.units[0] as SourceUnit;
+    const unit: SourceUnit = project.dataset.units.find((candidate: SourceUnit): boolean => candidate.kind === 'NARRATION') as SourceUnit;
     const cue: TextCue = reviewCue(project, unit, 'review-source-text');
     const resolved: Project = resolveTextCueAuthority({ ...project, textCues: [...project.textCues, cue] }, cue.id,
-      { authority: 'source-unit', unitId: unit.id, startMs: cue.startMs, endMs: cue.endMs, kind: cue.kind });
+      { authority: 'source-unit', unitId: unit.id, startMs: cue.startMs, endMs: cue.endMs, kind: 'dialogue-subtitle' });
     expect(resolved.textCues.find((candidate: TextCue): boolean => candidate.id === cue.id)?.text).toBe(unit.text);
   });
 
@@ -320,8 +322,8 @@ describe('Frame 안전 출력', (): void => {
       sha256: '7'.repeat(64), description: '검증', durationMs: null, version: 1 };
     const prepared: Project = { ...base, assets: [image], shots: base.shots.map((candidate: Shot): Shot => candidate.id === shot.id ? { ...shot, approvalStatus: 'approved' } : candidate),
       frames: base.frames.map((candidate: StoryboardFrame): StoryboardFrame => candidate.id === frame.id ? { ...candidate, imageAssetId: image.id, visualReview: 'accepted' } : candidate) };
-    const changed: Project = addReferenceAsset(prepared, { id: 'new-character-reference', kind: 'character', subjectId: personId,
-      description: '새 인물 기준', mimeType: 'image/png', bytes: Buffer.from('89504e470d0a1a0a', 'hex') }).project;
+    const changed: Project = (await addReferenceAsset(prepared, { id: 'new-character-reference', kind: 'character', subjectId: personId,
+      description: '새 인물 기준', mimeType: 'image/png', bytes: await png(1, 1) })).project;
     expect(changed.frames.find((candidate: StoryboardFrame): boolean => candidate.id === frame.id)?.visualReview).toBe('pending');
     expect(changed.shots.find((candidate: Shot): boolean => candidate.id === shot.id)?.approvalStatus).toBe('proposed');
   });

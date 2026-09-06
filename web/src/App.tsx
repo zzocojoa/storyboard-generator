@@ -9,11 +9,12 @@ import type { BlockedCue } from '../../src/domain/playback.js';
 import type { StoryboardFrameInput } from '../../src/domain/frame.js';
 import { approvalIssuesForShot, effectiveInformationGate, sourceAnchorRange, textMappingReviewIssues } from '../../src/domain/mapping.js';
 import type { EffectiveInformationGate, ShotSourceLinksInput, TextMappingDecisionInput } from '../../src/domain/mapping.js';
-import type { Asset, AudioCue, Issue, LockedField, Profile, Project, Segment, Shot, ShotContent, ShotSourceLink, SourceTemporalAnchor, SourceUnit, StoryboardFrame, TextCue, TextMappingDecision, TextPlacement } from '../../src/domain/schema.js';
+import type { TextPlacementInformationInput } from '../../src/domain/placement-information.js';
+import type { Asset, AudioCue, Issue, LockedField, Profile, Project, Segment, Shot, ShotContent, ShotSourceLink, SourceTemporalAnchor, SourceUnit, StoryboardFrame, TextCue, TextMappingDecision, TextPlacement, TextPlacementInformationDecision } from '../../src/domain/schema.js';
 import type { AudioCueTimingInput, TextCueTimingInput } from '../../src/domain/tracks.js';
 import type { TextCueAuthorityResolutionInput } from '../../src/domain/text.js';
 import { frameDisplayAbsoluteMs, frameEvaluationAbsoluteMs } from '../../src/domain/time.js';
-import { fetchProject, fetchStatus, importProject, listProjects, mutateProject, previewSourceUpdate, queueCodexRequest, updateProjectSource } from './api.js';
+import { fetchProject, fetchStatus, importProject, listProjects, mutateProject, previewSourceUpdate, queueCodexRequest, updateProjectSource, uploadAudioAsset } from './api.js';
 import type { AppStatus, CodexRequest, ProjectSummary, SourceImpact } from './api.js';
 
 type Notice = { tone: 'info' | 'error'; text: string };
@@ -100,6 +101,14 @@ function assetUrl(projectId: string, assetId: string): string {
   return `/api/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(assetId)}`;
 }
 
+function safeFrameUrl(projectId: string, frameId: string): string {
+  return `/api/projects/${encodeURIComponent(projectId)}/output/frame/${encodeURIComponent(frameId)}`;
+}
+
+function safeAudioUrl(projectId: string, cueId: string): string {
+  return `/api/projects/${encodeURIComponent(projectId)}/output/audio/${encodeURIComponent(cueId)}`;
+}
+
 function ImportPanel(props: { working: boolean; onImport: (path: string, holdMs: number) => Promise<void> }): ReactElement {
   const [path, setPath] = useState<string>('');
   const [hold, setHold] = useState<string>('2000');
@@ -125,7 +134,7 @@ function ProjectRail(props: { summaries: ProjectSummary[]; currentId: string | n
     <div className="project-list">{props.summaries.map((summary: ProjectSummary): ReactElement =>
       <button key={summary.projectId} className={summary.projectId === props.currentId ? 'project-tile active' : 'project-tile'} onClick={(): void => { void props.onSelect(summary.projectId); }}>
         <span className="project-index">{clock(summary.durationMs)}</span><strong>{summary.title}</strong>
-        <span>{summary.shots} CUTS · {summary.framesReady}/{summary.framesTotal} FRAMES</span>
+        <span>{summary.shots} CUTS · ASSET {summary.framesWithAsset} · REVIEWED {summary.framesAccepted} · OUTPUT SAFE {summary.framesOutputSafe}</span>
       </button>)}</div>
     <details className="rail-import"><summary>＋ 프로젝트 불러오기</summary><ImportPanel working={props.working} onImport={props.onImport} /></details>
   </aside>;
@@ -151,7 +160,7 @@ function FrameImage(props: { project: Project; frame: StoryboardFrame | null; al
 
 function SafeFrameImage(props: { project: Project; frame: StoryboardFrame | null; decision: FrameOutputDecision | null; alt: string }): ReactElement {
   if (props.frame !== null && props.decision?.renderBitmap === true && props.decision.imageAssetId !== null) {
-    return <img src={assetUrl(props.project.projectId, props.decision.imageAssetId)} alt={props.alt} />;
+    return <img src={safeFrameUrl(props.project.projectId, props.frame.id)} alt={props.alt} />;
   }
   return <div className="frame-placeholder"><span>OUTPUT BLOCKED</span><p>{props.decision?.issues.map((item: Issue): string => item.code).join(', ') || props.frame?.id || '재생할 프레임이 없습니다.'}</p></div>;
 }
@@ -234,19 +243,24 @@ function FrameEditor(props: { project: Project; shot: Shot; frame: StoryboardFra
 }
 
 function AudioCueEditor(props: { project: Project; cue: AudioCue; text: string; working: boolean; disclosure: string;
-  onTiming: (cueId: string, input: AudioCueTimingInput) => Promise<void>; onSpeech: (cueId: string) => Promise<void>; }): ReactElement {
+  onTiming: (cueId: string, input: AudioCueTimingInput) => Promise<void>; onSpeech: (cueId: string) => Promise<void>;
+  onAsset: (cueId: string, file: File) => Promise<void>; }): ReactElement {
   const [draft, setDraft] = useState<AudioCueTimingInput>({ startMs: props.cue.startMs, endMs: props.cue.endMs, timingRelation: props.cue.timingRelation });
+  const [file, setFile] = useState<File | null>(null);
   useEffect((): void => { setDraft({ startMs: props.cue.startMs, endMs: props.cue.endMs, timingRelation: props.cue.timingRelation }); }, [props.cue]);
   const unit = props.project.dataset.units.find((candidate): boolean => candidate.id === props.cue.unitId);
   const sourceSegment = props.project.dataset.segments.find((candidate): boolean => candidate.id === unit?.segmentId);
   const playback = reviewAudioPlaybackAt(props.project, props.cue.startMs);
   const blocked = playback.blocked.find((entry: BlockedCue): boolean => entry.cueId === props.cue.id);
+  const asset: Asset | undefined = props.cue.assetId === null ? undefined : props.project.assets.find((candidate: Asset): boolean => candidate.id === props.cue.assetId);
   return <article className="track-editor"><header><b>{props.cue.kind.toUpperCase()}</b><span>{props.cue.timingStatus.toUpperCase()}</span></header><p>{props.text}</p>
     <p>SOURCE {sourceSegment?.id ?? 'UNKNOWN'} · RELATION {props.cue.timingRelation} · BEFORE {audioOverhangBeforeMs(props.project, props.cue)}ms · AFTER {audioOverhangAfterMs(props.project, props.cue)}ms</p>
     <p>{blocked === undefined ? 'OUTPUT READY' : `OUTPUT BLOCKED · ${blocked.issues.map((item: Issue): string => item.code).join(', ')}`}</p>
     <label className="field">TIMING RELATION<select value={draft.timingRelation} onChange={(event): void => { setDraft({ ...draft, timingRelation: event.target.value as AudioCue['timingRelation'] }); }}><option value="within-segment">WITHIN SEGMENT</option><option value="j-cut">J-CUT</option><option value="l-cut">L-CUT</option></select></label>
     <div className="pair"><label className="field">START MS<input type="number" min="0" value={draft.startMs} onChange={(event): void => { setDraft({ ...draft, startMs: Number(event.target.value) }); }} /></label><label className="field">END MS<input type="number" min="0" value={draft.endMs} onChange={(event): void => { setDraft({ ...draft, endMs: Number(event.target.value) }); }} /></label></div>
-    <div className="track-actions"><button disabled={props.working} onClick={(): void => { void props.onTiming(props.cue.id, draft); }}>타이밍 저장</button>{isSpeechCue(props.cue) && <button disabled={props.working} title={props.disclosure} onClick={(): void => { void props.onSpeech(props.cue.id); }}>{props.cue.assetId === null ? 'CODEX VOICE' : 'RETAKE'}</button>}</div>
+    {asset?.audioMetadata !== undefined && asset.audioMetadata !== null && <p>ASSET {asset.durationMs}ms · {asset.audioMetadata.sampleRate}Hz · {asset.audioMetadata.channels}ch · {asset.audioMetadata.codec} · v{asset.version}</p>}
+    <input type="file" accept="audio/wav,audio/x-wav,.wav" onChange={(event: ChangeEvent<HTMLInputElement>): void => { setFile(event.target.files?.[0] ?? null); }} />
+    <div className="track-actions"><button disabled={props.working} onClick={(): void => { void props.onTiming(props.cue.id, draft); }}>타이밍 저장</button><button disabled={props.working || file === null} onClick={(): void => { if (file !== null) void props.onAsset(props.cue.id, file); }}>WAV 등록</button>{isSpeechCue(props.cue) && <button disabled={props.working} title={props.disclosure} onClick={(): void => { void props.onSpeech(props.cue.id); }}>{props.cue.assetId === null ? 'CODEX VOICE' : 'RETAKE'}</button>}</div>
   </article>;
 }
 
@@ -267,7 +281,8 @@ function TextCueEditor(props: { project: Project; cue: TextCue; working: boolean
       const placement: TextPlacement | undefined = props.project.dataset.textPlacements.find((candidate: TextPlacement): boolean => candidate.id === decision.placementId);
       return placement?.segmentId === props.cue.segmentId;
     }).map((decision: TextMappingDecision): string => decision.id)
-      : props.project.dataset.units.filter((unit: SourceUnit): boolean => unit.segmentId === props.cue.segmentId).map((unit: SourceUnit): string => unit.id);
+      : props.project.dataset.units.filter((unit: SourceUnit): boolean => unit.segmentId === props.cue.segmentId
+        && ['SCREEN_TEXT', 'CHAT', 'NOTE', 'DIALOGUE', 'NARRATION', 'PANEL'].includes(unit.kind)).map((unit: SourceUnit): string => unit.id);
   const selectedTarget: string = resolutionTargets.includes(resolutionTarget) ? resolutionTarget : resolutionTargets[0] ?? '';
   const resolve = (): void => {
     if (selectedTarget === '') return;
@@ -280,8 +295,8 @@ function TextCueEditor(props: { project: Project; cue: TextCue; working: boolean
     <p>AUTHORITY {props.cue.authority} · MAPPING {props.cue.mappingDecisionId ?? 'NONE'} · UNIT {props.cue.unitId ?? 'NONE'}</p>
     <p>INFORMATION {informationIds.join(', ') || 'NONE'} · GATE {gates.map((gate: EffectiveInformationGate): string => `${gate.id}:${gate.effectiveNotBeforeMs}`).join(', ') || 'NONE'} · {cueIssues.length === 0 ? 'OUTPUT READY' : `OUTPUT BLOCKED ${cueIssues.map((item: Issue): string => item.code).join(', ')}`}</p>
     <label className="field">TYPE<select value={draft.kind} onChange={(event): void => { setDraft({ ...draft, kind: event.target.value as TextCue['kind'] }); }}><option value="overlay">오버레이</option><option value="prop-text">화면 속 글자</option><option value="dialogue-subtitle">대사 자막</option></select></label>
-    <div className="pair"><label className="field">START MS<input disabled={props.cue.placementId !== null || derived} type="number" min="0" value={draft.startMs} onChange={(event): void => { setDraft({ ...draft, startMs: Number(event.target.value) }); }} /></label><label className="field">END MS<input disabled={(props.placementEndMs !== null && props.placementEndMs !== undefined) || derived} type="number" min="0" value={draft.endMs} onChange={(event): void => { setDraft({ ...draft, endMs: Number(event.target.value) }); }} /></label></div>
-    <div className="track-actions"><button disabled={props.working || derived} onClick={(): void => { void props.onTiming(props.cue.id, draft); }}>{derived ? 'MAPPING에서 수정' : '글자 트랙 저장'}</button></div>
+    <div className="pair"><label className="field">START MS<input disabled={props.cue.placementId !== null || derived} type="number" min="0" value={draft.startMs} onChange={(event): void => { setDraft({ ...draft, startMs: Number(event.target.value) }); }} /></label><label className="field">END MS<input disabled={props.cue.placementId !== null || derived} type="number" min="0" value={draft.endMs} onChange={(event): void => { setDraft({ ...draft, endMs: Number(event.target.value) }); }} /></label></div>
+    <div className="track-actions"><button disabled={props.working || props.cue.placementId !== null || derived} onClick={(): void => { void props.onTiming(props.cue.id, draft); }}>{props.cue.placementId !== null ? 'PLACEMENT 시각 읽기 전용' : derived ? 'MAPPING에서 수정' : '글자 트랙 저장'}</button></div>
     {props.cue.authority === 'review-required' && <div className="authority-resolution"><label className="field">AUTHORITY<select value={resolutionAuthority} onChange={(event): void => { setResolutionAuthority(event.target.value as TextCueAuthorityResolutionInput['authority']); setResolutionTarget(''); }}><option value="source-unit">source-unit</option><option value="placement">placement</option><option value="mapping-decision">mapping-decision</option></select></label><label className="field">SOURCE<select value={selectedTarget} onChange={(event): void => { setResolutionTarget(event.target.value); }}>{resolutionTargets.map((id: string): ReactElement => <option key={id} value={id}>{id}</option>)}</select></label><div className="track-actions"><button disabled={props.working || selectedTarget === ''} onClick={resolve}>권한 확정</button><button disabled={props.working} onClick={(): void => { void props.onDelete(props.cue.id); }}>검토 Cue 삭제</button></div></div>}
   </article>;
 }
@@ -332,6 +347,35 @@ function TextMappingEditor(props: { decision: TextMappingDecision; placement: Te
   </article>;
 }
 
+function PlacementInformationEditor(props: { project: Project; mapping: TextMappingDecision; placement: TextPlacement; working: boolean;
+  onSave: (placementId: string, input: TextPlacementInformationInput) => Promise<void>; }): ReactElement | null {
+  const decision: TextPlacementInformationDecision | undefined = props.project.textPlacementInformationDecisions
+    .find((candidate: TextPlacementInformationDecision): boolean => candidate.placementId === props.placement.id);
+  const [selectedIds, setSelectedIds] = useState<string[]>(decision?.informationIds ?? []);
+  const [note, setNote] = useState<string>(decision?.note ?? '');
+  useEffect((): void => { setSelectedIds(decision?.informationIds ?? []); setNote(decision?.note ?? ''); }, [decision]);
+  if (!['separate-element', 'standalone-placement'].includes(props.mapping.relation)) return null;
+  const cue: TextCue | undefined = props.project.textCues.find((candidate: TextCue): boolean => candidate.placementId === props.placement.id);
+  const issues: Issue[] = cue === undefined ? [] : reviewIssuesForTextCue(props.project, cue.id);
+  return <article className={decision?.status === 'unresolved' ? 'mapping-editor unresolved' : 'mapping-editor'}>
+    <header><b>PLACEMENT INFORMATION</b><span>{decision?.status.toUpperCase() ?? 'MISSING'}</span></header>
+    <p>{props.placement.id} · {props.mapping.relation} · START {props.placement.startMs}ms</p>
+    <p className="canonical-text">{props.placement.text}</p>
+    {props.project.dataset.informationRules.map((rule): ReactElement => {
+      const gate: EffectiveInformationGate = effectiveInformationGate(props.project, rule.id);
+      const checked: boolean = selectedIds.includes(rule.id);
+      return <label className="check-row" key={rule.id}><input type="checkbox" checked={checked} onChange={(event): void => {
+        setSelectedIds(event.target.checked ? [...selectedIds, rule.id] : selectedIds.filter((id: string): boolean => id !== rule.id));
+      }} /><span>{rule.id} · BASE {gate.baseNotBeforeMs} · EFFECTIVE {gate.effectiveNotBeforeMs} · {rule.segmentId}</span></label>;
+    })}
+    <label className="field">NOTE<input value={note} onChange={(event): void => { setNote(event.target.value); }} /></label>
+    <p>{issues.length === 0 && decision?.status !== 'unresolved' ? 'OUTPUT ALLOWED' : `OUTPUT BLOCKED · ${issues.map((item: Issue): string => item.code).join(', ') || 'PLACEMENT_INFORMATION_REVIEW_REQUIRED'}`}</p>
+    <div className="mapping-actions"><button disabled={props.working} onClick={(): void => { void props.onSave(props.placement.id, { status: 'non-informational', informationIds: [], note: note || null }); }}>Non-informational</button>
+      <button disabled={props.working || selectedIds.length === 0} onClick={(): void => { void props.onSave(props.placement.id, { status: 'informational', informationIds: selectedIds, note: note || null }); }}>Information 연결</button>
+      <button disabled={props.working} onClick={(): void => { void props.onSave(props.placement.id, { status: 'unresolved', informationIds: [], note: note || null }); }}>Unresolved로 재설정</button></div>
+  </article>;
+}
+
 function SourceMappingEditor(props: { link: ShotSourceLink; unit: SourceUnit; frames: StoryboardFrame[]; shotDurationMs: number; absoluteRevealMs: number | null; gateComparisons: SourceGateComparison[]; working: boolean; previousShotId: string | null; nextShotId: string | null;
   onChange: (link: ShotSourceLink) => Promise<void>; onMove: (unitId: string, targetShotId: string, usage: ShotSourceLink['usage']) => Promise<void>; }): ReactElement {
   const [draft, setDraft] = useState<ShotSourceLink>(props.link);
@@ -353,12 +397,13 @@ function SourceMappingEditor(props: { link: ShotSourceLink; unit: SourceUnit; fr
 function Inspector(props: { project: Project; segment: Segment; shot: Shot | null; draft: ShotContent | null; working: boolean; status: AppStatus | null;
   onDraft: (draft: ShotContent) => void; onSave: () => Promise<void>; onSplit: () => Promise<void>; onMerge: () => Promise<void>;
   onMove: (direction: -1 | 1) => Promise<void>; onLocks: (fields: LockedField[]) => Promise<void>; onApprove: () => Promise<void>;
-  onSpeech: (cueId: string) => Promise<void>; onReference: (draft: ReferenceDraft) => Promise<void>;
+  onSpeech: (cueId: string) => Promise<void>; onAudioAsset: (cueId: string, file: File) => Promise<void>; onReference: (draft: ReferenceDraft) => Promise<void>;
   onFrameEdit: (frameId: string, input: StoryboardFrameInput) => Promise<void>; onFrameAdd: (shotId: string, input: StoryboardFrameInput) => Promise<void>;
   onFrameGenerate: (frameId: string) => Promise<void>; onFrameReview: (frameId: string, review: StoryboardFrame['visualReview']) => Promise<void>;
   onAudioTiming: (cueId: string, input: AudioCueTimingInput) => Promise<void>; onTextTiming: (cueId: string, input: TextCueTimingInput) => Promise<void>;
   onTextResolve: (cueId: string, input: TextCueAuthorityResolutionInput) => Promise<void>; onTextDelete: (cueId: string) => Promise<void>;
   onTextMapping: (decisionId: string, input: TextMappingDecisionInput) => Promise<void>;
+  onPlacementInformation: (placementId: string, input: TextPlacementInformationInput) => Promise<void>;
   onSourceLinks: (input: ShotSourceLinksInput) => Promise<void>;
   onSourceMove: (unitId: string, targetShotId: string, usage: ShotSourceLink['usage']) => Promise<void>;
   onProfile: (profile: Profile) => Promise<void>; sourceImpact: SourceImpact | null;
@@ -430,9 +475,9 @@ function Inspector(props: { project: Project; segment: Segment; shot: Shot | nul
       {approvalIssues.length > 0 && <section className="approval-review"><b>APPROVAL BLOCKED · {approvalIssues.length}</b>{approvalIssues.map((item: Issue, index: number): ReactElement => <p key={`${item.code}:${item.entityId}:${index}`}>{item.code} · ENTITY {item.entityId} · FIELD {item.field} · {item.message}{item.expected === null ? '' : ` · 기대 ${item.expected}`}{item.actual === null ? '' : ` · 현재 ${item.actual}`}{item.sourceRefs.length === 0 ? '' : ` · ${item.sourceRefs.map((ref): string => `${ref.fileId}:${ref.locator}`).join(', ')}`}</p>)}</section>}
       <section className="inspector-section source-block"><header>SOURCE TEMPORAL MAPPING <span>{sourceMappings.length}</span></header>{sourceMappings.map((mapping): ReactElement => <SourceMappingEditor key={mapping.unit.id} link={mapping.link} unit={mapping.unit} frames={frames} shotDurationMs={duration} absoluteRevealMs={sourceAnchorRange(props.project, shot, mapping.link)?.startMs ?? null} gateComparisons={sourceGateComparisons(props.project, shot, mapping.link, mapping.unit)} working={props.working} previousShotId={previousSegmentShotId} nextShotId={nextSegmentShotId}
         onChange={async (nextLink: ShotSourceLink): Promise<void> => { await props.onSourceLinks({ links: (shot.sourceLinks.map((link: ShotSourceLink): ShotSourceLink => link.unitId === nextLink.unitId ? nextLink : link)) }); }} onMove={props.onSourceMove} />)}</section>
-      <section className="inspector-section text-mapping-block"><header>TEXT MAPPING REVIEW <span>{textMappingIssues.length} REVIEW</span></header>{textMappings.map((mapping): ReactElement => <TextMappingEditor key={mapping.decision.id} decision={mapping.decision} placement={mapping.placement} units={props.project.dataset.units.filter((unit: SourceUnit): boolean => unit.segmentId === props.segment.id)} issues={textMappingIssues.filter((item: Issue): boolean => item.entityId === mapping.decision.id)} working={props.working} onSave={props.onTextMapping} />)}</section>
+      <section className="inspector-section text-mapping-block"><header>TEXT MAPPING REVIEW <span>{textMappingIssues.length} REVIEW</span></header>{textMappings.map((mapping): ReactElement => <div key={mapping.decision.id}><TextMappingEditor decision={mapping.decision} placement={mapping.placement} units={props.project.dataset.units.filter((unit: SourceUnit): boolean => unit.segmentId === props.segment.id)} issues={textMappingIssues.filter((item: Issue): boolean => item.entityId === mapping.decision.id)} working={props.working} onSave={props.onTextMapping} /><PlacementInformationEditor project={props.project} mapping={mapping.decision} placement={mapping.placement} working={props.working} onSave={props.onPlacementInformation} /></div>)}</section>
       <section className="inspector-section information-gate-block"><header>INFORMATION GATE <span>{informationGates.filter((gate: EffectiveInformationGate): boolean => gate.reviewRequired).length} REVIEW</span></header>{informationGates.length === 0 && <p className="empty-note">이 구간에는 정보 공개 규칙이 없습니다.</p>}{informationGates.map((gate: EffectiveInformationGate): ReactElement => <article className={gate.reviewRequired ? 'mapping-editor unresolved' : 'mapping-editor'} key={gate.id}><header><b>{gate.id}</b><span>{gate.precision}</span></header><p>BASE {gate.baseNotBeforeMs}ms · EFFECTIVE {gate.effectiveNotBeforeMs}ms</p><p className="canonical-text">{gate.evidenceType} · {gate.evidenceId ?? 'authoritative base'}</p>{gate.reviewReasons.map((reason: string): ReactElement => <p className="mapping-issue" key={reason}>{reason}</p>)}<small className="source-ref">{gate.sourceRefs.map((ref): string => `${ref.fileId}:${ref.locator}`).join(' · ')}</small></article>)}</section>
-      <section className="inspector-section audio-block"><header>AUDIO TRACK <span>{audio.filter((cue: AudioCue): boolean => playableAudioCuesAt(props.project, cue.startMs).some((candidate: AudioCue): boolean => candidate.id === cue.id)).length}/{audio.length} PLAYABLE</span></header><p className="disclosure">{props.status?.aiVoiceDisclosure ?? '가이드 음성은 Codex App 작업에서 생성합니다.'}</p>{audio.map((cue: AudioCue): ReactElement => <AudioCueEditor key={cue.id} project={props.project} cue={cue} text={props.project.dataset.units.find((candidate): boolean => candidate.id === cue.unitId)?.text ?? cue.unitId} working={props.working} disclosure={props.status?.aiVoiceDisclosure ?? 'Codex App 가이드 음성'} onTiming={props.onAudioTiming} onSpeech={props.onSpeech} />)}</section>
+      <section className="inspector-section audio-block"><header>AUDIO TRACK <span>{audio.filter((cue: AudioCue): boolean => playableAudioCuesAt(props.project, cue.startMs).some((candidate: AudioCue): boolean => candidate.id === cue.id)).length}/{audio.length} PLAYABLE</span></header><p className="disclosure">{props.status?.aiVoiceDisclosure ?? '가이드 음성은 Codex App 작업에서 생성합니다.'}</p>{audio.map((cue: AudioCue): ReactElement => <AudioCueEditor key={cue.id} project={props.project} cue={cue} text={props.project.dataset.units.find((candidate): boolean => candidate.id === cue.unitId)?.text ?? cue.unitId} working={props.working} disclosure={props.status?.aiVoiceDisclosure ?? 'Codex App 가이드 음성'} onTiming={props.onAudioTiming} onSpeech={props.onSpeech} onAsset={props.onAudioAsset} />)}</section>
       <section className="inspector-section text-block"><header>TEXT TRACK <span>{text.length}</span></header>{text.map((cue: TextCue): ReactElement => <TextCueEditor key={cue.id} project={props.project} cue={cue} working={props.working} placementEndMs={props.project.dataset.textPlacements.find((placement): boolean => placement.id === cue.placementId)?.endMs} onTiming={props.onTextTiming} onResolve={props.onTextResolve} onDelete={props.onTextDelete} />)}</section>
       <form className="reference-form" onSubmit={upload}><header>VISUAL REFERENCE</header><select value={reference.kind} onChange={(event): void => { const kind = event.target.value as ReferenceDraft['kind']; setReference({ ...reference, kind, subjectId: '' }); }}><option value="character">인물</option><option value="location">장소</option><option value="prop">소품</option></select>
         {reference.kind !== 'prop' && <select required value={reference.subjectId} onChange={(event): void => { setReference({ ...reference, subjectId: event.target.value }); }}><option value="">대상 선택</option>{referenceSubjects.map((subject): ReactElement => <option key={subject.id} value={subject.id}>{subject.name}</option>)}</select>}
@@ -515,7 +560,7 @@ export default function App(): ReactElement {
     if (!playing || project === null) return;
     for (const cue of playableAudioCuesAt(project, playhead)) {
       if (playedCues.current.has(cue.id) || cue.assetId === null) continue;
-      const audioElement = new Audio(assetUrl(project.projectId, cue.assetId));
+      const audioElement = new Audio(safeAudioUrl(project.projectId, cue.id));
       audioElement.currentTime = Math.max(0, (playhead - cue.startMs) / 1000);
       audioElements.current.set(cue.id, audioElement); playedCues.current.add(cue.id);
       void audioElement.play().catch((error: unknown): void => { setNotice({ tone: 'error', text: `오디오 재생 실패: ${readableError(error)}` }); });
@@ -590,6 +635,20 @@ export default function App(): ReactElement {
       description: reference.description, mimeType, base64: await fileBase64(reference.file) });
   };
 
+  const uploadAudio = async (cueId: string, file: File): Promise<void> => {
+    if (project === null) return;
+    setWorking(true); setNotice(null);
+    try {
+      const next: Project = await uploadAudioAsset(project.projectId, cueId, project.revision, file);
+      setProject(next); await refreshSummaries();
+      const asset: Asset | undefined = next.audioCues.find((cue: AudioCue): boolean => cue.id === cueId)?.assetId === null ? undefined
+        : next.assets.find((candidate: Asset): boolean => candidate.id === next.audioCues.find((cue: AudioCue): boolean => cue.id === cueId)?.assetId);
+      setNotice({ tone: 'info', text: asset?.audioMetadata === undefined || asset.audioMetadata === null ? '오디오 파일을 등록했습니다.'
+        : `오디오 등록 완료: ${asset.durationMs}ms · ${asset.audioMetadata.sampleRate}Hz · ${asset.audioMetadata.channels}ch` });
+    } catch (error: unknown) { setNotice({ tone: 'error', text: readableError(error) }); }
+    finally { setWorking(false); }
+  };
+
   const inspectSourceUpdate = async (path: string, holdMs: number): Promise<void> => {
     if (project === null) return;
     setWorking(true); setNotice(null);
@@ -632,7 +691,7 @@ export default function App(): ReactElement {
           onSplit={async (): Promise<void> => { if (shot !== null) await mutate(`/shots/${encodeURIComponent(shot.id)}/split`, 'POST', { expectedRevision: project.revision, atMs: Math.floor((shot.startMs + shot.endMs) / 2) }); }}
           onMerge={merge} onMove={reorder} onLocks={async (fields: LockedField[]): Promise<void> => { if (shot !== null) await mutate(`/shots/${encodeURIComponent(shot.id)}/locks`, 'POST', { expectedRevision: project.revision, fields }); }}
           onApprove={async (): Promise<void> => { if (shot !== null) await mutate(`/shots/${encodeURIComponent(shot.id)}/approve`, 'POST', { expectedRevision: project.revision }); }}
-          onSpeech={async (cueId: string): Promise<void> => { await queueGeneration(`/audio/${encodeURIComponent(cueId)}/generate`); }} onReference={addReference}
+          onSpeech={async (cueId: string): Promise<void> => { await queueGeneration(`/audio/${encodeURIComponent(cueId)}/generate`); }} onAudioAsset={uploadAudio} onReference={addReference}
           onFrameEdit={async (frameId: string, frame: StoryboardFrameInput): Promise<void> => { await mutate(`/frames/${encodeURIComponent(frameId)}`, 'PATCH', { expectedRevision: project.revision, frame }); }}
           onFrameAdd={async (targetShotId: string, frame: StoryboardFrameInput): Promise<void> => { await mutate(`/shots/${encodeURIComponent(targetShotId)}/frames`, 'POST', { expectedRevision: project.revision, frame }); }}
           onFrameGenerate={async (frameId: string): Promise<void> => { await queueGeneration(`/frames/${encodeURIComponent(frameId)}/generate`); }}
@@ -642,6 +701,7 @@ export default function App(): ReactElement {
           onTextResolve={async (cueId: string, resolution: TextCueAuthorityResolutionInput): Promise<void> => { await mutate(`/text/${encodeURIComponent(cueId)}/authority`, 'POST', { expectedRevision: project.revision, resolution }); }}
           onTextDelete={async (cueId: string): Promise<void> => { await mutate(`/text/${encodeURIComponent(cueId)}`, 'DELETE', { expectedRevision: project.revision }); }}
           onTextMapping={async (decisionId: string, decision: TextMappingDecisionInput): Promise<void> => { await mutate(`/text-mappings/${encodeURIComponent(decisionId)}`, 'PATCH', { expectedRevision: project.revision, decision }); }}
+          onPlacementInformation={async (placementId: string, decision: TextPlacementInformationInput): Promise<void> => { await mutate(`/text-placements/${encodeURIComponent(placementId)}/information`, 'PATCH', { expectedRevision: project.revision, decision }); }}
           onSourceLinks={async (mapping: ShotSourceLinksInput): Promise<void> => { if (shot !== null) await mutate(`/shots/${encodeURIComponent(shot.id)}/source-links`, 'PATCH', { expectedRevision: project.revision, mapping }); }}
           onSourceMove={async (unitId: string, targetShotId: string, usage: ShotSourceLink['usage']): Promise<void> => { if (shot !== null) await mutate(`/shots/${encodeURIComponent(shot.id)}/source-links/move`, 'POST', { expectedRevision: project.revision, move: { unitId, targetShotId, usage } }); }}
           onProfile={async (profile: Profile): Promise<void> => { await mutate('/profile', 'PATCH', { expectedRevision: project.revision, profile }); }} sourceImpact={sourceImpactReport}

@@ -9,7 +9,9 @@ const StatusSchema = z.strictObject({ provider: z.literal('codex-app'), totalReq
   averageLatencyMs: z.number().int().nonnegative().nullable(), maximumLatencyMs: z.number().int().nonnegative().nullable(), apiCostUsd: z.null(), costNote: z.string(),
   recentFailures: z.array(RequestFailureSchema), generationInstruction: z.string(), aiVoiceDisclosure: z.string() });
 const SummarySchema = z.strictObject({ projectId: z.string(), title: z.string(), revision: z.number(), durationMs: z.number(), shots: z.number(),
-  framesReady: z.number(), framesTotal: z.number(), audioReady: z.number(), audioTotal: z.number(), issues: z.number(), updatedAt: z.string() });
+  framesWithAsset: z.number(), framesAccepted: z.number(), framesOutputSafe: z.number(), framesTotal: z.number(),
+  audioWithAsset: z.number(), audioMeasured: z.number(), audioPlayable: z.number(), audioTotal: z.number(),
+  textPlayable: z.number(), textTotal: z.number(), blockedOutputCount: z.number(), issues: z.number(), updatedAt: z.string() });
 const CodexRequestSchema = z.strictObject({ id: z.uuid(), kind: z.enum(['proposal', 'image', 'speech']), projectId: z.string(), targetId: z.string(),
   basisHash: z.string(), status: z.enum(['pending', 'completed', 'failed']), createdAt: z.string(), updatedAt: z.string(), resultRevision: z.number().nullable(),
   error: z.strictObject({ code: z.string(), message: z.string() }).nullable() });
@@ -62,6 +64,14 @@ export async function importProject(handoffPath: string, proposedTextHoldMs: num
 
 export async function mutateProject(projectId: string, path: string, method: 'DELETE' | 'PATCH' | 'POST', body: unknown): Promise<Project> {
   return z.strictObject({ project: ProjectSchema }).parse(await request(`/api/projects/${encodeURIComponent(projectId)}${path}`, json(method, body))).project;
+}
+
+export async function uploadAudioAsset(projectId: string, cueId: string, expectedRevision: number, file: File): Promise<Project> {
+  const form: FormData = new FormData();
+  form.append('expectedRevision', String(expectedRevision));
+  form.append('file', file, file.name);
+  const data: unknown = await request(`/api/projects/${encodeURIComponent(projectId)}/audio/${encodeURIComponent(cueId)}/asset`, { method: 'POST', body: form });
+  return z.strictObject({ project: ProjectSchema, audio: z.strictObject({ durationMs: z.number(), sampleRate: z.number(), channels: z.number(), codec: z.string(), sha256: z.string() }) }).parse(data).project;
 }
 
 export async function queueCodexRequest(projectId: string, path: string, expectedRevision: number): Promise<CodexRequest> {

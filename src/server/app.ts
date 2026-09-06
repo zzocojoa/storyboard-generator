@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import Fastify from 'fastify';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import fastifyMultipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import { z, ZodError } from 'zod';
 import { codexRequestMetrics } from '../codex/metrics.js';
@@ -9,16 +10,19 @@ import type { CodexRequestStore } from '../codex/requests.js';
 import type { CodexRequest, CodexRequestKind } from '../codex/schema.js';
 import { codexRequestBasis } from '../codex/work.js';
 import { approveShot, mergeShots, reorderShots, setShotLocks, splitShot, updateShotContent } from '../domain/edit.js';
+import { attachAudioAsset } from '../domain/audio-asset.js';
 import { contractError } from '../domain/errors.js';
 import { addStoryboardFrame, setFrameReview, StoryboardFrameInputSchema, updateProjectProfile, updateStoryboardFrame } from '../domain/frame.js';
 import { mappingReviewIssues, MoveShotSourceLinkInputSchema, moveShotSourceLink, ShotSourceLinksInputSchema, TextMappingDecisionInputSchema, updateShotSourceLinks, updateTextMappingDecision } from '../domain/mapping.js';
 import { addReferenceAsset } from '../domain/media.js';
+import { MAX_AUDIO_BYTES } from '../domain/media-inspection.js';
+import { TextPlacementInformationInputSchema, updatePlacementInformationDecision } from '../domain/placement-information.js';
 import { IdSchema, LockedFieldSchema, ProfileSchema, ShotContentSchema } from '../domain/schema.js';
 import type { Project } from '../domain/schema.js';
 import { deleteReviewTextCue, resolveTextCueAuthority, TextCueAuthorityResolutionInputSchema } from '../domain/text.js';
 import { applySourceUpdate, sourceImpact } from '../domain/source-update.js';
 import { AudioCueTimingInputSchema, TextCueTimingInputSchema, updateAudioCueTiming, updateTextCueTiming } from '../domain/tracks.js';
-import { exportShotCsv } from '../exporters/csv.js';
+import { exportShotCsvWithIntegrity } from '../exporters/csv.js';
 import { exportProjectJson } from '../exporters/json.js';
 import { exportProjectPdf } from '../exporters/pdf.js';
 import { importPackage } from '../importers/import-package.js';
@@ -47,6 +51,7 @@ const AudioCueBodySchema = z.strictObject({ expectedRevision: z.number().int().n
 const TextCueBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), timing: TextCueTimingInputSchema });
 const TextCueAuthorityBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), resolution: TextCueAuthorityResolutionInputSchema });
 const TextMappingBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), decision: TextMappingDecisionInputSchema });
+const TextPlacementInformationBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), decision: TextPlacementInformationInputSchema });
 const SourceLinksBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), mapping: ShotSourceLinksInputSchema });
 const MoveSourceLinkBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), move: MoveShotSourceLinkInputSchema });
 const ReferenceBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), kind: z.enum(['character', 'location', 'prop']),
@@ -69,7 +74,7 @@ function statusCode(error: Error): number {
   const code: string = 'code' in error && typeof error.code === 'string' ? error.code : error.name;
   if (code.endsWith('_NOT_FOUND')) return 404;
   if (['REVISION_CONFLICT', 'PROJECT_ALREADY_EXISTS', 'PROJECT_BUSY'].includes(code)) return 409;
-  if (error instanceof ZodError || code.startsWith('INVALID_') || code.startsWith('MISSING_') || code.startsWith('DUPLICATE_') || code.startsWith('UNSAFE_') || code.startsWith('UNKNOWN_') || code.startsWith('FORBIDDEN_') || code.startsWith('TEXT_') || code.endsWith('_LOCKED') || code.endsWith('_REQUIRED') || code.endsWith('_BLOCKED') || code.endsWith('_DELETED')) return 400;
+  if (error instanceof ZodError || code.startsWith('FST_') || code.startsWith('INVALID_') || code.startsWith('MISSING_') || code.startsWith('DUPLICATE_') || code.startsWith('UNSAFE_') || code.startsWith('UNKNOWN_') || code.startsWith('FORBIDDEN_') || code.startsWith('TEXT_') || code.startsWith('AUDIO_') || code.startsWith('ASSET_') || code.startsWith('UNSUPPORTED_') || code.endsWith('_LOCKED') || code.endsWith('_REQUIRED') || code.endsWith('_BLOCKED') || code.endsWith('_DELETED')) return 400;
   return 500;
 }
 
@@ -77,6 +82,28 @@ function errorBody(error: Error): { error: { code: string; message: string; issu
   const code: string = 'code' in error && typeof error.code === 'string' ? error.code : error.name;
   const issues: unknown[] = error instanceof ZodError ? error.issues : 'issues' in error && Array.isArray(error.issues) ? error.issues : [];
   return { error: { code, message: error.message, issues } };
+}
+
+type AudioUpload = { expectedRevision: number; originalFileName: string; declaredMimeType: string; bytes: Buffer };
+
+async function readAudioUpload(request: FastifyRequest): Promise<AudioUpload> {
+  if (!request.isMultipart()) throw contractError('AUDIO_MULTIPART_REQUIRED', '오디오 등록은 multipart/form-data 요청이어야 합니다.', []);
+  let expectedRevision: number | null = null;
+  let file: { originalFileName: string; declaredMimeType: string; bytes: Buffer } | null = null;
+  for await (const part of request.parts()) {
+    if (part.type === 'file') {
+      if (file !== null) throw contractError('AUDIO_FILE_COUNT_INVALID', '오디오 파일은 정확히 하나만 등록할 수 있습니다.', []);
+      file = { originalFileName: part.filename, declaredMimeType: part.mimetype, bytes: await part.toBuffer() };
+      continue;
+    }
+    if (part.fieldname !== 'expectedRevision') throw contractError('UNKNOWN_AUDIO_UPLOAD_FIELD', `지원하지 않는 오디오 등록 필드입니다. field=${part.fieldname}`, []);
+    const parsed: number = Number(part.value);
+    if (!Number.isInteger(parsed) || parsed < 0) throw contractError('INVALID_EXPECTED_REVISION', `expectedRevision은 0 이상의 정수여야 합니다. actual=${String(part.value)}`, []);
+    expectedRevision = parsed;
+  }
+  if (expectedRevision === null) throw contractError('MISSING_EXPECTED_REVISION', '오디오 등록에 expectedRevision이 필요합니다.', []);
+  if (file === null) throw contractError('MISSING_AUDIO_FILE', '등록할 오디오 파일이 필요합니다.', []);
+  return { expectedRevision, ...file };
 }
 
 async function ensureWebRoot(path: string): Promise<void> {
@@ -93,7 +120,8 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
   await ensureWebRoot(config.webRoot);
   await store.initialize();
   await requests.initialize();
-  const app: FastifyInstance = Fastify({ logger: { level: 'info' }, bodyLimit: 28 * 1024 * 1024 });
+  const app: FastifyInstance = Fastify({ logger: { level: 'info' }, bodyLimit: MAX_AUDIO_BYTES + 1024 * 1024 });
+  await app.register(fastifyMultipart, { limits: { fileSize: MAX_AUDIO_BYTES, files: 1, fields: 1, parts: 2 } });
 
   app.setErrorHandler((error: Error, _request: FastifyRequest, reply: FastifyReply): void => {
     reply.status(statusCode(error)).send(errorBody(error));
@@ -179,6 +207,12 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
     const body = TextMappingBodySchema.parse(request.body);
     return { project: await store.update(params.projectId, body.expectedRevision, (project: Project): Project => updateTextMappingDecision(project, params.decisionId, body.decision), []) };
   });
+  app.patch('/api/projects/:projectId/text-placements/:placementId/information', async (request: FastifyRequest): Promise<object> => {
+    const params = z.strictObject({ projectId: IdSchema, placementId: IdSchema }).parse(request.params);
+    const body = TextPlacementInformationBodySchema.parse(request.body);
+    return { project: await store.update(params.projectId, body.expectedRevision,
+      (project: Project): Project => updatePlacementInformationDecision(project, params.placementId, body.decision), []) };
+  });
   app.patch('/api/projects/:projectId/shots/:shotId/source-links', async (request: FastifyRequest): Promise<object> => {
     const { projectId, shotId } = ShotParamsSchema.parse(request.params);
     const body = SourceLinksBodySchema.parse(request.body);
@@ -212,7 +246,7 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
     const body = ReferenceBodySchema.parse(request.body);
     const bytes: Buffer = Buffer.from(body.base64, 'base64');
     const current: Project = await store.read(projectId);
-    const mutation = addReferenceAsset(current, { id: `${randomUUID()}:reference`, kind: body.kind, subjectId: body.subjectId, description: body.description, mimeType: body.mimeType, bytes });
+    const mutation = await addReferenceAsset(current, { id: `${randomUUID()}:reference`, kind: body.kind, subjectId: body.subjectId, description: body.description, mimeType: body.mimeType, bytes });
     const project: Project = await store.update(projectId, body.expectedRevision, (): Project => mutation.project, assets(mutation));
     reply.status(201);
     return { project };
@@ -234,6 +268,17 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
     const body = RevisionSchema.parse(request.body);
     reply.status(202);
     return requestResponse(await queueRequest('speech', projectId, cueId, body.expectedRevision, store, requests));
+  });
+  app.post('/api/projects/:projectId/audio/:cueId/asset', async (request: FastifyRequest, reply: FastifyReply): Promise<object> => {
+    const { projectId, cueId } = CueParamsSchema.parse(request.params);
+    const upload: AudioUpload = await readAudioUpload(request);
+    const current: Project = await store.read(projectId);
+    const mutation = attachAudioAsset(current, cueId, `${randomUUID()}:audio`, {
+      originalFileName: upload.originalFileName, declaredMimeType: upload.declaredMimeType, bytes: upload.bytes,
+    });
+    const project: Project = await store.update(projectId, upload.expectedRevision, (): Project => mutation.project, assets(mutation));
+    reply.status(201);
+    return { project, audio: mutation.inspection };
   });
   app.patch('/api/projects/:projectId/audio/:cueId', async (request: FastifyRequest): Promise<object> => {
     const { projectId, cueId } = CueParamsSchema.parse(request.params);
@@ -265,6 +310,18 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
     reply.header('Content-Type', asset.mimeType).header('Cache-Control', 'private, max-age=31536000, immutable');
     return asset.content;
   });
+  app.get('/api/projects/:projectId/output/frame/:frameId', async (request: FastifyRequest, reply: FastifyReply): Promise<Buffer> => {
+    const { projectId, frameId } = FrameParamsSchema.parse(request.params);
+    const output = await store.safeFrame(projectId, frameId);
+    reply.header('Content-Type', output.mimeType).header('Cache-Control', 'no-store');
+    return output.content;
+  });
+  app.get('/api/projects/:projectId/output/audio/:cueId', async (request: FastifyRequest, reply: FastifyReply): Promise<Buffer> => {
+    const { projectId, cueId } = CueParamsSchema.parse(request.params);
+    const output = await store.safeAudio(projectId, cueId);
+    reply.header('Content-Type', output.mimeType).header('Cache-Control', 'no-store');
+    return output.content;
+  });
   app.get('/api/projects/:projectId/export.json', async (request: FastifyRequest, reply: FastifyReply): Promise<string> => {
     const { projectId } = ProjectParamsSchema.parse(request.params);
     reply.header('Content-Type', 'application/json; charset=utf-8').header('Content-Disposition', 'attachment; filename="storyboard.json"');
@@ -273,7 +330,7 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
   app.get('/api/projects/:projectId/export.csv', async (request: FastifyRequest, reply: FastifyReply): Promise<string> => {
     const { projectId } = ProjectParamsSchema.parse(request.params);
     reply.header('Content-Type', 'text/csv; charset=utf-8').header('Content-Disposition', 'attachment; filename="storyboard.csv"');
-    return exportShotCsv(await store.read(projectId));
+    return exportShotCsvWithIntegrity(await store.read(projectId), await store.assetIntegrity(projectId));
   });
   app.get('/api/projects/:projectId/export.pdf', async (request: FastifyRequest, reply: FastifyReply): Promise<Buffer> => {
     const { projectId } = ProjectParamsSchema.parse(request.params);

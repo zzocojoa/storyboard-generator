@@ -10,7 +10,7 @@ import { importPackage } from '../src/importers/import-package.js';
 import type { Project } from '../src/domain/schema.js';
 import { createSourceOutline } from '../src/proposal/outline.js';
 import { ProjectStore } from '../src/server/store.js';
-import { nativePackage } from './helpers.js';
+import { nativePackage, png } from './helpers.js';
 
 const roots: string[] = [];
 
@@ -53,7 +53,7 @@ describe('Codex App 생성 브리지', (): void => {
     const { root, project, store, requests } = await fixture();
     const request: CodexRequest = await requests.create('image', project.projectId, 'frame-1', codexRequestBasis(project, 'image', 'frame-1'), '2026-09-06T00:00:00.000Z');
     const input: string = join(root, 'result.png');
-    await writeFile(input, Buffer.from('89504e470d0a1a0a', 'hex'));
+    await writeFile(input, await png(1, 1));
     const result: Project = await applyCodexImage(request.id, input, store, requests, '2026-09-06T00:00:01.000Z');
     expect(result.frames[0]?.imageAssetId).toBe(`codex:${request.id}:image`);
     expect(result.generationRecords[0]).toEqual(expect.objectContaining({ provider: 'codex-app', model: 'codex-imagegen', requestId: request.id }));

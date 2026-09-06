@@ -16,7 +16,7 @@ export function csvCell(value: string): string {
   return `"${safe.replaceAll('"', '""')}"`;
 }
 
-function shotRow(project: Project, shot: Shot): string[] {
+function shotRow(project: Project, shot: Shot, assetIntegrity: Readonly<Record<string, string>>): string[] {
   const segment = project.dataset.segments.find((value): boolean => value.id === shot.segmentId);
   const scene = project.dataset.scenes.find((value): boolean => value.id === segment?.sceneId);
   const units: SourceUnit[] = shot.sourceLinks.flatMap((link: ShotSourceLink): SourceUnit[] => {
@@ -52,7 +52,9 @@ function shotRow(project: Project, shot: Shot): string[] {
       ...(shotIssues.length === 0 ? { text: unit.text } : {}), sourceRefs: unit.sourceRefs, outputSafety: shotIssues.length === 0 ? 'safe' : 'blocked' }))),
     JSON.stringify(gates), blockedCodes.length === 0 ? 'SAFE' : 'DRAFT · OUTPUT INTERLOCK REVIEW REQUIRED',
     String(blockedAudio.length + blockedText.length), JSON.stringify(blockedCodes),
-    JSON.stringify(audio.map((cue) => ({ ...cue, outputSafety: blockedAudio.some((entry: BlockedCue): boolean => entry.cueId === cue.id) ? 'blocked' : 'safe' }))),
+    JSON.stringify(audio.map((cue) => ({ ...cue, assetMetadata: cue.assetId === null ? null : project.assets.find((asset): boolean => asset.id === cue.assetId) ?? null,
+      assetIntegrity: cue.assetId === null ? 'not-attached' : assetIntegrity[cue.assetId] ?? 'not-checked',
+      outputSafety: blockedAudio.some((entry: BlockedCue): boolean => entry.cueId === cue.id) ? 'blocked' : 'safe' }))),
     JSON.stringify(text.map((cue: TextCue) => {
       const blocked = blockedText.find((entry): boolean => entry.cue.id === cue.id);
       return blocked === undefined ? { ...cue, outputSafety: 'safe' } : { id: cue.id, authority: cue.authority, mappingDecisionId: cue.mappingDecisionId,
@@ -62,15 +64,26 @@ function shotRow(project: Project, shot: Shot): string[] {
       const decision: FrameOutputDecision | undefined = frameDecisions.find((candidate: FrameOutputDecision): boolean => candidate.frameId === frame.id);
       if (decision === undefined) throw contractError('FRAME_OUTPUT_DECISION_NOT_FOUND', `${frame.id}: CSV 출력 판정을 찾을 수 없습니다.`, []);
       return { ...frame, historicalImageAssetId: frame.imageAssetId, displayAbsoluteMs: frameDisplayAbsoluteMs(shot, frame), evaluationAbsoluteMs: frameEvaluationAbsoluteMs(shot, frame),
+        assetIntegrity: frame.imageAssetId === null ? 'not-attached' : assetIntegrity[frame.imageAssetId] ?? 'not-checked',
         outputSafety: decision.renderBitmap ? 'safe' : 'blocked', renderBitmap: decision.renderBitmap, issueCodes: decision.issues.map((item: Issue): string => item.code) };
     })),
+    JSON.stringify(project.textPlacementInformationDecisions.filter((decision): boolean => project.dataset.textPlacements
+      .some((placement): boolean => placement.id === decision.placementId && placement.segmentId === shot.segmentId))),
     shot.proposalOrigin, shot.approvalStatus, JSON.stringify(shot.lockedFields),
     JSON.stringify(shot.continuityBefore), JSON.stringify(shot.continuityAfter),
   ];
 }
 
-export function exportShotCsv(input: Project): string {
+function exportShotCsvWithStatuses(input: Project, assetIntegrity: Readonly<Record<string, string>>): string {
   const project: Project = parseProject(input);
-  const header: string[] = ['project_id', 'title', 'shot_id', 'segment_id', 'scene_id', 'mode', 'start_ms', 'end_ms', 'duration_ms', 'start_time', 'end_time', 'story_location_id', 'visual_location_id', 'action', 'shot_size', 'camera_angle', 'camera_move', 'transition_kind', 'transition_duration_ms', 'transition_note', 'presence', 'prop_ids', 'source_links', 'source_temporal_anchors', 'source_units', 'information_gates', 'output_safety_status', 'blocked_cue_count', 'blocked_issue_codes', 'audio_events', 'text_events', 'frames', 'proposal_origin', 'approval_status', 'locked_fields', 'continuity_before', 'continuity_after'];
-  return `\uFEFF${[header, ...project.shots.map((shot: Shot): string[] => shotRow(project, shot))].map((row: string[]): string => row.map(csvCell).join(',')).join('\r\n')}\r\n`;
+  const header: string[] = ['project_id', 'title', 'shot_id', 'segment_id', 'scene_id', 'mode', 'start_ms', 'end_ms', 'duration_ms', 'start_time', 'end_time', 'story_location_id', 'visual_location_id', 'action', 'shot_size', 'camera_angle', 'camera_move', 'transition_kind', 'transition_duration_ms', 'transition_note', 'presence', 'prop_ids', 'source_links', 'source_temporal_anchors', 'source_units', 'information_gates', 'output_safety_status', 'blocked_cue_count', 'blocked_issue_codes', 'audio_events', 'text_events', 'frames', 'placement_information_decisions', 'proposal_origin', 'approval_status', 'locked_fields', 'continuity_before', 'continuity_after'];
+  return `\uFEFF${[header, ...project.shots.map((shot: Shot): string[] => shotRow(project, shot, assetIntegrity))].map((row: string[]): string => row.map(csvCell).join(',')).join('\r\n')}\r\n`;
+}
+
+export function exportShotCsv(input: Project): string {
+  return exportShotCsvWithStatuses(input, {});
+}
+
+export function exportShotCsvWithIntegrity(input: Project, assetIntegrity: Readonly<Record<string, string>>): string {
+  return exportShotCsvWithStatuses(input, assetIntegrity);
 }

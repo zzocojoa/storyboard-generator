@@ -48,11 +48,11 @@ Create a source text file through the bridge so shell quoting cannot change the 
 ```bash
 npm run codex-workbench -- prepare-speech --request <UUID> --output .local/codex-results/<UUID>.txt
 /usr/bin/say -v Yuna -f .local/codex-results/<UUID>.txt -o .local/codex-results/<UUID>.aiff
-/usr/bin/afconvert -f WAVE -d LEI16@24000 .local/codex-results/<UUID>.aiff .local/codex-results/<UUID>.wav
+/usr/bin/afconvert -f WAVE -d LEI16@<context.sampleRate> .local/codex-results/<UUID>.aiff .local/codex-results/<UUID>.wav
 npm run codex-workbench -- apply-speech --request <UUID> --input .local/codex-results/<UUID>.wav
 ```
 
-If the configured `speechVoice` changes, use that voice instead of `Yuna`. Do not edit or paraphrase the prepared text. Do not generate speech when context loading reports an unresolved information rule, a review-required gate, an early emission, or an invalid Audio relation. `apply-speech` measures the WAV and validates the resulting end time, adjacent Segment relation, emitted information Gate, and request basis before it registers the Asset. If that validation fails, keep the previous Cue and Asset unchanged and report the returned code.
+Replace `<context.sampleRate>` with the integer `sampleRate` returned by the request context; never use a fixed sample rate. If the configured `speechVoice` changes, use that voice instead of `Yuna`. Do not edit or paraphrase the prepared text. Do not generate speech when context loading reports an unresolved information rule, a review-required gate, an early emission, or an invalid Audio relation. `apply-speech` measures the WAV and validates the resulting end time, adjacent Segment relation, emitted information Gate, and request basis before it registers the Asset. If that validation fails, keep the previous Cue and Asset unchanged and report the returned code.
 
 If a request cannot be completed, preserve the error rather than inventing an asset:
 

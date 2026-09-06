@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { contractError, issue } from './errors.js';
+import { synchronizePlacementInformationDecisions } from './placement-information.js';
 import {
   MillisecondsSchema, ProjectSchema, ShotSourceLinkSchema, TextMappingDecisionSchema,
 } from './schema.js';
@@ -307,7 +308,8 @@ export function updateTextMappingDecision(project: Project, decisionId: string, 
   const holdMs: number = currentPlacementCue === undefined ? 2000 : Math.max(1, currentPlacementCue.endMs - currentPlacementCue.startMs);
   const shots: Shot[] = project.shots.map((shot: Shot): Shot => shot.segmentId === segmentId
     ? { ...shot, sourceLinks: shot.sourceLinks.map(invalidatedAnchor), approvalStatus: 'proposed' } : shot);
-  const base: Project = { ...project, textMappingDecisions: decisions, shots };
+  const base: Project = { ...project, textMappingDecisions: decisions,
+    textPlacementInformationDecisions: synchronizePlacementInformationDecisions(project.textPlacementInformationDecisions, current, nextDecision), shots };
   return finishMappingEdit(project, { ...base, textCues: reconcileTextCues(base, decisions, holdMs),
     frames: project.frames.map((frame: StoryboardFrame): StoryboardFrame => shots.some((shot: Shot): boolean => shot.id === frame.shotId && shot.segmentId === segmentId) ? { ...frame, visualReview: 'pending' } : frame),
   });

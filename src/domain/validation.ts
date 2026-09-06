@@ -1,6 +1,6 @@
 import { audioTimingIssues } from './audio.js';
 import { issue } from './errors.js';
-import type { Dataset, InformationRule, Issue, Project, Segment, Shot, ShotSourceLink, Snapshot, SourceRef, SourceUnit, TextMappingDecision, TextPlacement } from './schema.js';
+import type { Dataset, InformationRule, Issue, Project, Segment, Shot, ShotSourceLink, Snapshot, SourceRef, SourceUnit, TextMappingDecision, TextPlacement, TextPlacementInformationDecision } from './schema.js';
 import { sourcePolicyIssues } from './source-policy.js';
 
 function duplicateIssues(ids: readonly string[], entity: string): Issue[] {
@@ -106,6 +106,7 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
   const groups = [
     { name: 'shots', ids: project.shots.map((value): string => value.id) },
     { name: 'textMappingDecisions', ids: project.textMappingDecisions.map((value): string => value.id) },
+    { name: 'textPlacementInformationDecisions', ids: project.textPlacementInformationDecisions.map((value): string => value.id) },
     { name: 'frames', ids: project.frames.map((value): string => value.id) },
     { name: 'audioCues', ids: project.audioCues.map((value): string => value.id) },
     { name: 'textCues', ids: project.textCues.map((value): string => value.id) },
@@ -213,7 +214,17 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
       ...(unit !== undefined && unit !== null && placement === null && cue.text !== unit.text ? [issue('SOURCE_TEXT_MODIFIED', 'error', cue.id, 'text', '원문 문구를 변경할 수 없습니다.', unit.text, cue.text, unit.sourceRefs)] : []),
       ...(placement !== undefined && placement !== null && (cue.startMs !== placement.startMs || cue.text !== placement.text) ? [issue('PLACEMENT_MODIFIED', 'error', cue.id, 'placementId', '확정 자막 시작점 또는 문구가 변경되었습니다.', `${placement.startMs}: ${placement.text}`, `${cue.startMs}: ${cue.text}`, placement.sourceRefs)] : []),
       ...(placement !== undefined && placement !== null && placement.endMs !== null && cue.endMs !== placement.endMs ? [issue('PLACEMENT_END_MODIFIED', 'error', cue.id, 'endMs', '확정 자막 종료점이 변경되었습니다.', String(placement.endMs), String(cue.endMs), placement.sourceRefs)] : []),
+      ...(cue.authority === 'source-unit' && unit !== undefined && unit !== null && ['ACTION', 'SOUND', 'MUSIC'].includes(unit.kind)
+        ? [issue('SOURCE_UNIT_NOT_TEXTUAL', 'error', cue.id, 'unitId', 'ACTION·SOUND·MUSIC 원문은 Text Cue 권한으로 사용할 수 없습니다.', 'textual source unit', unit.kind, unit.sourceRefs)] : []),
+      ...(cue.authority === 'source-unit' && unit !== undefined && unit !== null
+        && ((['SCREEN_TEXT', 'CHAT', 'NOTE'].includes(unit.kind) && cue.kind === 'dialogue-subtitle')
+          || (['DIALOGUE', 'NARRATION', 'PANEL'].includes(unit.kind) && cue.kind !== 'dialogue-subtitle'))
+        ? [issue('INCOMPATIBLE_TEXT_KIND', 'error', cue.id, 'kind', 'Source Unit 유형과 Text Cue 형식이 맞지 않습니다.', unit.kind, cue.kind, unit.sourceRefs)] : []),
     ];
+  });
+  const sourceUnitTextCueIssues: Issue[] = dataset.units.flatMap((unit: SourceUnit): Issue[] => {
+    const count: number = project.textCues.filter((cue): boolean => cue.authority === 'source-unit' && cue.unitId === unit.id).length;
+    return count <= 1 ? [] : [issue('DUPLICATE_SOURCE_UNIT_TEXT_CUE', 'error', unit.id, 'textCues', 'Source Unit 권한 Text Cue는 하나만 존재할 수 있습니다.', '0..1', String(count), unit.sourceRefs)];
   });
   const placementCoverage: Issue[] = dataset.textPlacements.flatMap((placement): Issue[] => {
     const count: number = project.textCues.filter((cue): boolean => cue.placementId === placement.id).length;
@@ -234,6 +245,23 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
   const decisionCoverage: Issue[] = dataset.textPlacements.flatMap((placement: TextPlacement): Issue[] => {
     const count: number = project.textMappingDecisions.filter((decision: TextMappingDecision): boolean => decision.placementId === placement.id).length;
     return count === 1 ? [] : [issue('TEXT_MAPPING_DECISION_COVERAGE', 'error', placement.id, 'textMappingDecisions', '자막 Placement마다 Mapping Decision이 정확히 하나 필요합니다.', '1', String(count), placement.sourceRefs)];
+  });
+  const placementInformationIssues: Issue[] = project.textPlacementInformationDecisions.flatMap((decision: TextPlacementInformationDecision): Issue[] => {
+    const placement: TextPlacement | undefined = dataset.textPlacements.find((candidate: TextPlacement): boolean => candidate.id === decision.placementId);
+    const mappings: TextMappingDecision[] = project.textMappingDecisions.filter((candidate: TextMappingDecision): boolean => candidate.placementId === decision.placementId);
+    const independent: boolean = mappings.length === 1 && ['separate-element', 'standalone-placement'].includes(mappings[0]?.relation ?? '');
+    return [
+      ...referenceIssue(placement !== undefined, decision.id, 'placementId', decision.placementId, placement?.sourceRefs ?? []),
+      ...(independent ? [] : [issue('PLACEMENT_INFORMATION_NOT_APPLICABLE', 'error', decision.id, 'placementId', '독립 Placement 관계에만 정보 판정을 저장할 수 있습니다.', 'separate-element|standalone-placement', mappings.map((mapping: TextMappingDecision): string => mapping.relation).join(','), placement?.sourceRefs ?? [])]),
+      ...duplicateIssues(decision.informationIds, `${decision.id}.informationIds`),
+      ...decision.informationIds.flatMap((id: string): Issue[] => referenceIssue(dataset.informationRules.some((rule: InformationRule): boolean => rule.id === id), decision.id, 'informationIds', id, placement?.sourceRefs ?? [])),
+    ];
+  });
+  const placementInformationCoverage: Issue[] = project.textMappingDecisions.flatMap((mapping: TextMappingDecision): Issue[] => {
+    const count: number = project.textPlacementInformationDecisions.filter((decision: TextPlacementInformationDecision): boolean => decision.placementId === mapping.placementId).length;
+    const independent: boolean = ['separate-element', 'standalone-placement'].includes(mapping.relation);
+    return count === (independent ? 1 : 0) ? [] : [issue('PLACEMENT_INFORMATION_DECISION_COVERAGE', 'error', mapping.placementId, 'textPlacementInformationDecisions',
+      independent ? '독립 Placement에는 정보 판정이 정확히 하나 필요합니다.' : 'Canonical 상속 관계에는 독립 정보 판정을 저장할 수 없습니다.', independent ? '1' : '0', String(count), [])];
   });
   const orderIssues: Issue[] = project.shots.flatMap((shot, index): Issue[] => {
     const previous = project.shots[index - 1];
@@ -258,5 +286,5 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
       : asset.kind === 'location' ? dataset.locations.some((location): boolean => location.id === asset.subjectId) : true;
     return referenceIssue(exists, asset.id, 'subjectId', asset.subjectId, []);
   });
-  return [...sourceIssues, ...projectIssues, ...groups.flatMap((group): Issue[] => duplicateIssues(group.ids, group.name)), ...shotIssues, ...coverageIssues, ...unitCoverage, ...sourceOrderIssues(project), ...frameIssues, ...frameGroupIssues, ...audioIssues, ...textIssues, ...placementCoverage, ...mappingIssues, ...decisionCoverage, ...orderIssues, ...continuityIssues, ...generationIssues, ...assetSubjectIssues];
+  return [...sourceIssues, ...projectIssues, ...groups.flatMap((group): Issue[] => duplicateIssues(group.ids, group.name)), ...shotIssues, ...coverageIssues, ...unitCoverage, ...sourceOrderIssues(project), ...frameIssues, ...frameGroupIssues, ...audioIssues, ...textIssues, ...sourceUnitTextCueIssues, ...placementCoverage, ...mappingIssues, ...decisionCoverage, ...placementInformationIssues, ...placementInformationCoverage, ...orderIssues, ...continuityIssues, ...generationIssues, ...assetSubjectIssues];
 }

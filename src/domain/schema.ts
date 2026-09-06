@@ -108,6 +108,11 @@ export const TextMappingDecisionSchema = TextMappingDecisionFieldsSchema.superRe
   if (decision.renderCanonicalSeparately && !hasValidRange) addIssue('Canonical 문구를 별도로 렌더링하려면 올바른 시작·종료 시각이 필요합니다.', 'canonicalStartMs');
   if (!decision.renderCanonicalSeparately && (hasStart || hasEnd)) addIssue('별도 렌더링을 사용하지 않으면 Canonical 시각은 비워야 합니다.', 'canonicalStartMs');
 });
+export const TextPlacementInformationDecisionSchema = z.discriminatedUnion('status', [
+  z.strictObject({ id: IdSchema, placementId: IdSchema, status: z.literal('unresolved'), informationIds: z.tuple([]), note: z.string().nullable() }),
+  z.strictObject({ id: IdSchema, placementId: IdSchema, status: z.literal('non-informational'), informationIds: z.tuple([]), note: z.string().nullable() }),
+  z.strictObject({ id: IdSchema, placementId: IdSchema, status: z.literal('informational'), informationIds: z.array(IdSchema).min(1), note: z.string().nullable() }),
+]);
 export const IssueSchema = z.strictObject({
   code: z.string().min(1), severity: z.enum(['error', 'conflict', 'warning']),
   entityId: z.string(), field: z.string(), message: z.string().min(1),
@@ -145,7 +150,7 @@ export const TransitionSchema = z.strictObject({
   note: z.string(),
 });
 export const LockedFieldSchema = z.enum(['timing', 'sources', 'action', 'camera', 'location', 'presence', 'continuity', 'transition', 'frames']);
-export const SourceAnchorBasisSchema = z.enum(['manual', 'text-cue', 'audio-cue', 'proposal', 'native-exact', 'estimated', 'migration', 'mapping-change', 'source-move', 'audio-change', 'frame-change']);
+export const SourceAnchorBasisSchema = z.enum(['manual', 'text-cue', 'audio-cue', 'proposal', 'native-exact', 'estimated', 'migration', 'mapping-change', 'source-move', 'audio-change', 'frame-change', 'source-update']);
 export const SourceTemporalAnchorSchema = z.discriminatedUnion('kind', [
   z.strictObject({
     kind: z.literal('shot-offset'), startOffsetMs: MillisecondsSchema, endOffsetMs: MillisecondsSchema,
@@ -155,7 +160,7 @@ export const SourceTemporalAnchorSchema = z.discriminatedUnion('kind', [
     kind: z.literal('frame'), frameId: IdSchema, basis: z.enum(['manual', 'proposal']), status: z.literal('confirmed'),
   }),
   z.strictObject({
-    kind: z.literal('unresolved'), basis: z.enum(['estimated', 'migration', 'mapping-change', 'source-move', 'audio-change', 'frame-change']), status: z.literal('review-required'),
+    kind: z.literal('unresolved'), basis: z.enum(['estimated', 'migration', 'mapping-change', 'source-move', 'audio-change', 'frame-change', 'source-update']), status: z.literal('review-required'),
   }),
 ]);
 export const ShotSourceLinkSchema = z.strictObject({
@@ -214,6 +219,7 @@ export const AssetSchema = z.strictObject({
   id: IdSchema, kind: z.enum(['image', 'audio', 'character', 'location', 'prop']),
   subjectId: IdSchema.nullable(), path: z.string(), mimeType: z.string().min(1), sha256: HashSchema, description: z.string(),
   durationMs: MillisecondsSchema.nullable(), version: z.number().int().positive(),
+  audioMetadata: z.strictObject({ sampleRate: z.number().int().positive(), channels: z.number().int().min(1).max(2), codec: z.string().min(1) }).nullable().optional(),
 });
 export const GenerationSchema = z.strictObject({
   id: IdSchema, provider: z.string(), model: z.string(), modelVersion: z.string().nullable(),
@@ -221,10 +227,11 @@ export const GenerationSchema = z.strictObject({
   referenceHashes: z.array(HashSchema), resultAssetIds: z.array(IdSchema), shotIds: z.array(IdSchema), createdAt: z.iso.datetime(),
 });
 export const ProjectSchema = z.strictObject({
-  schemaVersion: z.literal('1.4.0'), projectId: IdSchema, title: z.string().min(1), revision: z.number().int().nonnegative(),
+  schemaVersion: z.literal('1.5.0'), projectId: IdSchema, title: z.string().min(1), revision: z.number().int().nonnegative(),
   profile: ProfileSchema,
   handoff: HandoffSchema, sources: z.array(SnapshotSchema), dataset: DatasetSchema, importIssues: z.array(IssueSchema),
   textMappingDecisions: z.array(TextMappingDecisionSchema),
+  textPlacementInformationDecisions: z.array(TextPlacementInformationDecisionSchema),
   shots: z.array(ShotSchema), frames: z.array(FrameSchema), audioCues: z.array(AudioCueSchema), textCues: z.array(TextCueSchema),
   assets: z.array(AssetSchema), generationRecords: z.array(GenerationSchema),
 });
@@ -247,6 +254,7 @@ export type InformationRule = z.infer<typeof InformationRuleSchema>;
 export type Instruction = z.infer<typeof InstructionSchema>;
 export type TextPlacement = z.infer<typeof TextPlacementSchema>;
 export type TextMappingDecision = z.infer<typeof TextMappingDecisionSchema>;
+export type TextPlacementInformationDecision = z.infer<typeof TextPlacementInformationDecisionSchema>;
 export type Issue = z.infer<typeof IssueSchema>;
 export type Dataset = z.infer<typeof DatasetSchema>;
 export type NativeDataset = z.infer<typeof NativeDatasetSchema>;

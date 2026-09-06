@@ -10,7 +10,7 @@ import type { ProjectStore } from '../server/store.js';
 import type { CodexRequest, CodexRequestKind } from './schema.js';
 
 export type SpeechContext = {
-  projectId: string; cue: Pick<AudioCue, 'id' | 'kind' | 'startMs' | 'endMs' | 'timingRelation'> & {
+  projectId: string; sampleRate: number; cue: Pick<AudioCue, 'id' | 'kind' | 'startMs' | 'endMs' | 'timingRelation'> & {
     overhangBeforeMs: number; overhangAfterMs: number;
   };
   unit: Pick<SourceUnit, 'id' | 'text' | 'speakerId' | 'informationIds'>;
@@ -35,7 +35,7 @@ function requireSpeechContext(project: Project, cueId: string): SpeechContext {
     entityId: cue.id, channel: 'speech-generation', informationIds: [...unit.informationIds], atMs: cue.startMs,
   });
   if (outputIssues.length > 0) throw contractError('AUDIO_OUTPUT_GATE_BLOCKED', outputIssues.map((value: Issue): string => `${value.code}: ${value.message}`).join('\n'), outputIssues);
-  return { projectId: project.projectId,
+  return { projectId: project.projectId, sampleRate: project.handoff.timebase.sampleRate,
     cue: { id: cue.id, kind: cue.kind, startMs: cue.startMs, endMs: cue.endMs, timingRelation: cue.timingRelation,
       overhangBeforeMs: audioOverhangBeforeMs(project, cue), overhangAfterMs: audioOverhangAfterMs(project, cue) },
     unit: { id: unit.id, text: unit.text, speakerId: unit.speakerId, informationIds: [...unit.informationIds] },

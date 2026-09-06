@@ -18,7 +18,7 @@ describe('프로젝트 형식 마이그레이션', (): void => {
       delete shot.transitionOut;
     }
     const migrated: Project = parseProject(legacy);
-    expect(migrated.schemaVersion).toBe('1.4.0');
+    expect(migrated.schemaVersion).toBe('1.5.0');
     expect(migrated.shots.every((shot): boolean => shot.transitionOut.kind === 'cut' && shot.transitionOut.durationMs === 0)).toBe(true);
     expect(migrated.shots.every((shot): boolean => shot.sourceLinks.every((link): boolean => link.status === 'mapping-required'))).toBe(true);
   });

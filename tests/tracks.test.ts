@@ -30,11 +30,11 @@ describe('독립 오디오·글자 트랙 편집', (): void => {
     if (fixed === undefined) throw new Error('검증용 글자 큐가 없습니다.');
     const movable: TextCue = { ...fixed, id: 'movable-text', placementId: null, mappingDecisionId: null, authority: 'source-unit', timingStatus: 'proposed' };
     const editable: Project = { ...project, textCues: [...project.textCues, movable] };
-    const moved: Project = updateTextCueTiming(editable, movable.id, { startMs: movable.startMs + 1, endMs: movable.endMs, kind: 'dialogue-subtitle' });
-    expect(moved.textCues.find((cue): boolean => cue.id === movable.id)).toEqual(expect.objectContaining({ startMs: movable.startMs + 1, kind: 'dialogue-subtitle', text: movable.text, timingStatus: 'proposed' }));
+    const moved: Project = updateTextCueTiming(editable, movable.id, { startMs: movable.startMs + 1, endMs: movable.endMs, kind: 'overlay' });
+    expect(moved.textCues.find((cue): boolean => cue.id === movable.id)).toEqual(expect.objectContaining({ startMs: movable.startMs + 1, kind: 'overlay', text: movable.text, timingStatus: 'proposed' }));
     const confirmed: Project = { ...editable, textCues: editable.textCues.map((cue): TextCue => cue.id === movable.id ? { ...cue, timingStatus: 'confirmed' } : cue) };
-    const retyped: Project = updateTextCueTiming(confirmed, movable.id, { startMs: movable.startMs, endMs: movable.endMs, kind: 'dialogue-subtitle' });
-    expect(retyped.textCues.find((cue): boolean => cue.id === movable.id)).toEqual(expect.objectContaining({ kind: 'dialogue-subtitle', timingStatus: 'confirmed' }));
+    const retyped: Project = updateTextCueTiming(confirmed, movable.id, { startMs: movable.startMs, endMs: movable.endMs, kind: 'prop-text' });
+    expect(retyped.textCues.find((cue): boolean => cue.id === movable.id)).toEqual(expect.objectContaining({ kind: 'prop-text', timingStatus: 'confirmed' }));
     expect(() => updateTextCueTiming(project, fixed.id, { startMs: fixed.startMs + 1, endMs: fixed.endMs, kind: fixed.kind })).toThrowError(expect.objectContaining({ code: 'AUTHORITATIVE_TEXT_CUE_READ_ONLY' }));
   });
 });

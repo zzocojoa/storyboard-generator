@@ -1,7 +1,7 @@
 import { contractError, issue } from './errors.js';
 import { directVisualLinks, effectiveInformationGate, sourceAnchorRange } from './mapping.js';
 import type { EffectiveInformationGate } from './mapping.js';
-import type { Issue, Project, Shot, ShotSourceLink, SourceRef, SourceUnit, StoryboardFrame, TextCue, TextMappingDecision, TextPlacement } from './schema.js';
+import type { Issue, Project, Shot, ShotSourceLink, SourceRef, SourceUnit, StoryboardFrame, TextCue, TextMappingDecision, TextPlacement, TextPlacementInformationDecision } from './schema.js';
 import { frameEvaluationAbsoluteMs } from './time.js';
 
 export type OutputChannel = 'image' | 'text-overlay' | 'audio-playback' | 'speech-generation' | 'proposal' | 'export';
@@ -13,7 +13,7 @@ export type InformationEmissionInput = {
 };
 export type TextCueMappingResolution = {
   decision: TextMappingDecision | null;
-  status: 'resolved' | 'review-required' | 'missing' | 'ambiguous';
+  status: 'resolved' | 'review-required' | 'missing' | 'ambiguous' | 'information-review-required' | 'information-missing' | 'information-ambiguous';
   inheritedInformationIds: string[];
 };
 
@@ -49,8 +49,16 @@ export function resolveTextCueMapping(project: Project, cue: TextCue): TextCueMa
   if (decision === undefined) return { decision: null, status: 'missing', inheritedInformationIds: [] };
   if (decision.status !== 'confirmed') return { decision, status: 'review-required', inheritedInformationIds: [] };
   const inheritsCanonical: boolean = ['exact', 'abbreviation', 'replacement'].includes(decision.relation);
-  return { decision, status: 'resolved', inheritedInformationIds: inheritsCanonical
-    ? uniqueInformationIds(unitInformationIds(project, decision.canonicalUnitId)) : [] };
+  if (inheritsCanonical) return { decision, status: 'resolved', inheritedInformationIds: uniqueInformationIds(unitInformationIds(project, decision.canonicalUnitId)) };
+  const informationDecisions: TextPlacementInformationDecision[] = project.textPlacementInformationDecisions
+    .filter((candidate: TextPlacementInformationDecision): boolean => candidate.placementId === cue.placementId);
+  if (informationDecisions.length === 0) return { decision, status: 'information-missing', inheritedInformationIds: [] };
+  if (informationDecisions.length > 1) return { decision, status: 'information-ambiguous', inheritedInformationIds: [] };
+  const informationDecision: TextPlacementInformationDecision | undefined = informationDecisions[0];
+  if (informationDecision === undefined) return { decision, status: 'information-missing', inheritedInformationIds: [] };
+  if (informationDecision.status === 'unresolved') return { decision, status: 'information-review-required', inheritedInformationIds: [] };
+  return { decision, status: 'resolved', inheritedInformationIds: informationDecision.status === 'informational'
+    ? uniqueInformationIds(informationDecision.informationIds) : [] };
 }
 
 function textCueMappingIssues(project: Project, cue: TextCue): Issue[] {
@@ -58,7 +66,10 @@ function textCueMappingIssues(project: Project, cue: TextCue): Issue[] {
   const resolution: TextCueMappingResolution = resolveTextCueMapping(project, cue);
   if (resolution.status === 'resolved') return [];
   const code: string = resolution.status === 'missing' ? 'TEXT_MAPPING_DECISION_MISSING'
-    : resolution.status === 'ambiguous' ? 'TEXT_MAPPING_DECISION_AMBIGUOUS' : 'TEXT_MAPPING_REVIEW_REQUIRED';
+    : resolution.status === 'ambiguous' ? 'TEXT_MAPPING_DECISION_AMBIGUOUS'
+      : resolution.status === 'information-missing' ? 'PLACEMENT_INFORMATION_DECISION_MISSING'
+        : resolution.status === 'information-ambiguous' ? 'PLACEMENT_INFORMATION_DECISION_AMBIGUOUS'
+          : resolution.status === 'information-review-required' ? 'PLACEMENT_INFORMATION_REVIEW_REQUIRED' : 'TEXT_MAPPING_REVIEW_REQUIRED';
   return [issue(code, 'conflict', cue.id, 'mappingDecisionId', 'Placement Text Cue의 Mapping을 확정해야 출력할 수 있습니다.',
     'one confirmed mapping decision', resolution.status, [])];
 }

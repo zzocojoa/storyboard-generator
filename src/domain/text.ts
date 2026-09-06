@@ -13,6 +13,22 @@ export const TextCueAuthorityResolutionInputSchema = z.discriminatedUnion('autho
 ]);
 export type TextCueAuthorityResolutionInput = z.infer<typeof TextCueAuthorityResolutionInputSchema>;
 
+function allowedTextKinds(unit: SourceUnit): TextCue['kind'][] {
+  if (['SCREEN_TEXT', 'CHAT', 'NOTE'].includes(unit.kind)) return ['overlay', 'prop-text'];
+  if (['DIALOGUE', 'NARRATION', 'PANEL'].includes(unit.kind)) return ['dialogue-subtitle'];
+  return [];
+}
+
+function requireTextKind(unit: SourceUnit, kind: TextCue['kind']): void {
+  const allowed: TextCue['kind'][] = allowedTextKinds(unit);
+  if (allowed.length === 0) {
+    throw contractError('SOURCE_UNIT_NOT_TEXTUAL', `${unit.id}: ${unit.kind} 원문은 Text Cue 권한으로 사용할 수 없습니다.`, []);
+  }
+  if (!allowed.includes(kind)) {
+    throw contractError('INCOMPATIBLE_TEXT_KIND', `${unit.id}: ${unit.kind} 원문의 Text Cue 형식이 맞지 않습니다. allowed=${allowed.join(',')}, actual=${kind}`, []);
+  }
+}
+
 function requireReviewCue(project: Project, cueId: string): TextCue {
   const cue: TextCue | undefined = project.textCues.find((candidate: TextCue): boolean => candidate.id === cueId);
   if (cue === undefined) throw contractError('TEXT_CUE_NOT_FOUND', `글자 큐를 찾을 수 없습니다: ${cueId}`, []);
@@ -53,15 +69,22 @@ function mappingCue(project: Project, cue: TextCue, mappingDecisionId: string): 
   if (project.textCues.some((candidate: TextCue): boolean => candidate.id !== cue.id && candidate.mappingDecisionId === decision.id)) {
     throw contractError('TEXT_CUE_AUTHORITY_TARGET_IN_USE', `${decision.id}: 다른 Cue가 Mapping Decision 권한을 사용 중입니다.`, []);
   }
+  const kind: TextCue['kind'] = ['DIALOGUE', 'NARRATION', 'PANEL'].includes(unit.kind) ? 'dialogue-subtitle'
+    : unit.kind === 'SCREEN_TEXT' ? 'overlay' : 'prop-text';
+  requireTextKind(unit, kind);
   return { ...cue, segmentId: unit.segmentId, unitId: unit.id, placementId: null, mappingDecisionId: decision.id,
     authority: 'mapping-decision', text: unit.text, startMs: decision.canonicalStartMs, endMs: decision.canonicalEndMs,
-    kind: unit.kind === 'SCREEN_TEXT' ? 'overlay' : 'prop-text', timingStatus: 'confirmed' };
+    kind, timingStatus: 'confirmed' };
 }
 
 function sourceCue(project: Project, cue: TextCue, input: Extract<TextCueAuthorityResolutionInput, { authority: 'source-unit' }>): TextCue {
   const unit: SourceUnit | undefined = project.dataset.units.find((candidate: SourceUnit): boolean => candidate.id === input.unitId);
   if (unit === undefined) throw contractError('SOURCE_UNIT_NOT_FOUND', `원문 단위를 찾을 수 없습니다: ${input.unitId}`, []);
   if (unit.segmentId !== cue.segmentId) throw contractError('TEXT_CUE_SOURCE_SEGMENT_MISMATCH', `${input.unitId}: Cue와 같은 구간의 원문을 선택하세요.`, []);
+  requireTextKind(unit, input.kind);
+  if (project.textCues.some((candidate: TextCue): boolean => candidate.id !== cue.id && candidate.authority === 'source-unit' && candidate.unitId === unit.id)) {
+    throw contractError('DUPLICATE_SOURCE_UNIT_TEXT_CUE', `${unit.id}: Source Unit 권한 Text Cue는 하나만 만들 수 있습니다.`, []);
+  }
   return { ...cue, segmentId: unit.segmentId, unitId: unit.id, placementId: null, mappingDecisionId: null, authority: 'source-unit',
     text: unit.text, startMs: input.startMs, endMs: input.endMs, kind: input.kind, timingStatus: 'proposed' };
 }
