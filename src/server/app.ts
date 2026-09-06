@@ -4,6 +4,7 @@ import Fastify from 'fastify';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import fastifyStatic from '@fastify/static';
 import { z, ZodError } from 'zod';
+import { codexRequestMetrics } from '../codex/metrics.js';
 import type { CodexRequestStore } from '../codex/requests.js';
 import type { CodexRequest, CodexRequestKind } from '../codex/schema.js';
 import { codexRequestBasis } from '../codex/work.js';
@@ -93,10 +94,11 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
   });
 
   app.get('/api/status', async (): Promise<object> => {
-    const pending: CodexRequest[] = await requests.list('pending');
-    const failed: CodexRequest[] = await requests.list('failed');
-    return { provider: 'codex-app', pendingRequests: pending.length, failedRequests: failed.length,
-      recentFailures: failed.slice(-5).reverse().map((item: CodexRequest): object => ({ id: item.id, kind: item.kind, targetId: item.targetId, error: item.error })),
+    const allRequests: CodexRequest[] = await requests.list(null);
+    const metrics = codexRequestMetrics(allRequests);
+    const failed: CodexRequest[] = allRequests.filter((item: CodexRequest): boolean => item.status === 'failed');
+    return { provider: 'codex-app', ...metrics,
+      recentFailures: failed.slice(-5).reverse().map((item: CodexRequest): object => ({ id: item.id, kind: item.kind, projectId: item.projectId, targetId: item.targetId, error: item.error })),
       generationInstruction: 'Codex 앱에서 $storyboard-workbench 대기 요청 처리를 실행하세요.', aiVoiceDisclosure: `가이드 음성은 macOS ${config.codex.speechVoice} 합성 음성입니다.` };
   });
   app.get('/api/projects', async (): Promise<object> => ({ projects: await store.list() }));

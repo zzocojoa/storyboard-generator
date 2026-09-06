@@ -103,12 +103,12 @@ native 파일은 일반적인 프로젝트 원본을 표현한다. ID는 불투�
 | POST /api/projects/:id/segments/:segmentId/propose | 구간별 컷 제안 작업 |
 | POST /api/projects/:id/frames/:frameId/generate | 선택 프레임 이미지 생성 작업 |
 | POST /api/projects/:id/audio/:cueId/generate | 선택 발화 가이드 음성 생성 작업 |
-| GET /api/status, /api/codex/requests/:id | 영속 생성 요청의 대기·실패 상태와 오류·결과 revision |
+| GET /api/status, /api/codex/requests/:id | 영속 생성 요청의 완료·대기·실패, 처리 시간·반복 생성, 오류·결과 revision |
 | GET /api/projects/:id/export.json, .csv, .pdf | 검토 상태를 포함한 결과 출력 |
 
 서버는 로컬 주소에 바인딩한다. API는 생성 버튼을 누른 시점의 최소 문맥 해시와 대상을 영속 요청으로 저장하며 외부 생성 서비스를 직접 호출하지 않는다. 웹 편집과 생성 실행은 서로 막지 않는다. Codex App 결과를 적용할 때 현재 대상 문맥 해시가 다르면 오래된 요청으로 거부한다. 빈 자산이나 다른 제공자로 자동 대체하지 않는다.
 
-생성은 Codex App의 현재 모델과 내장 `image_gen`에서 수행한다. 가이드 음성은 Codex App 작업이 원문 파일을 준비한 뒤 설정된 macOS 한국어 음성으로 만들고 PCM WAV로 변환한다. `OPENAI_API_KEY`와 OpenAI SDK를 사용하지 않는다. 생성 요청과 결과 revision은 `.local` 아래에 프로젝트별 데이터와 분리해 저장하고, 결과 자산에는 요청 ID·prompt·도구 이름·참조 해시를 기록한다.
+생성은 Codex App의 현재 모델과 내장 `image_gen`에서 수행한다. 가이드 음성은 Codex App 작업이 원문 파일을 준비한 뒤 설정된 macOS 한국어 음성으로 만들고 PCM WAV로 변환한다. `OPENAI_API_KEY`와 OpenAI SDK를 사용하지 않는다. 생성 요청과 결과 revision은 `.local` 아래에 프로젝트별 데이터와 분리해 저장하고, 결과 자산에는 요청 ID·prompt·도구 이름·참조 해시를 기록한다. 요청의 생성·종료 시각으로 처리 시간을 집계하고 같은 프로젝트·종류·대상에 대한 추가 요청을 반복 생성으로 계산한다. Codex App이 요청별 비용을 노출하지 않는 상태는 0원이 아니라 미측정으로 표시한다.
 
 ## 8. 검증 계획과 구현 순서
 

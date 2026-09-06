@@ -33,6 +33,8 @@ npm run codex-workbench -- apply-proposal --request <UUID> --input .local/codex-
 
 Use the built-in `image_gen` tool. Do not use an API-key CLI. When `references` is nonempty, inspect every listed local image with `view_image` before generation and pass those exact paths as `referenced_image_paths`. Use the supplied prompt as the primary specification. Keep exact screen text out of the bitmap because the workbench renders it as a separate track.
 
+For a transient `image_gen` service failure, report a warning and retry the same request up to two additional times. Do not retry invalid context, stale targets, schema errors, or rejected visual direction. When retries are exhausted, preserve the last error with the failure command below.
+
 Copy the generated PNG path returned by the tool to `.local/codex-results/<UUID>.png`, inspect the copied image, and apply it:
 
 ```bash

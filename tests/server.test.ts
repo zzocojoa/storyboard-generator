@@ -112,7 +112,9 @@ describe('로컬 작업 API', (): void => {
       const queued = await requests.create('image', 'project', 'frame', '0'.repeat(64), '2026-09-06T00:00:00.000Z');
       await requests.fail(queued.id, 'IMAGE_TOOL_FAILED', '이미지 생성 도구가 결과를 반환하지 않았습니다.', '2026-09-06T00:00:01.000Z');
       const status = await app.inject({ method: 'GET', url: '/api/status' });
-      expect(status.json()).toEqual(expect.objectContaining({ failedRequests: 1, recentFailures: [expect.objectContaining({ id: queued.id, error: { code: 'IMAGE_TOOL_FAILED', message: '이미지 생성 도구가 결과를 반환하지 않았습니다.' } })] }));
+      expect(status.json()).toEqual(expect.objectContaining({ totalRequests: 1, completedRequests: 0, pendingRequests: 0, failedRequests: 1,
+        averageLatencyMs: 1000, maximumLatencyMs: 1000, repeatedRequests: 0, apiCostUsd: null,
+        recentFailures: [expect.objectContaining({ id: queued.id, projectId: 'project', error: { code: 'IMAGE_TOOL_FAILED', message: '이미지 생성 도구가 결과를 반환하지 않았습니다.' } })] }));
     } finally { await app.close(); }
   });
 });
