@@ -5,7 +5,8 @@
 - 시작 Branch: `codex/storyboard-generator`
 - 3차 검토 기준이자 구현 시작 HEAD: `e5e5dc78f0b61a71cf134800598336d91f7bc288` (`feat: add temporal storyboard mappings`)
 - 후속 감사 시작 HEAD: `f895f12d114a396fb11ebbdfc40e0034a1f2bd3c`
-- 종료 상태: 1.3 보강 변경은 Working Tree에 있으며 최종 commit과 GitHub CI 결과는 이 문서의 CI 절에서 구분한다.
+- 구현 종료 HEAD: `b31d1317da0415d05313310236f28db88f3fe4bc` (`fix: close storyboard gate edge cases`)
+- 종료 상태: 구현 commit을 원격 `codex/storyboard-generator`에 push했고 GitHub CI 성공을 확인했다. 이 보고서의 CI 결과 반영은 문서 전용 후속 commit이다.
 - 기존 Project Schema: `1.2.0`
 - 신규 Project Schema: `1.3.0`
 - 생성 실행: Codex App의 현재 모델, 내장 `image_gen`, 설정된 macOS 음성을 사용한다. `OPENAI_API_KEY`와 OpenAI SDK는 사용하지 않는다.
@@ -105,9 +106,9 @@ Gate 증거가 되는 measured Audio는 연결 Asset의 종류·subject·길이,
 ## 8. CI 결과
 
 - Workflow 추가: 예. pull request와 `master`, `codex/storyboard-generator` push에서 Node.js 24, `npm ci`, `npm run check`를 실행한다.
-- Workflow 실행: `f895f12d114a396fb11ebbdfc40e0034a1f2bd3c`까지 원격 실행됨.
-- 실제 GitHub 결과: 해당 실행은 성공했다. 현재 Working Tree의 후속 보강은 commit·push 후 새 실행 결과로 갱신해야 한다.
-- 로컬과 GitHub의 차이: 위 98개 결과는 현재 Working Tree의 로컬 결과이고, GitHub 성공은 직전 push의 결과다. Workflow 파일의 존재만으로 현재 변경의 CI 통과를 주장하지 않는다.
+- Workflow 실행: 구현 HEAD `b31d1317da0415d05313310236f28db88f3fe4bc`에서 실행됨.
+- 실제 GitHub 결과: [CI 실행 34009525933](https://github.com/zzocojoa/storyboard-generator/actions/runs/34009525933) 성공. `npm ci`와 `npm run check` 단계가 모두 통과했다.
+- 로컬과 GitHub의 차이: 로컬에서는 여섯 명시 명령을 각각 실행하고 `npm run check`를 다시 실행했다. GitHub는 깨끗한 Ubuntu runner에서 Node.js 24로 의존성을 다시 설치한 뒤 통합 검사만 실행했다.
 
 ## 9. 남은 위험
 
