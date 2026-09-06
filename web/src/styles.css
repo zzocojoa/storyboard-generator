@@ -52,6 +52,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .failure-list { margin-top: 8px; }
 .failure-list article { display: grid; gap: 3px; padding: 7px; border-bottom: 1px solid #3d3e38; font: 8px 'IBM Plex Mono', monospace; letter-spacing: 0; }
 .failure-list b { color: #ef785b; }.failure-list span { color: #999b91; }.failure-list p { margin: 2px 0 0; font: 10px/1.45 Arial, sans-serif; }
+.recovery-list { margin-top: 8px; }
+.recovery-list article { display: grid; gap: 3px; padding: 7px; border-bottom: 1px solid #3d3e38; font: 8px 'IBM Plex Mono', monospace; letter-spacing: 0; }
+.recovery-list b { color: #82b875; }.recovery-list span { color: #999b91; }
 .edit-grid { min-height: 0; display: grid; grid-template-columns: 210px minmax(460px, 1fr) 330px; }
 .scene-rail, .inspector { min-width: 0; background: #e9e6de; border-right: 1px solid #c8c6bf; overflow: hidden; }
 .inspector { background: #fbfaf6; border-right: 0; border-left: 1px solid #c8c6bf; }

@@ -1,6 +1,6 @@
 # 범용 콘티 도구 — Design
 
-상태: 1.5.0 도메인 계약, 독립 Placement 정보 판정, 실제 미디어 무결성 검사, 안전 Frame·Audio 출력, 명시적 J/L-cut과 PRJ-007 실제 UNIT-045 WAV Golden을 반영한 현재 설계. 전체 분량의 제작 판단은 별도 검토가 필요하다.
+상태: 1.5.0 도메인 계약, 독립 Placement 정보 판정, 실제 미디어 무결성·자원 검사, 이전 WAV 복구, journal 저장 복구, Cue 범위 Audio 수명주기, 안전 Frame·Audio 출력, 명시적 J/L-cut과 PRJ-007 실제 UNIT-045 WAV Golden을 반영한 현재 설계. 전체 분량의 제작 판단은 별도 검토가 필요하다.
 
 ## 1. 목표와 결정 근거
 
@@ -32,10 +32,10 @@ flowchart LR
 - `src/proposal`: 구간의 허용된 원문을 이용한 컷 제안과 모델 요청 경계.
 - `src/exporters`: 검증된 프로젝트의 JSON·CSV·PDF 출력.
 - `src/io`: 입력 파일과 프로젝트 JSON 읽기·쓰기. 입력 경로는 패키지 루트 안으로 제한한다.
-- `src/server`: 프로젝트별 현재본·불변 revision·자산 저장, 낙관적 revision 검사와 로컬 HTTP API.
+- `src/server`: 프로젝트별 현재본·불변 revision·자산의 journal transaction 저장과 시작 복구, 낙관적 revision 검사와 로컬 HTTP API.
 - `src/codex`: Codex 요청 영속화, 최소 생성 문맥, 대상 해시, 결과 검증·반영과 명령행 브리지.
 - `.agents/skills/storyboard-workbench`: Codex App이 컷·내장 이미지 생성·로컬 가이드 음성 요청을 처리하는 저장소 스킬.
-- `web`: 공통 프로젝트 모델을 표시하고 편집·생성·재생·원본 갱신·내보내기를 API에 요청하는 React 화면.
+- `web`: 공통 프로젝트 모델을 표시하고 편집·생성·Cue 범위 Audio 재생·원본 갱신·내보내기를 API에 요청하는 React 화면.
 
 ## 3. 입력 계약과 원본 권한
 
@@ -82,7 +82,7 @@ native 파일은 일반적인 프로젝트 원본을 표현한다. ID는 불투�
 
 정보 공개 규칙은 information ID, 최초 Segment, 최초 Unit과 순서, 권한 하한 `baseNotBeforeMs`, `exact-time`·`unit-order`·`segment-start` 정밀도를 가진다. `effectiveNotBeforeMs`는 저장 필드가 아니며 확정 Text Mapping, 확정 Source Temporal Anchor, 같은 Segment의 유효한 `within-segment` 측정 Audio Cue, 유일한 Unit 순서 근거에서 매 검사마다 계산한다. 어떤 근거도 기준 하한을 앞당길 수 없다. Source나 Audio가 더 늦은 Unit-order 근거보다 앞서면 후반 근거를 유효 하한으로 유지하고 충돌을 검토 항목으로 만든다. Unit 순서만 있고 확정 시간 근거가 없으면 검토 필요 상태로 남겨 승인과 생성을 막는다.
 
-Information Emission Interlock은 이미지, 글자 오버레이, 음성 재생·생성, 컷 제안, PDF·CSV 출력에 같은 공개 판정을 적용한다. 출력 대상은 정보 ID의 원본 근거와 유효 Gate를 가져야 하며, 미해결 규칙·검토 필요 Gate·조기 공개는 차단한다. Program Monitor와 실제 오디오 요소는 안전 선택자의 결과만 렌더링하고 차단된 Cue는 본문 대신 ID와 Issue code를 표시한다. `reviewFrameOutput`은 Program Monitor, 전환 미리보기, PDF, CSV에서 자산 대상과 검토·Source·Gate 상태를 같은 방식으로 판정한다. bitmap이 차단돼도 JSON의 Frame 연결과 Asset은 감사용으로 유지한다.
+Information Emission Interlock은 이미지, 글자 오버레이, 음성 재생·생성, 컷 제안, PDF·CSV 출력에 같은 공개 판정을 적용한다. 출력 대상은 정보 ID의 원본 근거와 유효 Gate를 가져야 하며, 미해결 규칙·검토 필요 Gate·조기 공개는 차단한다. Program Monitor와 실제 오디오 요소는 안전 선택자의 결과만 렌더링하고 차단된 Cue는 본문 대신 ID와 Issue code를 표시한다. 브라우저 Audio controller는 Cue 종료 timer와 playhead 범위를 함께 확인하고, 일시정지·탐색·프로젝트 또는 revision 변경·Monitor 종료 때 활성 요소를 정리한다. 늦게 끝난 이전 `play()` Promise와 timer는 현재 entry identity가 같을 때만 상태를 바꿀 수 있다. `reviewFrameOutput`은 Program Monitor, 전환 미리보기, PDF, CSV에서 자산 대상과 검토·Source·Gate 상태를 같은 방식으로 판정한다. bitmap이 차단돼도 JSON의 Frame 연결과 Asset은 감사용으로 유지한다.
 
 프레임 Prompt와 출력 검사는 해당 시각에 활성화된 직접 시각 Link 및 Text Mapping만 사용한다. 일반 프레임의 표시·평가 시각은 `shot.startMs + frame.offsetMs`다. End Frame은 컷 종료점에 표시하지만 `[startMs, endMs)` 계약에 따라 `endMs - 1`에서 평가한다. 금지 사실의 설명 자체를 이미지 prompt에 넣지 않는다. 기록된 정보 ID를 비교하는 검사는 의미적·시각적 반전 누설을 완전히 검증하지 못하므로 그림 검토 상태를 따로 둔다.
 
@@ -121,13 +121,18 @@ Information Emission Interlock은 이미지, 글자 오버레이, 음성 재생�
 | POST /api/projects/:id/frames/:frameId/generate | 선택 프레임 이미지 생성 작업 |
 | POST /api/projects/:id/audio/:cueId/generate | 선택 발화 가이드 음성 생성 작업 |
 | POST /api/projects/:id/audio/:cueId/asset | expected revision과 PCM WAV 한 개를 multipart로 받아 실제 길이·형식·해시를 검사하고 저장 |
+| POST /api/projects/:id/audio/:cueId/normalize | 유효한 이전 WAV를 현재 프로젝트 PCM 형식의 새 Asset 버전으로 복구 |
 | PATCH /api/projects/:id/text-placements/:placementId/information | 독립 Placement의 정보성·비정보성·미해결 판정 변경 |
 | GET /api/projects/:id/output/frame/:frameId | 현재 프로젝트와 실제 파일을 다시 검사한 안전 Frame bytes |
 | GET /api/projects/:id/output/audio/:cueId | 현재 프로젝트와 실제 파일을 다시 검사한 안전 Audio bytes |
-| GET /api/status, /api/codex/requests/:id | 영속 생성 요청의 완료·대기·실패, 처리 시간·반복 생성, 오류·결과 revision |
+| GET /api/status, /api/codex/requests/:id | 영속 생성 요청 지표·오류·결과 revision과 시작 시 저장 복구 결과 |
 | GET /api/projects/:id/export.json, .csv, .pdf | 검토 상태를 포함한 결과 출력 |
 
-서버는 로컬 주소에 바인딩한다. 업로드 파일명은 저장 경로에 사용하지 않고 프로젝트 디렉터리 밖의 경로를 거부한다. PCM WAV는 최대 50MB·1시간, mono/stereo, 16/24-bit만 지원하며 프로젝트 샘플레이트의 PCM16 WAV로 정규화하고 다시 검사한다. AIFF·MP3는 명시적으로 거부한다. 업로드 파일과 새 revision은 임시 파일을 거쳐 게시하며 실패하면 둘 다 되돌린다. API는 생성 버튼을 누른 시점의 최소 문맥 해시와 대상을 영속 요청으로 저장하며 외부 생성 서비스를 직접 호출하지 않는다. 웹 편집과 생성 실행은 서로 막지 않는다. Codex App 결과를 적용할 때 현재 대상 문맥 해시가 다르면 오래된 요청으로 거부한다. 빈 자산이나 다른 제공자로 자동 대체하지 않는다.
+서버는 로컬 주소에 바인딩한다. 업로드 파일명은 저장 경로에 사용하지 않고 프로젝트 디렉터리 밖의 경로를 거부한다. PCM WAV는 최대 50MB·1시간, mono/stereo, 16/24-bit만 지원하며 입력 sample rate·WAV chunk 수·정규화 예상 크기를 먼저 제한하고 프로젝트 샘플레이트의 PCM16 WAV로 정규화해 다시 검사한다. 저장 WAV의 실제 duration·sample rate·channel·codec은 Asset metadata 및 Cue 길이와 연결된다. 유효하지만 프로젝트 형식과 다른 이전 WAV는 `AUDIO_ASSET_NORMALIZATION_REQUIRED`로 구분하며 복구할 때 기존 Asset을 보존한다. AIFF·MP3는 명시적으로 거부한다.
+
+ProjectStore는 이전/다음 Project와 새 revision·Asset을 transaction 디렉터리에 fsync하고 journal을 마지막에 기록한다. Asset, revision, 현재본 순서로 게시하고 각 디렉터리를 동기화한다. 서버 시작 때 현재 revision과 journal을 비교해 게시 전 중단은 제거하고, 완전히 게시된 결과는 확정하며, 게시 결과가 불완전하면 이전 Project로 되돌린다. 종료된 process의 lock은 제거하되 살아 있는 process의 lock은 유지한다. journal Asset 경로는 해당 프로젝트의 `assets` 아래로 제한한다. 복구는 구조화 로그와 `/api/status`에 기록한다.
+
+API는 생성 버튼을 누른 시점의 최소 문맥 해시와 대상을 영속 요청으로 저장하며 외부 생성 서비스를 직접 호출하지 않는다. 웹 편집과 생성 실행은 서로 막지 않는다. Codex App 결과를 적용할 때 현재 대상 문맥 해시가 다르면 오래된 요청으로 거부한다. 빈 자산이나 다른 제공자로 자동 대체하지 않는다.
 
 `sharp` 0.35.4(Apache-2.0)는 macOS·Linux에서 PNG·JPEG·WebP 전체 디코딩과 픽셀 상한 검사에 사용한다. `@fastify/multipart` 10.1.1(MIT)은 Node.js에서 파일 수와 크기를 제한한다. 안전 출력과 Raw Asset fetch는 저장 파일의 존재·프로젝트 내부 경로·SHA-256·실제 MIME·구조와 대상 연결을 다시 검사한다. 안전 Frame·Audio 응답은 `no-store`이고, PDF는 손상된 Frame을 ID와 오류 코드가 있는 placeholder로 대체한다. 무결성 및 Ready 지표는 영속하지 않고 현재 프로젝트와 파일에서 계산한다.
 
@@ -140,7 +145,7 @@ Information Emission Interlock은 이미지, 글자 오버레이, 음성 재생�
 3. 컷·시작/키/끝 프레임·독립 트랙·전환 생성과 편집·잠금, Text Mapping 상태 기계·Source Temporal Anchor·동적 Information Gate, JSON/CSV/PDF 보존: 구현 및 자동 검증됨.
 4. 로컬 저장/API·Mapping 편집 UI, 프로젝트 분리·재열기·원본 차이: 구현 및 자동 검증됨.
 5. 시각 기준, Codex App 컷·이미지·음성 요청과 결과 반영, 재생, PDF 출력: 구현 및 자동 검증됨. 합성 범용 사례와 PRJ-007 `SEG-008`의 실제 생성 흐름을 확인했다.
-6. 두 가지 이상의 구성으로 회귀·브라우저 검증, 전체 요구사항 감사: 22개 파일의 278개 자동 테스트로 합성 자료와 초기 회귀 자료의 가져오기·편집·출력을 검증했다. 신규 88개 검사는 독립 Placement 정보 판정, 실제 PCM WAV HTTP 등록·저장·재열기, 저장 미디어 해시·디코딩, 안전 출력, 1.5 Migration을 포함한다. PRJ-007 Golden은 실제 48,000Hz 2초 WAV를 `UNIT-045`의 849,000–851,000ms J-cut에 연결한다. 전체 분량의 시각·낭독 검토는 남아 있다.
+6. 두 가지 이상의 구성으로 회귀·브라우저 검증, 전체 요구사항 감사: 23개 파일의 309개 자동 테스트로 합성 자료와 초기 회귀 자료의 가져오기·편집·출력을 검증했다. 신규 119개 검사는 독립 Placement 정보 판정, 실제 PCM WAV HTTP 등록·저장·재열기, 저장 미디어 해시·디코딩, 안전 출력, 1.5 Migration, 악성 WAV 자원 한계, 이전 WAV 정규화 복구, transaction 시작 복구와 브라우저 Audio 수명주기를 포함한다. PRJ-007 Golden은 실제 48,000Hz 2초 WAV를 `UNIT-045`의 849,000–851,000ms J-cut에 연결한다. 전체 분량의 시각·낭독 검토는 남아 있다.
 
 필수 자동 검증은 원문 100% 보존과 단위 연결, 영상 시간 공백·중복, 잘못된 ID·구간 소유권, 미지원 버전·손상 해시, 공개 시점 위반, 잠근 필드 변경, 프로젝트 혼입, 저장·출력 정합성이다. 실제 제작 사례 수치는 fixture에만 둔다. 패널·반전이 없는 다른 분량의 프로젝트와 원본 ID가 겹치는 프로젝트도 검증한다.
 

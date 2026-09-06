@@ -8,6 +8,10 @@ export const MAX_IMAGE_BYTES: number = 20 * 1024 * 1024;
 export const MAX_IMAGE_PIXELS: number = 40_000_000;
 export const MAX_AUDIO_BYTES: number = 50 * 1024 * 1024;
 export const MAX_AUDIO_DURATION_MS: number = 60 * 60 * 1000;
+export const MAX_AUDIO_NORMALIZED_BYTES: number = MAX_AUDIO_BYTES;
+export const MIN_AUDIO_SAMPLE_RATE: number = 8_000;
+export const MAX_AUDIO_SAMPLE_RATE: number = 384_000;
+export const MAX_WAV_CHUNKS: number = 4_096;
 
 export type InspectedImage = {
   mimeType: 'image/png' | 'image/jpeg' | 'image/webp';
@@ -23,6 +27,15 @@ export type InspectedAudio = {
   sampleRate: number;
   channels: number;
   codec: 'pcm_s16le';
+  sha256: string;
+};
+
+export type InspectedAudioFile = {
+  mimeType: 'audio/wav';
+  durationMs: number;
+  sampleRate: number;
+  channels: number;
+  codec: 'pcm_s16le' | 'pcm_s24le';
   sha256: string;
 };
 
@@ -100,7 +113,12 @@ function parsePcmWav(bytes: Buffer, declaredMimeType: string): ParsedWav {
   let blockAlign: number | null = null;
   let bitsPerSample: number | null = null;
   let data: Buffer | null = null;
+  let chunkCount: number = 0;
   while (offset < bytes.length) {
+    chunkCount += 1;
+    if (chunkCount > MAX_WAV_CHUNKS) {
+      throw contractError('AUDIO_WAV_CHUNK_LIMIT', `WAV 청크 수가 허용 범위를 초과합니다. actual>${MAX_WAV_CHUNKS}`, []);
+    }
     requireRange(bytes, offset, 8, 'chunk-header');
     const chunkId: string = bytes.toString('ascii', offset, offset + 4);
     const chunkLength: number = bytes.readUInt32LE(offset + 4);
@@ -133,6 +151,7 @@ function parsePcmWav(bytes: Buffer, declaredMimeType: string): ParsedWav {
   if (blockAlign !== expectedBlockAlign || byteRate !== sampleRate * blockAlign || data.length % blockAlign !== 0) {
     throw contractError('ASSET_CONTENT_CORRUPT', `WAV PCM 정렬 정보가 일치하지 않습니다. byteRate=${byteRate}, blockAlign=${blockAlign}, data=${data.length}`, []);
   }
+  if (data.length === 0) throw contractError('ASSET_CONTENT_CORRUPT', 'WAV data 청크가 비어 있습니다.', []);
   return { sampleRate, channels, bitsPerSample, sampleFrames: data.length / blockAlign, data };
 }
 
@@ -146,8 +165,28 @@ function sampleAt(wav: ParsedWav, frame: number, channel: number): number {
   return readSample(wav.data, (frame * wav.channels + channel) * bytesPerSample, wav.bitsPerSample);
 }
 
-function encodePcm16Wav(wav: ParsedWav, targetSampleRate: number): Buffer {
-  const targetFrames: number = Math.max(1, Math.round(wav.sampleFrames * targetSampleRate / wav.sampleRate));
+function requireSupportedSampleRate(sampleRate: number, label: string): void {
+  if (sampleRate < MIN_AUDIO_SAMPLE_RATE || sampleRate > MAX_AUDIO_SAMPLE_RATE) {
+    throw contractError('AUDIO_SAMPLE_RATE_UNSUPPORTED', `${label} sample rate가 허용 범위를 벗어났습니다. sampleRate=${sampleRate}, allowed=${MIN_AUDIO_SAMPLE_RATE}..${MAX_AUDIO_SAMPLE_RATE}`, []);
+  }
+}
+
+function targetFrameCount(wav: ParsedWav, targetSampleRate: number): number {
+  const sourceRate: bigint = BigInt(wav.sampleRate);
+  const numerator: bigint = BigInt(wav.sampleFrames) * BigInt(targetSampleRate);
+  const frames: bigint = (numerator + sourceRate / 2n) / sourceRate;
+  const normalizedFrames: bigint = frames > 0n ? frames : 1n;
+  const normalizedBytes: bigint = 44n + normalizedFrames * BigInt(wav.channels) * 2n;
+  if (normalizedBytes > BigInt(MAX_AUDIO_NORMALIZED_BYTES)) {
+    throw contractError('AUDIO_NORMALIZED_SIZE_LIMIT', `정규화 결과가 허용 크기를 초과합니다. estimatedBytes=${normalizedBytes.toString()}, maxBytes=${MAX_AUDIO_NORMALIZED_BYTES}`, []);
+  }
+  if (normalizedFrames > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw contractError('AUDIO_NORMALIZATION_RESOURCE_LIMIT', `정규화 Frame 수가 안전한 정수 범위를 벗어났습니다. frames=${normalizedFrames.toString()}`, []);
+  }
+  return Number(normalizedFrames);
+}
+
+function encodePcm16Wav(wav: ParsedWav, targetSampleRate: number, targetFrames: number): Buffer {
   const dataLength: number = targetFrames * wav.channels * 2;
   const result: Buffer = Buffer.alloc(44 + dataLength);
   result.write('RIFF', 0); result.writeUInt32LE(36 + dataLength, 4); result.write('WAVE', 8); result.write('fmt ', 12);
@@ -173,39 +212,70 @@ function durationMs(wav: ParsedWav): number {
 }
 
 export function wavDurationMs(bytes: Buffer): number {
-  return durationMs(parsePcmWav(bytes, 'audio/wav'));
+  return inspectAudioFileBytes(bytes, 'audio/wav').durationMs;
+}
+
+function inspectParsedAudio(bytes: Buffer, declaredMimeType: string): { wav: ParsedWav; inspection: InspectedAudioFile } {
+  if (bytes.length === 0 || bytes.length > MAX_AUDIO_BYTES) {
+    throw contractError('AUDIO_FILE_SIZE_LIMIT', `오디오는 1바이트 이상 ${MAX_AUDIO_BYTES}바이트 이하여야 합니다. actual=${bytes.length}`, []);
+  }
+  const wav: ParsedWav = parsePcmWav(bytes, declaredMimeType);
+  requireSupportedSampleRate(wav.sampleRate, '입력 WAV');
+  const actualDurationMs: number = durationMs(wav);
+  const durationLimitExceeded: boolean = BigInt(wav.sampleFrames) * 1_000n > BigInt(wav.sampleRate) * BigInt(MAX_AUDIO_DURATION_MS);
+  if (durationLimitExceeded) {
+    throw contractError('AUDIO_DURATION_LIMIT', `오디오 길이는 ${MAX_AUDIO_DURATION_MS}ms 이하여야 합니다. actual=${actualDurationMs}`, []);
+  }
+  return { wav, inspection: { mimeType: 'audio/wav', durationMs: actualDurationMs, sampleRate: wav.sampleRate,
+    channels: wav.channels, codec: wav.bitsPerSample === 16 ? 'pcm_s16le' : 'pcm_s24le', sha256: sha256Bytes(bytes) } };
+}
+
+/** 저장된 WAV를 변환하지 않고 실제 구조와 metadata를 읽는다. */
+export function inspectAudioFileBytes(bytes: Buffer, declaredMimeType: string): InspectedAudioFile {
+  return inspectParsedAudio(bytes, declaredMimeType).inspection;
 }
 
 /** PCM WAV를 프로젝트 샘플레이트의 16비트 PCM WAV로 정규화하고 결과를 다시 검사한다. */
 export function inspectAudioBytes(project: Pick<Project, 'handoff'>, bytes: Buffer, declaredMimeType: string): InspectedAudio {
-  if (bytes.length === 0 || bytes.length > MAX_AUDIO_BYTES) {
-    throw contractError('AUDIO_FILE_SIZE_LIMIT', `오디오는 1바이트 이상 ${MAX_AUDIO_BYTES}바이트 이하여야 합니다. actual=${bytes.length}`, []);
-  }
-  const source: ParsedWav = parsePcmWav(bytes, declaredMimeType);
-  if (durationMs(source) > MAX_AUDIO_DURATION_MS) {
-    throw contractError('AUDIO_DURATION_LIMIT', `오디오 길이는 ${MAX_AUDIO_DURATION_MS}ms 이하여야 합니다. actual=${durationMs(source)}`, []);
-  }
+  const { wav: source } = inspectParsedAudio(bytes, declaredMimeType);
   const targetRate: number = project.handoff.timebase.sampleRate;
+  requireSupportedSampleRate(targetRate, 'Project');
+  const targetFrames: number = targetFrameCount(source, targetRate);
   const normalizedBytes: Buffer = source.sampleRate === targetRate && source.bitsPerSample === 16
-    ? Buffer.from(bytes) : encodePcm16Wav(source, targetRate);
-  const normalized: ParsedWav = parsePcmWav(normalizedBytes, 'audio/wav');
-  if (normalized.sampleRate !== targetRate || normalized.bitsPerSample !== 16) {
-    throw contractError('AUDIO_NORMALIZATION_FAILED', `정규화 결과가 프로젝트 형식과 다릅니다. expected=${targetRate}/16, actual=${normalized.sampleRate}/${normalized.bitsPerSample}`, []);
+    ? Buffer.from(bytes) : encodePcm16Wav(source, targetRate, targetFrames);
+  const normalized: InspectedAudioFile = inspectAudioFileBytes(normalizedBytes, 'audio/wav');
+  if (normalized.sampleRate !== targetRate || normalized.codec !== 'pcm_s16le') {
+    throw contractError('AUDIO_NORMALIZATION_FAILED', `정규화 결과가 프로젝트 형식과 다릅니다. expected=${targetRate}/pcm_s16le, actual=${normalized.sampleRate}/${normalized.codec}`, []);
   }
-  return { normalizedBytes, mimeType: 'audio/wav', durationMs: durationMs(normalized), sampleRate: normalized.sampleRate,
+  return { normalizedBytes, mimeType: 'audio/wav', durationMs: normalized.durationMs, sampleRate: normalized.sampleRate,
     channels: normalized.channels, codec: 'pcm_s16le', sha256: sha256Bytes(normalizedBytes) };
 }
 
-export async function verifyStoredAsset(project: Pick<Project, 'handoff'>, asset: Asset, bytes: Buffer): Promise<InspectedImage | InspectedAudio> {
+function assertStoredAudioMetadata(asset: Asset, inspected: InspectedAudioFile): void {
+  if (asset.durationMs !== inspected.durationMs) {
+    throw contractError('AUDIO_ASSET_METADATA_MISMATCH', `저장 WAV 길이와 Asset metadata가 다릅니다. assetId=${asset.id}, expected=${String(asset.durationMs)}, actual=${inspected.durationMs}`, []);
+  }
+  if (asset.audioMetadata === undefined || asset.audioMetadata === null) {
+    throw contractError('AUDIO_ASSET_METADATA_MISSING', `저장 Audio Asset에 실제 형식 metadata가 없습니다. assetId=${asset.id}`, []);
+  }
+  const mismatch: boolean = asset.audioMetadata.sampleRate !== inspected.sampleRate
+    || asset.audioMetadata.channels !== inspected.channels || asset.audioMetadata.codec !== inspected.codec;
+  if (mismatch) {
+    throw contractError('AUDIO_ASSET_METADATA_MISMATCH', `저장 WAV 형식과 Asset metadata가 다릅니다. assetId=${asset.id}, expected=${asset.audioMetadata.sampleRate}/${asset.audioMetadata.channels}/${asset.audioMetadata.codec}, actual=${inspected.sampleRate}/${inspected.channels}/${inspected.codec}`, []);
+  }
+}
+
+export async function verifyStoredAsset(project: Pick<Project, 'handoff'>, asset: Asset, bytes: Buffer): Promise<InspectedImage | InspectedAudioFile> {
   const actualHash: string = sha256Bytes(bytes);
   if (actualHash !== asset.sha256) {
     throw contractError('ASSET_HASH_MISMATCH', `저장 파일 해시가 Asset metadata와 다릅니다. assetId=${asset.id}, expected=${asset.sha256}, actual=${actualHash}`, []);
   }
   try {
     if (asset.kind === 'audio') {
-      const inspected: InspectedAudio = inspectAudioBytes(project, bytes, asset.mimeType);
-      if (inspected.sha256 !== asset.sha256) {
-        throw contractError('ASSET_CONTENT_CORRUPT', `저장 오디오가 프로젝트 샘플레이트로 정규화되지 않았습니다. assetId=${asset.id}, sampleRate=${inspected.sampleRate}`, []);
+      const inspected: InspectedAudioFile = inspectAudioFileBytes(bytes, asset.mimeType);
+      assertStoredAudioMetadata(asset, inspected);
+      if (inspected.sampleRate !== project.handoff.timebase.sampleRate || inspected.codec !== 'pcm_s16le') {
+        throw contractError('AUDIO_ASSET_NORMALIZATION_REQUIRED', `저장 Audio Asset을 프로젝트 PCM 형식으로 정규화해야 합니다. assetId=${asset.id}, actual=${inspected.sampleRate}/${inspected.codec}, target=${project.handoff.timebase.sampleRate}/pcm_s16le`, []);
       }
       return inspected;
     }
@@ -213,7 +283,7 @@ export async function verifyStoredAsset(project: Pick<Project, 'handoff'>, asset
   } catch (error: unknown) {
     if (isContractError(error)) {
       const code: string = error.code;
-      if (code === 'ASSET_MIME_MISMATCH' || code === 'ASSET_HASH_MISMATCH') throw error;
+      if (code === 'ASSET_MIME_MISMATCH' || code === 'ASSET_HASH_MISMATCH' || code.startsWith('AUDIO_ASSET_')) throw error;
       throw contractError('ASSET_CONTENT_CORRUPT', `저장 자산의 내용을 검증할 수 없습니다. assetId=${asset.id}, cause=${error.message}`, []);
     }
     throw error;

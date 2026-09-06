@@ -23,9 +23,11 @@ npm run build:web
 npm start
 ```
 
-브라우저에서 `http://127.0.0.1:4317`을 연다. 프로젝트와 생성 자산은 `.local/data` 아래에 프로젝트별로 분리되며 Git에 포함되지 않는다. 각 변경은 현재본과 별개의 revision JSON으로 저장된다.
+브라우저에서 `http://127.0.0.1:4317`을 연다. 프로젝트와 생성 자산은 `.local/data` 아래에 프로젝트별로 분리되며 Git에 포함되지 않는다. 각 변경은 현재본과 별개의 revision JSON으로 저장된다. 저장은 Project·revision·Asset을 하나의 journal transaction으로 게시하며, 서버 시작 때 중단된 transaction과 종료된 process의 잠금을 검사해 완료 상태를 확정하거나 이전 revision으로 복구한다. 복구 결과는 `/api/status`의 `storageRecovery`와 구조화 로그에서 확인한다.
 
-웹 화면의 Audio Cue에서 PCM WAV를 선택하면 `multipart/form-data`로 서버에 등록한다. mono/stereo, 16/24-bit PCM WAV를 최대 50MB·1시간까지 읽고, 실제 구조·MIME·길이·채널·SHA-256을 확인한 뒤 프로젝트의 `handoff.timebase.sampleRate`에 맞춘 16-bit PCM WAV로 저장한다. AIFF와 MP3는 현재 `UNSUPPORTED_AUDIO_CONTAINER` 또는 `UNSUPPORTED_AUDIO_CODEC`으로 거부한다. 등록 실패 시 프로젝트 revision과 자산 파일을 함께 되돌린다.
+웹 화면의 Audio Cue에서 PCM WAV를 선택하면 `multipart/form-data`로 서버에 등록한다. mono/stereo, 16/24-bit PCM WAV를 최대 50MB·1시간까지 읽고, 실제 구조·MIME·길이·sample rate·채널·codec·SHA-256을 확인한 뒤 프로젝트의 `handoff.timebase.sampleRate`에 맞춘 16-bit PCM WAV로 저장한다. 입력 sample rate, WAV chunk 수, 정규화 예상 크기를 Buffer 할당 전에 제한한다. AIFF와 MP3는 현재 `UNSUPPORTED_AUDIO_CONTAINER` 또는 `UNSUPPORTED_AUDIO_CODEC`으로 거부한다. 등록 실패 시 프로젝트 revision과 자산 파일을 함께 되돌린다.
+
+이전 저장본의 WAV가 유효하지만 프로젝트 sample rate나 PCM16 형식과 다르면 손상으로 숨기지 않고 `AUDIO REPAIR`로 표시한다. Audio Cue의 **WAV 정규화 복구**는 원본 Asset과 파일을 보존하고, 실제 WAV에서 읽은 길이·형식을 적용한 새 Asset 버전을 만든다. Program Monitor 재생은 Cue 종료점에 도달하면 Audio를 멈추며 일시정지, playhead 탐색, 프로젝트 전환, revision 변경 때 이전 Audio와 늦게 끝난 재생 Promise를 정리한다.
 
 이미지 검사는 `sharp` 0.35.4(Apache-2.0)를 사용해 PNG·JPEG·WebP 전체를 디코딩하고 크기와 픽셀 상한을 확인한다. `@fastify/multipart` 10.1.1(MIT)은 Node.js 기반 업로드 크기와 파일 수를 제한한다. 두 패키지는 macOS와 Linux용 배포 패키지를 사용하며 별도 `ffmpeg`나 `afconvert`를 오디오 가져오기 런타임으로 요구하지 않는다. 설치 또는 디코딩이 실패하면 등록을 성공으로 처리하지 않고 구체적인 자산 오류를 반환한다.
 
@@ -89,6 +91,6 @@ CSV에서 같은 오디오 이벤트가 여러 컷 행에 나타나면 하나의
 npm run check
 ```
 
-이 명령은 서버·도메인 타입 검사, 웹 타입 검사, 자동 테스트, 생성 스키마 정합성, 운영 웹 빌드를 순서대로 실행한다. 현재 자동 검사는 22개 파일의 278개 테스트다. 신규 88개 검사는 실제 미디어 바이트·HTTP 업로드·저장·안전 출력, Placement 정보 판정, 1.5 Migration과 원본 갱신을 다룬다. PRJ-007 Golden은 12개 Scene, 32개 Segment, 79개 screenplay Source Unit, 16개 Panel Turn, 1,500,000ms 전체 시간과 원문 불변을 확인한다. 실제 `UNIT-045` fixture는 48,000Hz mono PCM16 WAV 2,000ms이며, 849,000–851,000ms J-cut으로 저장한 뒤 849,500ms 선택자·안전 HTTP bytes·JSON 재열기·Gate 불변성을 검사한다. 기존의 메모리 metadata 검사는 도메인 판정 회귀로 유지하고 실제 자산 완료 근거는 이 파일 E2E 검사로 구분한다. 전체 분량의 제작 품질은 별도 사람 검토 대상이다.
+이 명령은 서버·도메인 타입 검사, 웹 타입 검사, 자동 테스트, 생성 스키마 정합성, 운영 웹 빌드를 순서대로 실행한다. 현재 자동 검사는 23개 파일의 309개 테스트다. 신규 119개 검사는 실제 미디어 바이트·HTTP 업로드·저장·안전 출력, Placement 정보 판정, 1.5 Migration과 원본 갱신, WAV 자원 한계·실제 metadata 결속·이전 WAV 복구·저장 transaction 복구·브라우저 Audio 수명주기를 다룬다. PRJ-007 Golden은 12개 Scene, 32개 Segment, 79개 screenplay Source Unit, 16개 Panel Turn, 1,500,000ms 전체 시간과 원문 불변을 확인한다. 실제 `UNIT-045` fixture는 48,000Hz mono PCM16 WAV 2,000ms이며, 849,000–851,000ms J-cut으로 저장한 뒤 849,500ms 선택자·안전 HTTP bytes·JSON 재열기·Gate 불변성을 검사한다. 기존의 메모리 metadata 검사는 도메인 판정 회귀로 유지하고 실제 자산 완료 근거는 이 파일 E2E 검사로 구분한다. 전체 분량의 제작 품질은 별도 사람 검토 대상이다.
 
 스키마의 기준은 `src/domain/schema.ts`다. 타입 변경 후 `npm run schemas:write`로 JSON Schema를 갱신하고 `npm run schemas:check`로 일치 여부를 확인한다. 제품 범위와 구현 원칙은 [`AGENTS.md`](AGENTS.md), 데이터 흐름과 API 설계는 [Design](docs/02-design/features/storyboard-generator.design.md)을 따른다.

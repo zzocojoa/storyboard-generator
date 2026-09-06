@@ -133,6 +133,7 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
     const failed: CodexRequest[] = allRequests.filter((item: CodexRequest): boolean => item.status === 'failed');
     return { provider: 'codex-app', ...metrics,
       recentFailures: failed.slice(-5).reverse().map((item: CodexRequest): object => ({ id: item.id, kind: item.kind, projectId: item.projectId, targetId: item.targetId, error: item.error })),
+      storageRecovery: store.recoveryEvents(),
       generationInstruction: 'Codex 앱에서 $storyboard-workbench 대기 요청 처리를 실행하세요.', aiVoiceDisclosure: `가이드 음성은 macOS ${config.codex.speechVoice} 합성 음성입니다.` };
   });
   app.get('/api/projects', async (): Promise<object> => ({ projects: await store.list() }));
@@ -279,6 +280,18 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
     const project: Project = await store.update(projectId, upload.expectedRevision, (): Project => mutation.project, assets(mutation));
     reply.status(201);
     return { project, audio: mutation.inspection };
+  });
+  app.post('/api/projects/:projectId/audio/:cueId/normalize', async (request: FastifyRequest, reply: FastifyReply): Promise<object> => {
+    const { projectId, cueId } = CueParamsSchema.parse(request.params);
+    const body = RevisionSchema.parse(request.body);
+    const current: Project = await store.read(projectId);
+    const source = await store.audioRecoverySource(current, cueId);
+    const mutation = attachAudioAsset(current, cueId, `${randomUUID()}:audio`, {
+      originalFileName: `legacy-${source.asset.id}.wav`, declaredMimeType: source.asset.mimeType, bytes: source.content,
+    });
+    const project: Project = await store.update(projectId, body.expectedRevision, (): Project => mutation.project, assets(mutation));
+    reply.status(201);
+    return { project, audio: mutation.inspection, replacedAssetId: source.asset.id };
   });
   app.patch('/api/projects/:projectId/audio/:cueId', async (request: FastifyRequest): Promise<object> => {
     const { projectId, cueId } = CueParamsSchema.parse(request.params);

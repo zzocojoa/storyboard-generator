@@ -1,12 +1,10 @@
-# 범용 콘티 도구 — 실제 미디어 운영 경계 구현 보고서
+# 범용 콘티 도구 — 미디어·저장·재생 운영 경계 보고서
 
 ## 1 작업 기준
 
-- 시작 Branch: `codex/storyboard-generator`
-- 시작 HEAD: `8596ee9c12df2a67e5229ab9e30220012c016ea2`
+- Branch: `codex/storyboard-generator`
 - Working Tree: `/Users/beatlefeed/Documents/ChatGPT/콘티제작/.worktrees/storyboard-generator`
-- 기존 Project Schema: `1.4.0`
-- 신규 Project Schema: `1.5.0`
+- Project Schema: `1.5.0`
 - 생성 환경: Codex App 현재 모델, 내장 `image_gen`, 설정된 macOS 음성이다. `OPENAI_API_KEY`, OpenAI SDK, 외부 AI 생성 fallback은 사용하지 않는다.
 - 범위: 모든 지원 프로젝트에 적용되는 기능이다. PRJ-007은 실제 fixture를 쓰는 회귀 사례에만 한정한다.
 
@@ -21,6 +19,10 @@
 | TextCue Source Unit 종류와 중복 | ACTION·SOUND·MUSIC 또는 중복 Cue 우회가 가능했다 | 종류별 허용 표현을 고정하고 같은 Source Unit의 중복 Cue를 거부한다 |
 | Ready 수치 | stale Frame과 proposed Audio를 포함할 수 있었다 | ASSET, REVIEWED, OUTPUT SAFE를 별도로 계산한다 |
 | Source Update의 Text Anchor | 과거 자동 후보 Anchor가 남을 수 있었다 | 현재 Mapping으로 다시 만들고 실패하면 `unresolved/source-update`로 둔다 |
+| 유효한 이전 WAV | 프로젝트 sample rate 차이를 손상과 구분하지 못했다 | `AUDIO_ASSET_NORMALIZATION_REQUIRED`로 표시하고 새 Asset 버전으로 복구한다 |
+| 악성 WAV 정규화 | 입력 한도 안에서도 큰 출력 Buffer와 과도한 chunk 순회를 유발할 수 있었다 | sample rate·chunk 수·예상 정규화 크기를 할당 전에 제한한다 |
+| 저장 중 process 종료 | Asset·revision·현재본의 일부만 게시될 수 있었다 | 내구성 journal과 시작 복구로 commit 또는 이전 revision을 확정한다 |
+| 브라우저 Audio 종료 | Cue 종료·프로젝트 변경 뒤 Audio가 남을 수 있었다 | 종료 timer와 중앙 controller가 활성 Audio와 비동기 완료를 정리한다 |
 
 각 조건은 `tests/media-workflow-regression.test.ts`의 지정된 회귀 이름으로 재현하고 수정 후 통과시켰다.
 
@@ -35,19 +37,27 @@
 
 - 지원 형식은 mono/stereo 16/24-bit PCM WAV다. AIFF·MP3와 다른 컨테이너·코덱은 명시적으로 거부한다.
 - `POST /api/projects/:projectId/audio/:cueId/asset`은 `multipart/form-data`, 파일 한 개, `expectedRevision`, 50MB 한도를 요구한다. 파일명은 설명에만 쓰며 저장 경로는 새 Asset ID의 hash로 만든다.
-- WAV chunk 구조, MIME, codec, 채널, 실제 duration, sample rate, 1시간 상한을 검사한다. 입력을 프로젝트 `handoff.timebase.sampleRate`의 PCM16 WAV로 정규화하고 정규화 결과를 다시 검사한다.
+- WAV chunk 구조, MIME, codec, 채널, 실제 duration, sample rate, 1시간 상한을 검사한다. 입력 sample rate는 8,000–384,000Hz, chunk는 최대 4,096개이며 정규화 결과는 50MB 이하여야 한다. 예상 결과 크기를 먼저 계산한 뒤 프로젝트 `handoff.timebase.sampleRate`의 PCM16 WAV로 정규화하고 결과를 다시 검사한다.
 - 실제 duration으로 `endMs`를 계산하고 `timingStatus=measured`, 신규 `assetId`를 설정한 뒤 Audio Relation과 Information Gate를 다시 검사한다. 교체 시 기존 Asset을 보존하고 신규 version을 올린다.
-- ProjectStore는 신규 파일과 revision을 임시 경로에 쓴 뒤 게시한다. 검사·revision 충돌·게시 실패 시 프로젝트와 신규 파일을 되돌려 고아 파일을 남기지 않는다.
+- 저장된 Audio는 실제 WAV의 duration·sample rate·channel·codec이 Asset metadata와 맞고 Asset 길이가 Cue 타임라인과 맞아야 안전 출력된다.
+- `POST /api/projects/:projectId/audio/:cueId/normalize`는 hash와 구조가 유효한 이전 WAV를 읽어 프로젝트 PCM 형식의 새 Asset 버전으로 복구한다. 이전 Asset과 파일은 감사용으로 보존한다.
 
 ## 5 Media Integrity
 
 - `sharp` 0.35.4(Apache-2.0)는 macOS·Linux에서 PNG·JPEG·WebP의 실제 MIME, 전체 decode, width·height와 40MP 상한을 확인한다.
 - `@fastify/multipart` 10.1.1(MIT)은 Node.js에서 오디오 업로드 파일 수·필드 수·50MB 한도를 적용한다. 오디오 import는 시스템 `ffmpeg` 또는 `afconvert`에 의존하지 않는다.
-- ProjectStore의 Raw Asset fetch와 안전 출력은 프로젝트 내부 경로, 파일 존재, 저장 metadata의 SHA-256, MIME, 이미지 decode 또는 WAV parse를 매번 확인한다.
+- ProjectStore의 Raw Asset fetch와 안전 출력은 프로젝트 내부 경로, 파일 존재, 저장 metadata의 SHA-256, MIME, 이미지 decode 또는 WAV parse와 실제 Audio metadata를 매번 확인한다.
 - Program Monitor는 `GET /output/frame/:frameId`와 `GET /output/audio/:cueId`만 사용한다. 두 경로는 현재 출력 판정도 다시 실행하고 `Cache-Control: no-store`를 반환한다.
 - PDF에서 손상된 Frame은 bitmap 대신 Frame ID, Asset ID, Issue code가 있는 placeholder로 바뀐다. CSV는 Asset metadata와 현재 integrity/output 상태, Placement Information 판정을 제공한다.
 
-## 6 PRJ-007 UNIT-045
+## 6 저장과 브라우저 재생
+
+- ProjectStore는 이전/다음 Project, 새 revision, 새 Asset을 transaction 디렉터리에 기록하고 각 파일과 디렉터리를 동기화한다. journal을 준비 완료 표식으로 마지막에 저장한 뒤 Asset → revision → 현재본 순서로 게시한다.
+- 서버 시작 시 현재 revision과 journal을 대조한다. 게시 전 중단은 신규 파일을 제거하고, 유효하게 완료된 게시는 유지하며, 현재본만 바뀌고 Asset 또는 revision이 불완전하면 이전 Project를 복원한다.
+- journal Asset 경로는 해당 Project의 `assets` 디렉터리 안으로 제한한다. 종료된 PID의 lock은 제거하고 살아 있는 PID의 lock은 `PROJECT_BUSY`로 유지한다. 복구 결과는 구조화 로그와 `/api/status.storageRecovery`에 남는다.
+- Browser Audio controller는 안전 선택자가 허용한 Cue를 현재 offset에서 시작하고 남은 Cue 길이만큼 종료 timer를 둔다. playhead가 Cue 밖으로 이동하거나 재생을 멈추고, 프로젝트·revision이 바뀌거나 Monitor가 닫히면 모든 활성 Audio를 정리한다. 이전 `play()` Promise나 timer는 현재 entry와 같을 때만 새 상태를 바꾼다.
+
+## 7 PRJ-007 UNIT-045
 
 - Fixture: `tests/fixtures/media/unit045-intercom-48000.wav`
 - 형식: WAV, PCM16, mono, 48,000Hz, 2,000ms
@@ -57,29 +67,29 @@
 - 849,500ms playback selector가 Cue를 선택한다. 저장·JSON 재열기 뒤 relation과 Asset 연결이 유지되며 Effective Gate 목록은 바뀌지 않는다.
 - metadata만 메모리에 넣는 기존 검사는 도메인 판정 회귀다. 이 fixture의 저장·HTTP 재읽기 검사가 실제 Audio Asset E2E 완료 근거다.
 
-## 7 Schema와 Migration
+## 8 Schema와 Migration
 
 - `1.4.0 → 1.5.0`은 독립 Mapping 관계에만 `unresolved` Placement Information Decision을 생성한다. Canonical 상속 관계에는 생성하지 않는다.
 - 원문, ID, Timeline, Source Snapshot, TextCue Authority, Mapping, 기존 Asset과 GenerationRecord를 보존한다. 기존 accepted Frame을 임의로 변경하지 않고 파일 무결성은 출력 시 파생한다.
 - 전체 경로는 `1.0.0 → 1.1.0 → 1.2.0 → 1.3.0 → 1.4.0 → 1.5.0`이다. Zod가 런타임 기준이며 생성 JSON Schema와 일치 여부를 검사한다.
 
-## 8 테스트 결과
+## 9 테스트 결과
 
 - `npm run schemas:write`: 생성 Schema 갱신
 - `npm run typecheck`: 서버·도메인 TypeScript 검사
 - `npm run typecheck:web`: Web TypeScript 검사
-- `npm test`: 22개 파일, 278개 테스트
+- `npm test`: 23개 파일, 309개 테스트
 - `npm run schemas:check`: Zod와 JSON Schema drift 검사
 - `npm run build:web`: 운영 웹 빌드
 - `npm run check`: 위 검사의 통합 실행
 
-기존 190개 검사를 유지하고 실제 미디어·Placement Information·1.5 Migration을 다루는 지정 회귀 88개를 추가했다. test skip/only와 metadata-only E2E 대체는 사용하지 않았다.
+기존 190개 검사를 유지하고 실제 미디어·Placement Information·1.5 Migration을 다루는 지정 회귀 88개와 WAV 자원·metadata·복구, transaction 복구, 브라우저 Audio 수명주기 회귀 31개를 적용했다. test skip/only와 metadata-only E2E 대체는 사용하지 않았다.
 
-## 9 CI
+## 10 CI
 
-GitHub Actions는 Ubuntu와 Node.js 24에서 `npm ci`와 `npm run check`를 수행한다. 변경 시작 기준 run `34015955500`은 성공했다. 이번 변경은 feature branch에 push한 종료 HEAD와 run head SHA가 같은 결과만 완료 근거로 사용한다.
+GitHub Actions는 Ubuntu와 Node.js 24에서 `npm ci`와 `npm run check`를 수행한다. feature branch에 push한 종료 HEAD와 run head SHA가 같은 성공 결과만 완료 근거로 사용한다.
 
-## 10 남은 위험
+## 11 남은 위험
 
 - 지원 오디오 형식은 PCM WAV뿐이다. AIFF·MP3와 압축 WAV codec은 지원하지 않는다.
 - `sharp` prebuilt package를 받을 수 없는 환경에서는 설치가 실패하며 이미지 검증을 우회하지 않는다.

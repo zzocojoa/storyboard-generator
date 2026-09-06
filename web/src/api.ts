@@ -7,10 +7,12 @@ const RequestFailureSchema = z.strictObject({ id: z.uuid(), kind: z.enum(['propo
 const StatusSchema = z.strictObject({ provider: z.literal('codex-app'), totalRequests: z.number().int().nonnegative(), completedRequests: z.number().int().nonnegative(),
   pendingRequests: z.number().int().nonnegative(), failedRequests: z.number().int().nonnegative(), repeatedRequests: z.number().int().nonnegative(),
   averageLatencyMs: z.number().int().nonnegative().nullable(), maximumLatencyMs: z.number().int().nonnegative().nullable(), apiCostUsd: z.null(), costNote: z.string(),
-  recentFailures: z.array(RequestFailureSchema), generationInstruction: z.string(), aiVoiceDisclosure: z.string() });
+  recentFailures: z.array(RequestFailureSchema), generationInstruction: z.string(), aiVoiceDisclosure: z.string(),
+  storageRecovery: z.array(z.strictObject({ projectId: z.string(), transactionId: z.string(),
+    outcome: z.enum(['committed', 'rolled-back', 'restored-previous', 'staging-removed', 'stale-lock-removed']) })) });
 const SummarySchema = z.strictObject({ projectId: z.string(), title: z.string(), revision: z.number(), durationMs: z.number(), shots: z.number(),
   framesWithAsset: z.number(), framesAccepted: z.number(), framesOutputSafe: z.number(), framesTotal: z.number(),
-  audioWithAsset: z.number(), audioMeasured: z.number(), audioPlayable: z.number(), audioTotal: z.number(),
+  audioWithAsset: z.number(), audioMeasured: z.number(), audioPlayable: z.number(), audioRepairRequired: z.number(), audioTotal: z.number(),
   textPlayable: z.number(), textTotal: z.number(), blockedOutputCount: z.number(), issues: z.number(), updatedAt: z.string() });
 const CodexRequestSchema = z.strictObject({ id: z.uuid(), kind: z.enum(['proposal', 'image', 'speech']), projectId: z.string(), targetId: z.string(),
   basisHash: z.string(), status: z.enum(['pending', 'completed', 'failed']), createdAt: z.string(), updatedAt: z.string(), resultRevision: z.number().nullable(),
@@ -72,6 +74,12 @@ export async function uploadAudioAsset(projectId: string, cueId: string, expecte
   form.append('file', file, file.name);
   const data: unknown = await request(`/api/projects/${encodeURIComponent(projectId)}/audio/${encodeURIComponent(cueId)}/asset`, { method: 'POST', body: form });
   return z.strictObject({ project: ProjectSchema, audio: z.strictObject({ durationMs: z.number(), sampleRate: z.number(), channels: z.number(), codec: z.string(), sha256: z.string() }) }).parse(data).project;
+}
+
+export async function normalizeAudioAsset(projectId: string, cueId: string, expectedRevision: number): Promise<Project> {
+  const data: unknown = await request(`/api/projects/${encodeURIComponent(projectId)}/audio/${encodeURIComponent(cueId)}/normalize`, json('POST', { expectedRevision }));
+  return z.strictObject({ project: ProjectSchema, audio: z.strictObject({ durationMs: z.number(), sampleRate: z.number(), channels: z.number(), codec: z.string(), sha256: z.string() }),
+    replacedAssetId: z.string() }).parse(data).project;
 }
 
 export async function queueCodexRequest(projectId: string, path: string, expectedRevision: number): Promise<CodexRequest> {
