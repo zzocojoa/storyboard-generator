@@ -21,7 +21,7 @@ export function importNative(handoff: Handoff, snapshots: readonly Snapshot[]): 
     const segment: Segment | undefined = rule.segmentId === undefined ? segments.find((value: Segment): boolean => rule.notBeforeMs >= value.startMs && rule.notBeforeMs < value.endMs) ?? segments.find((value: Segment): boolean => value.id === unit?.segmentId) : segments.find((value: Segment): boolean => value.id === rule.segmentId);
     if (segment === undefined) throw contractError('INFORMATION_SEGMENT_NOT_FOUND', `${rule.id}: 정보 공개 구간을 찾을 수 없습니다.`, []);
     return {
-      id: rule.id, segmentId: segment.id, notBeforeMs: rule.notBeforeMs,
+      id: rule.id, segmentId: segment.id, baseNotBeforeMs: rule.notBeforeMs,
       notBeforeUnitId: rule.notBeforeUnitId ?? unit?.id ?? null,
       notBeforeUnitOrder: rule.notBeforeUnitOrder ?? unit?.order ?? null,
       precision: rule.precision ?? 'exact-time', sourceRefs: [sourceRef(file.id, `/informationRules/${index}`, rule.id)],

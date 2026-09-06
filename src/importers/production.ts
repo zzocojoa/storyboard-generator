@@ -49,7 +49,7 @@ function importInformation(presentation: ProductionPresentation, file: Snapshot,
     return ids.map((id: string): InformationRule => {
       const unit: SourceUnit | undefined = units.filter((value: SourceUnit): boolean => value.segmentId === segment.segment_id && value.informationIds.includes(id)).sort((left: SourceUnit, right: SourceUnit): number => left.order - right.order)[0];
       return {
-        id, segmentId: segment.segment_id, notBeforeMs: normalizedSegment.startMs,
+        id, segmentId: segment.segment_id, baseNotBeforeMs: normalizedSegment.startMs,
         notBeforeUnitId: unit?.id ?? null, notBeforeUnitOrder: unit?.order ?? null,
         precision: unit === undefined ? 'segment-start' : 'unit-order',
         sourceRefs: [sourceRef(file.id, `/segments/${index}`, segment.segment_id)],

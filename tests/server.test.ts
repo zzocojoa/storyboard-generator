@@ -92,7 +92,7 @@ describe('로컬 작업 API', (): void => {
       const text = initial.textCues[0];
       if (audio === undefined || text === undefined) throw new Error('트랙 API 검증 자료가 없습니다.');
       const audioEdit = await app.inject({ method: 'PATCH', url: `/api/projects/plant-care-demo/audio/${encodeURIComponent(audio.id)}`,
-        payload: { expectedRevision: 0, timing: { startMs: audio.startMs + 1, endMs: audio.endMs + 1 } } });
+        payload: { expectedRevision: 0, timing: { startMs: audio.startMs + 1, endMs: audio.endMs } } });
       expect(audioEdit.statusCode).toBe(200);
       expect(audioEdit.json().project.revision).toBe(1);
       const frameAdd = await app.inject({ method: 'POST', url: '/api/projects/plant-care-demo/shots/shot-1/frames',
@@ -102,7 +102,7 @@ describe('로컬 작업 API', (): void => {
       const textEdit = await app.inject({ method: 'PATCH', url: `/api/projects/plant-care-demo/text/${encodeURIComponent(text.id)}`,
         payload: { expectedRevision: 2, timing: { startMs: text.startMs, endMs: text.endMs, kind: 'dialogue-subtitle' } } });
       expect(textEdit.statusCode).toBe(200);
-      expect(textEdit.json().project).toEqual(expect.objectContaining({ revision: 3, schemaVersion: '1.2.0' }));
+      expect(textEdit.json().project).toEqual(expect.objectContaining({ revision: 3, schemaVersion: '1.3.0' }));
     } finally { await app.close(); }
   });
 

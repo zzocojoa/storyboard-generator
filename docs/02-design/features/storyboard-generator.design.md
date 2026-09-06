@@ -1,6 +1,6 @@
 # 범용 콘티 도구 — Design
 
-상태: 1.2.0 도메인 계약과 대표 실제 구간의 Codex App 생성·PRJ-007 Golden 검증을 반영한 현재 설계. 전체 분량의 제작 판단은 별도 검토가 필요하다.
+상태: 1.3.0 도메인 계약, 정보 공개 시간 안전장치, 대표 실제 구간의 Codex App 생성·PRJ-007 Golden 검증을 반영한 현재 설계. 전체 분량의 제작 판단은 별도 검토가 필요하다.
 
 ## 1. 목표와 결정 근거
 
@@ -65,8 +65,8 @@ native 파일은 일반적인 프로젝트 원본을 표현한다. ID는 불투�
 - `Shot`은 구간, 화면 위치, 구도·각도·이동, 행동 제안, 출연 형태, 소품, 연속성 전후 상태, 다음 컷으로 나가는 전환, 원문 참조를 가진다.
 - `StoryboardFrame`은 컷의 시작·종료·중간 keyframe과 이미지 자산을 별도로 연결한다. 컷 하나에 이미지 하나를 강제하지 않는다.
 - `AudioCue`와 `TextCue`는 영상 컷과 독립된 시작·종료를 가진다. 오디오는 발화·VO·패널·SFX·음악을 구분한다. 채팅·메모를 자동 낭독하지 않는다.
-- `TextMappingDecision`은 자막 Placement와 Canonical 원문의 관계를 `exact`, `abbreviation`, `separate-element`, `replacement`로 기록한다. 정확한 문자열 일치만 `confirmed`로 시작하고, 후보가 모호하거나 문자열이 다르면 `unresolved`로 남긴다. Canonical 문구를 별도로 표시할 때는 독립된 시작·종료 시각을 저장한다.
-- `ShotSourceLink`는 컷과 원문 Unit의 권한 관계다. `primary-visual`, `continued-visual`, `audio-only`, `context-only` 용도와 `confirmed`, `mapping-required` 상태를 가진다. `sourceUnitIds`는 1.2.0 프로젝트에 중복 저장하지 않는다.
+- `TextMappingDecision`은 자막 Placement와 Canonical 원문의 관계를 `exact`, `abbreviation`, `separate-element`, `replacement`, `standalone-placement`로 기록한다. 명시적 `placement.unitId`, 허용 종류의 유일한 정확 일치, 유일한 휴리스틱 후보 순서로 찾는다. 중복 정확 일치는 자동 선택하지 않는다. 관계마다 Canonical 연결·별도 렌더링·시간 범위의 불변식을 검사한다.
+- `ShotSourceLink`는 컷과 원문 Unit의 권한 관계다. `primary-visual`, `continued-visual`, `audio-only`, `context-only` 용도와 `confirmed`, `mapping-required` 상태, `shot-offset`·`frame`·`unresolved` 시간 Anchor를 가진다. `SOUND`와 `MUSIC`은 직접 시각 근거가 될 수 없고 `continued-visual`은 앞선 `primary-visual`을 요구한다. `sourceUnitIds`는 1.3.0 프로젝트에 중복 저장하지 않는다.
 - 인물의 역할·시각 기준과 컷의 실제 출연 형태를 분리한다. 출연 형태는 VISIBLE, HAND_ONLY, SILHOUETTE, OFFSCREEN_VOICE, VOICE_OVER, IMPLIED, ARCHIVE_IMAGE다. 목록에 없으면 그 컷의 출연이 선언되지 않은 상태다.
 - 장소는 이야기 장소와 화면 장소를 분리한다. 모호한 장소를 이야기 장소로 자동 확정하지 않는다.
 - `Asset`은 종류, 경로, SHA-256, 시각 설명, 원문과 독립된 버전을 가진다. 인물 의상·소품 상태·공간 축은 컷의 연속성 상태로 표현한다.
@@ -78,7 +78,7 @@ native 파일은 일반적인 프로젝트 원본을 표현한다. ID는 불투�
 
 구간에는 fixed/proposed 시간 상태가 있다. 미정 시간은 임의의 25분으로 채우지 않는다. 음성은 proposed/measured 상태를 별도로 가지며, 실제 가이드 음성 길이를 측정하기 전 낭독 가능성을 통과로 판정하지 않는다. J/L컷의 오디오 구간은 의도적으로 영상 구간을 넘어갈 수 있지만 전체 타임라인 범위를 넘지 않아야 한다.
 
-정보 공개 규칙은 information ID, 최초 Segment, 최초 Unit과 순서, 최초 허용 시각, `exact-time`·`unit-order`·`segment-start` 정밀도를 가진다. 유효 Gate는 확정된 Text Placement 시작, 측정된 Audio Cue 시작, 최초 Source Unit 순서, Segment 시작 순으로 결정한다. `unresolved` 자막 후보가 연결된 정보는 검토 전까지 허용하지 않는다. 프레임 Prompt는 `shot.startMs + frame.offsetMs` 절대 시각과 직접 시각 Source Link를 함께 검사한다. 금지 사실의 설명 자체를 이미지 prompt에 넣지 않는다. 기록된 정보 ID를 비교하는 검사는 의미적·시각적 반전 누설을 완전히 검증하지 못하므로 그림 검토 상태를 따로 둔다.
+정보 공개 규칙은 information ID, 최초 Segment, 최초 Unit과 순서, 권한 하한 `baseNotBeforeMs`, `exact-time`·`unit-order`·`segment-start` 정밀도를 가진다. `effectiveNotBeforeMs`는 저장 필드가 아니며 확정 Text Mapping, 확정 Source Temporal Anchor, 같은 Segment의 유효한 측정 Audio Cue, 유일한 Unit 순서 근거에서 매 검사마다 계산한다. 어떤 근거도 기준 하한을 앞당길 수 없다. Unit 순서만 있고 확정 시간 근거가 없으면 검토 필요 상태로 남겨 승인과 생성을 막는다. 프레임 Prompt는 `shot.startMs + frame.offsetMs`와 해당 시각에 활성화된 직접 시각 Link를 함께 검사한다. 금지 사실의 설명 자체를 이미지 prompt에 넣지 않는다. 기록된 정보 ID를 비교하는 검사는 의미적·시각적 반전 누설을 완전히 검증하지 못하므로 그림 검토 상태를 따로 둔다.
 
 ## 6. 제안·잠금·충돌 처리
 
@@ -121,9 +121,9 @@ native 파일은 일반적인 프로젝트 원본을 표현한다. ID는 불투�
 
 ## 8. 검증 계획과 구현 순서
 
-1. 버전 고정 패키지, 1.2.0 스키마·타입, 1.0.0→1.1.0→1.2.0 Migration, 파일 해시·경로·권한 검사, native 입력: 구현 및 자동 검증됨.
+1. 버전 고정 패키지, 1.3.0 스키마·타입, 1.0.0→1.1.0→1.2.0→1.3.0 Migration, 파일 해시·경로·권한 검사, native 입력: 구현 및 자동 검증됨.
 2. 실제 제작 자료의 production 어댑터, 최소 합성 native 프로젝트, 원문·시간·선택 요소 검증: 구현 및 자동 검증됨.
-3. 컷·시작/키/끝 프레임·독립 트랙·전환 생성과 편집·잠금, Text Mapping·역할 기반 Source Link·Segment 내부 Information Gate, JSON/CSV/PDF 보존: 구현 및 자동 검증됨.
+3. 컷·시작/키/끝 프레임·독립 트랙·전환 생성과 편집·잠금, Text Mapping 상태 기계·Source Temporal Anchor·동적 Information Gate, JSON/CSV/PDF 보존: 구현 및 자동 검증됨.
 4. 로컬 저장/API·Mapping 편집 UI, 프로젝트 분리·재열기·원본 차이: 구현 및 자동 검증됨.
 5. 시각 기준, Codex App 컷·이미지·음성 요청과 결과 반영, 재생, PDF 출력: 구현 및 자동 검증됨. 합성 범용 사례와 PRJ-007 `SEG-008`의 실제 생성 흐름을 확인했다.
 6. 두 가지 이상의 구성으로 회귀·브라우저 검증, 전체 요구사항 감사: 합성 자료와 초기 회귀 자료의 가져오기·편집·출력을 검증했다. PRJ-007 Golden에서 전체 구조·원문·시간과 `SEG-024`의 1,088,000ms, 1,108,000ms, 1,148,000ms 공개 순서를 검증했다. 실제 생성 사례에서는 5개 컷의 시간 합계, 첫 프레임 재생성·승인, 한 발화의 WAV 길이 반영을 확인했다. 전체 분량의 시각·낭독 검토는 남아 있다.

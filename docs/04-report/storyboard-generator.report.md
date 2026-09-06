@@ -1,45 +1,60 @@
-# 범용 콘티 도구 — 1.2.0 보고서
+# 범용 콘티 도구 — 1.3.0 보고서
 
-## 완료 범위
+## 1. 작업 기준
 
-구조화 제작 자료를 프로젝트별로 가져와 컷·다중 프레임·오디오·글자·전환·연속성 상태를 편집하고, Codex App에서 컷 제안·이미지·가이드 음성을 생성한 뒤 시간순으로 검토하는 로컬 웹 도구다. 이번 1.2.0에서는 축약 자막과 Canonical 원문의 충돌, Shot–Source 시간 Mapping, 같은 Segment 안의 순차 정보 공개를 하나의 검토·승인 계약으로 해결했다.
+구조화 제작 자료를 프로젝트별로 가져와 컷·프레임·오디오·글자·전환·연속성을 편집하고, Codex App에서 컷 제안·이미지·가이드 음성을 생성한 뒤 시간순으로 검토하는 범용 로컬 웹 도구를 기준으로 작업했다. 생성 실행 주체는 Codex App이며 현재 모델, 내장 `image_gen`, 설정된 macOS 음성을 사용한다. `OPENAI_API_KEY`와 OpenAI SDK는 사용하지 않는다.
 
-특정 작품 값은 `production-v1` fixture와 Golden Test에만 있다. 공통 모델과 UI는 프로젝트 ID, 인물, 장면 수, 모드, 분량에 따라 분기하지 않는다.
+## 2. 재현한 결함
 
-## 해결 결과
+구현 전 회귀 검사에서 다음 10개 결함을 실제 실패로 재현했다.
 
-| 영역 | 구현 결과 |
+- Unit 순서 Gate가 구간 시작 프레임을 차단하지 못함
+- 측정 음성이 기준 Gate를 앞당길 수 있음
+- 유도 Gate가 원본 규칙처럼 저장됨
+- 연속 컷의 키 프레임 공개를 표현하지 못함
+- Text Mapping 관계 조합이 잘못된 상태를 허용함
+- 중복 정확 일치를 임의로 확정함
+- 모든 Source를 비시각 용도로 돌린 제안을 허용함
+- unresolved Mapping을 분할 근거로 사용함
+- 프레임 생성이 일부 Mapping 충돌만 검사함
+- 알 수 없는 Information Rule 검토가 예외로 중단됨
+
+## 3. 핵심 구현
+
+1.3.0은 권한 `baseNotBeforeMs`와 동적으로 계산하는 `effectiveNotBeforeMs`를 분리한다. 직접 시각 Source Link는 컷 상대 구간, 특정 프레임 또는 검토 필요 상태의 `temporalAnchor`를 가진다. Text Mapping 상태 기계, Source 사용·순서 정책, 오디오 근거 검증과 프로젝트/구간/컷/프레임 공통 Review 함수를 하나의 승인·생성 경계에 연결했다.
+
+웹 Inspector에서 **SOURCE TEMPORAL MAPPING**, **TEXT MAPPING REVIEW**, **INFORMATION GATE**, **APPROVAL BLOCKED**를 확인하고 수정할 수 있다. 모든 Mapping 쓰기는 `expectedRevision`을 검사한다. 이미지 문맥은 선택 프레임 시각에 실제 활성화된 직접 Source만 포함한다.
+
+## 4. 변경 파일
+
+| 영역 | 주요 파일 |
 |---|---|
-| Text Mapping | Placement마다 exact·abbreviation·separate-element·replacement 관계와 unresolved·confirmed 상태를 저장한다. 축약 Cue가 있으면 Canonical 문구를 Segment 시작에 자동 생성하지 않는다. |
-| Source Mapping | Shot의 권한 원문 연결을 용도·상태가 있는 `sourceLinks`로 통일했다. 분할·병합·재정렬과 모델 제안에서 시간 근거와 Unit 순서를 검증한다. |
-| Information Gate | Segment·최초 Unit·Unit 순서·시각·정밀도를 저장하고 확정 Text, 측정 Audio, Unit 순서, Segment 시작의 우선순위를 적용한다. Frame 절대 시각에서 미래 정보를 거부한다. |
-| 승인·생성 | unresolved Text Mapping, mapping-required Source Link, 조기 정보 공개의 ID와 이유를 표시하고 컷 승인·이미지 생성·구간 제안 적용을 차단한다. |
-| 편집·API | Inspector에 TEXT MAPPING REVIEW와 SOURCE MAPPING을 추가하고 모든 Mapping 변경에 `expectedRevision`을 적용한다. |
-| 저장·출력 | 프로젝트 Schema 1.2.0, 1.0.0→1.1.0→1.2.0 Migration, JSON·PDF·CSV의 Source Link 역할·상태 보존을 지원한다. |
+| Schema·Migration | `src/domain/schema.ts`, `src/io/project.ts` |
+| Gate·Mapping·정책 | `src/domain/mapping.ts`, `src/domain/source-policy.ts`, `src/domain/validation.ts` |
+| 편집·트랙·자산 | `src/domain/edit.ts`, `src/domain/frame.ts`, `src/domain/tracks.ts`, `src/domain/media.ts`, `src/domain/source-update.ts` |
+| 제안·생성 문맥 | `src/proposal/outline.ts`, `src/proposal/model.ts`, `src/proposal/context.ts` |
+| UI·출력 | `web/src/App.tsx`, `src/exporters/csv.ts`, `src/exporters/pdf.ts` |
+| 검사·운영 | `tests/information-interlock.test.ts`, 기존 회귀 검사, `.github/workflows/ci.yml` |
 
-## 품질 결과
+## 5. Migration
 
-| 기준 | 결과 |
-|---|---|
-| Plan 필수 기능 | FR-01~FR-10 10/10 |
-| 정적 검사 | 서버·도메인 TypeScript와 Web TypeScript 통과 |
-| 자동 테스트 | 18개 파일, 65개 테스트 통과 |
-| Schema·빌드 | JSON Schema drift 검사와 운영 Web build 통과 |
-| 브라우저 | 이전 저장본의 1.2.0 Migration, Mapping Inspector, 승인 차단 사유, 미해결 이미지 요청 거부 확인 |
-| 저장소 Codex 스킬 | `quick_validate.py` 통과 |
-| PRJ-007 Golden | 12 Scene, 32 Segment, 79 screenplay Unit, 16 Panel Turn, 1,500,000ms와 원문·시간·참조 보존 |
-| SEG-024 | 1,088,000ms·1,108,000ms·1,148,000ms 공개 순서, Canonical 조기 Cue 0건, 미래 정보 조기 전달 0건 |
+`1.0.0 → 1.1.0 → 1.2.0 → 1.3.0` 변환을 지원한다. 1.2 Link에는 보수적인 `unresolved/migration` Anchor를 부여하고 승인 상태를 재검토한다. 보관된 입력 snapshot에서 Information Rule의 기준 시각을 복원하며 원문, 컷, 시간, 자산과 생성 기록은 유지한다.
 
-GitHub Actions workflow는 현재 없으므로 품질 결과는 로컬 실행 기준이다. 세부 대응과 검증 근거는 [구현 일치 분석](../03-analysis/storyboard-generator.analysis.md)에 있다.
+## 6. 테스트 결과
 
-## 운영 방식
+로컬에서 19개 파일, 92개 테스트가 통과했다. 요구된 이름의 정보 공개 회귀 시나리오 27개가 모두 포함돼 있다. 서버/도메인 TypeScript, Web TypeScript, 생성 Schema drift 검사와 운영 Web build는 최종 품질 명령으로 함께 검사한다.
 
-웹 서버는 생성 요청을 `.local/codex-requests`에 저장한다. 같은 저장소의 Codex App 작업이 `$storyboard-workbench` 스킬로 요청을 읽어 현재 Codex 모델, 내장 `image_gen`, 설정된 macOS 음성을 사용하고 검증된 결과를 프로젝트 revision에 반영한다. `OPENAI_API_KEY`와 OpenAI SDK는 필요하지 않다. Mapping이나 Information Gate 검토가 남은 요청은 생성하지 않고 구체적인 실패 코드로 기록한다.
+## 7. PRJ-007 Golden
 
-## 현재 경계
+PRJ-007은 제품 분기가 아닌 실제 회귀 자료다. Golden 검사는 12 Scene, 32 Segment, screenplay Unit 79개, Panel Turn 16개, 총 1,500,000ms와 원문·시간·참조 보존을 확인한다. `SEG-024`의 정보 공개 시각은 1,088,000ms, 1,108,000ms, 1,148,000ms이며 기준/유효 Gate와 확정 Anchor로 검사한다.
 
-- 지원 입력은 계약이 명시된 `native-v1`과 `production-v1`이다.
-- 이전 저장본의 불확실한 Source Link와 자막 관계는 자동 확정되지 않으며 사람이 검토해야 한다.
-- 자동 검사는 문자열·시간·참조·상태 무결성을 판정한다. 그림의 연출, 반전 표현, 낭독 자연스러움은 사람이 승인한다.
-- PRJ-007 전체 32개 구간의 이미지 생성과 구조가 다른 실제 두 번째 작품의 제작 품질 검토는 남아 있다.
-- 임의 문서 가져오기, 편집기 프로젝트 파일, 전체 영상 렌더링, 클라우드 협업은 현재 범위가 아니다.
+## 8. CI
+
+GitHub Actions는 pull request와 `master`, `codex/storyboard-generator` push에서 Node.js 24로 `npm ci`와 `npm run check`를 실행하도록 구성한다. 실제 원격 실행 결과는 해당 commit의 Actions 상태를 기준으로 판단한다.
+
+## 9. 남은 위험
+
+- PRJ-007 전체 분량의 이미지 연출·시각 연속성과 낭독 호흡은 사람 검토가 필요하다.
+- 구조가 다른 두 번째 실제 작품의 제작 품질과 입력 계약 적합성 검증이 남아 있다.
+- 축약·대체·별도 요소 Mapping과 이미지 속 간접 정보 노출은 사용자 판단이 필요하다.
+- Codex App이 요청별 비용을 제공하지 않으므로 비용은 `N/A`로 기록한다.

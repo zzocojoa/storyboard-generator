@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { assertNoErrors, contractError } from './errors.js';
-import type { AudioCue, Project, TextCue } from './schema.js';
+import type { AudioCue, Project, Shot, ShotSourceLink, StoryboardFrame, TextCue } from './schema.js';
 import { MillisecondsSchema, ProjectSchema } from './schema.js';
 import { validateProject } from './validation.js';
 
@@ -40,13 +40,23 @@ export function updateAudioCueTiming(project: Project, cueId: string, input: Aud
   const current: AudioCue = requireAudioCue(project, cueId);
   if (current.startMs === timing.startMs && current.endMs === timing.endMs) return project;
   const durationChanged: boolean = current.endMs - current.startMs !== timing.endMs - timing.startMs;
+  const affectedShotIds: Set<string> = new Set<string>();
+  const shots: Shot[] = project.shots.map((shot: Shot): Shot => {
+    const affected: boolean = shot.sourceLinks.some((link: ShotSourceLink): boolean => link.unitId === current.unitId && link.temporalAnchor.kind === 'shot-offset' && link.temporalAnchor.basis === 'audio-cue');
+    if (!affected) return shot;
+    affectedShotIds.add(shot.id);
+    return { ...shot, approvalStatus: 'proposed', sourceLinks: shot.sourceLinks.map((link: ShotSourceLink): ShotSourceLink => link.unitId === current.unitId && link.temporalAnchor.kind === 'shot-offset' && link.temporalAnchor.basis === 'audio-cue'
+      ? { ...link, status: 'mapping-required', temporalAnchor: { kind: 'unresolved', basis: 'audio-change', status: 'review-required' } } : link) };
+  });
   return finishTrackEdit(project, { ...project,
     audioCues: project.audioCues.map((cue: AudioCue): AudioCue => cue.id === cueId ? {
       ...cue,
       ...timing,
       assetId: durationChanged ? null : cue.assetId,
-      timingStatus: durationChanged ? 'proposed' : cue.timingStatus,
+      timingStatus: 'proposed',
     } : cue),
+    shots,
+    frames: project.frames.map((frame: StoryboardFrame): StoryboardFrame => affectedShotIds.has(frame.shotId) ? { ...frame, visualReview: 'pending' } : frame),
   });
 }
 

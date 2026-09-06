@@ -1,7 +1,7 @@
 import { assertNoErrors, contractError } from '../domain/errors.js';
 import { reconcileTextCues } from '../domain/mapping.js';
 import { ProjectSchema } from '../domain/schema.js';
-import type { AudioCue, Project, Segment, Shot, ShotSourceLink, SourceUnit, StoryboardFrame } from '../domain/schema.js';
+import type { AudioCue, Project, Segment, Shot, ShotSourceLink, SourceTemporalAnchor, SourceUnit, StoryboardFrame, TextMappingDecision, TextPlacement } from '../domain/schema.js';
 import { validateProject } from '../domain/validation.js';
 
 export type OutlineSettings = { proposedTextHoldMs: number };
@@ -33,8 +33,39 @@ function outlineAudio(project: Project, segment: Segment): AudioCue[] {
   });
 }
 
-function initialSourceLink(unit: SourceUnit): ShotSourceLink {
-  return { unitId: unit.id, usage: ['ACTION', 'SCREEN_TEXT', 'CHAT', 'NOTE'].includes(unit.kind) ? 'primary-visual' : 'audio-only', status: 'confirmed' };
+function mappedAnchor(project: Project, segment: Segment, unit: SourceUnit): SourceTemporalAnchor | null {
+  const decision: TextMappingDecision | undefined = project.textMappingDecisions.find((candidate: TextMappingDecision): boolean => candidate.canonicalUnitId === unit.id && candidate.status === 'confirmed');
+  const placement: TextPlacement | undefined = decision === undefined ? undefined : project.dataset.textPlacements.find((candidate: TextPlacement): boolean => candidate.id === decision.placementId);
+  const startMs: number | null = decision?.relation === 'separate-element' ? decision.canonicalStartMs : placement?.startMs ?? null;
+  const endMs: number | null = decision?.relation === 'separate-element' ? decision.canonicalEndMs : placement?.endMs ?? null;
+  if (startMs === null || startMs < segment.startMs || startMs >= segment.endMs) return null;
+  return { kind: 'shot-offset', startOffsetMs: startMs - segment.startMs, endOffsetMs: Math.max(1, Math.min(segment.endMs, endMs ?? startMs + 1) - segment.startMs), basis: 'text-cue', status: 'confirmed' };
+}
+
+function nativeAnchor(project: Project, segment: Segment, unit: SourceUnit): SourceTemporalAnchor | null {
+  const times: number[] = unit.informationIds.flatMap((id: string): number[] => project.dataset.informationRules
+    .filter((rule): boolean => rule.id === id && rule.notBeforeUnitId === unit.id && rule.precision === 'exact-time')
+    .map((rule): number => rule.baseNotBeforeMs));
+  const startMs: number | undefined = times.sort((left: number, right: number): number => left - right)[0];
+  if (startMs === undefined || startMs < segment.startMs || startMs >= segment.endMs) return null;
+  return { kind: 'shot-offset', startOffsetMs: startMs - segment.startMs, endOffsetMs: Math.min(segment.endMs - segment.startMs, startMs - segment.startMs + 1), basis: 'native-exact', status: 'confirmed' };
+}
+
+function initialSourceLink(project: Project, segment: Segment, unit: SourceUnit, usage: ShotSourceLink['usage']): ShotSourceLink {
+  const direct: boolean = usage === 'primary-visual' || usage === 'continued-visual';
+  const safeWholeShot: SourceTemporalAnchor | null = direct && unit.informationIds.length === 0
+    ? { kind: 'shot-offset', startOffsetMs: 0, endOffsetMs: segment.endMs - segment.startMs, basis: 'proposal', status: 'confirmed' } : null;
+  const anchor: SourceTemporalAnchor = mappedAnchor(project, segment, unit) ?? nativeAnchor(project, segment, unit) ?? safeWholeShot
+    ?? { kind: 'unresolved', basis: 'estimated', status: 'review-required' };
+  return { unitId: unit.id, usage, status: direct && anchor.status === 'review-required' ? 'mapping-required' : 'confirmed', temporalAnchor: anchor };
+}
+
+function sourceLinks(project: Project, segment: Segment, units: readonly SourceUnit[]): ShotSourceLink[] {
+  const visuallyGrounded: SourceUnit[] = units.filter((unit: SourceUnit): boolean => ['ACTION', 'SCREEN_TEXT', 'CHAT', 'NOTE'].includes(unit.kind));
+  const fallbackVisualId: string | null = visuallyGrounded.length === 0
+    ? units.find((unit: SourceUnit): boolean => unit.kind !== 'SOUND' && unit.kind !== 'MUSIC')?.id ?? null : null;
+  return units.map((unit: SourceUnit): ShotSourceLink => initialSourceLink(project, segment, unit,
+    visuallyGrounded.some((candidate: SourceUnit): boolean => candidate.id === unit.id) || fallbackVisualId === unit.id ? 'primary-visual' : 'audio-only'));
 }
 
 /** 구간별 수동 편집 뼈대다. 음성 길이는 원문 글자 수로 배분한 미확정 자리이며 낭독 측정값이 아니다. */
@@ -45,10 +76,10 @@ export function createSourceOutline(project: Project, settings: OutlineSettings)
     const units: SourceUnit[] = project.dataset.units.filter((unit): boolean => unit.segmentId === segment.id);
     return {
       id: `shot-${index + 1}`, segmentId: segment.id, startMs: segment.startMs, endMs: segment.endMs,
-      sourceLinks: units.map((unit: SourceUnit): ShotSourceLink => initialSourceLink(unit)), visualLocationId: null,
+      sourceLinks: sourceLinks(project, segment, units), visualLocationId: null,
       action: units.filter((unit): boolean => unit.kind === 'ACTION').map((unit): string => unit.text).join('\n'),
       camera: { size: '', angle: '', move: '' }, presence: [], propIds: [], continuityBefore: [], continuityAfter: [], cameraAxis: null, screenDirection: null,
-      informationIds: [...new Set(units.flatMap((unit): string[] => unit.informationIds))].filter((id: string): boolean => project.dataset.informationRules.find((rule): boolean => rule.id === id)?.notBeforeMs === segment.startMs), transitionOut: { kind: 'cut', durationMs: 0, note: '' },
+      informationIds: [], transitionOut: { kind: 'cut', durationMs: 0, note: '' },
       proposalOrigin: 'source-outline', approvalStatus: 'proposed', lockedFields: [],
     };
   });

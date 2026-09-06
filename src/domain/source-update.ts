@@ -81,8 +81,8 @@ export function sourceImpact(current: Project, incoming: Project): SourceImpactR
   };
 }
 
-function remapFrames(frames: readonly StoryboardFrame[], shotIds: ReadonlyMap<string, string>, prefix: string): StoryboardFrame[] {
-  return frames.map((frame: StoryboardFrame, index: number): StoryboardFrame => ({ ...frame, id: `${prefix}:frame:${index + 1}`, shotId: shotIds.get(frame.shotId) ?? frame.shotId }));
+function remapFrames(frames: readonly StoryboardFrame[], shotIds: ReadonlyMap<string, string>, frameIds: ReadonlyMap<string, string>): StoryboardFrame[] {
+  return frames.map((frame: StoryboardFrame): StoryboardFrame => ({ ...frame, id: frameIds.get(frame.id) as string, shotId: shotIds.get(frame.shotId) ?? frame.shotId }));
 }
 
 function decisionStillValid(current: Project, incoming: Project, decision: TextMappingDecision): boolean {
@@ -111,11 +111,16 @@ export function applySourceUpdate(current: Project, incoming: Project, prefix: s
   const impacted: Set<string> = new Set<string>(impact.impactedSegmentIds);
   const incomingImpactedShots: Shot[] = incoming.shots.filter((shot: Shot): boolean => impacted.has(shot.segmentId));
   const shotIds: Map<string, string> = new Map(incomingImpactedShots.map((shot: Shot, index: number): [string, string] => [shot.id, `${prefix}:shot:${index + 1}`]));
-  const replacementShots: Shot[] = incomingImpactedShots.map((shot: Shot): Shot => ({ ...shot, id: shotIds.get(shot.id) as string }));
+  const incomingImpactedFrames: StoryboardFrame[] = incoming.frames.filter((frame: StoryboardFrame): boolean => incomingImpactedShots.some((shot: Shot): boolean => shot.id === frame.shotId));
+  const frameIds: Map<string, string> = new Map(incomingImpactedFrames.map((frame: StoryboardFrame, index: number): [string, string] => [frame.id, `${prefix}:frame:${index + 1}`]));
+  const replacementShots: Shot[] = incomingImpactedShots.map((shot: Shot): Shot => ({ ...shot, id: shotIds.get(shot.id) as string,
+    sourceLinks: shot.sourceLinks.map((link) => link.temporalAnchor.kind === 'frame'
+      ? { ...link, temporalAnchor: { ...link.temporalAnchor, frameId: frameIds.get(link.temporalAnchor.frameId) ?? link.temporalAnchor.frameId } } : link),
+  }));
   const preservedShots: Shot[] = current.shots.filter((shot: Shot): boolean => !impacted.has(shot.segmentId) && incoming.dataset.segments.some((segment: Segment): boolean => segment.id === shot.segmentId));
   const shots: Shot[] = incoming.dataset.segments.flatMap((segment: Segment): Shot[] => [...preservedShots, ...replacementShots].filter((shot: Shot): boolean => shot.segmentId === segment.id));
   const preservedFrames: StoryboardFrame[] = current.frames.filter((frame: StoryboardFrame): boolean => preservedShots.some((shot: Shot): boolean => shot.id === frame.shotId));
-  const replacementFrames: StoryboardFrame[] = remapFrames(incoming.frames.filter((frame: StoryboardFrame): boolean => incomingImpactedShots.some((shot: Shot): boolean => shot.id === frame.shotId)), shotIds, prefix);
+  const replacementFrames: StoryboardFrame[] = remapFrames(incomingImpactedFrames, shotIds, frameIds);
   const preservedAudio: AudioCue[] = current.audioCues.filter((cue: AudioCue): boolean => {
     const unit = current.dataset.units.find((candidate): boolean => candidate.id === cue.unitId);
     return unit !== undefined && !impacted.has(unit.segmentId) && incoming.dataset.units.some((candidate): boolean => candidate.id === unit.id);

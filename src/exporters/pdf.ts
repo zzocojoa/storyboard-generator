@@ -1,11 +1,13 @@
 import PDFDocument from 'pdfkit';
+import { effectiveInformationGate } from '../domain/mapping.js';
+import type { EffectiveInformationGate } from '../domain/mapping.js';
 import type { Project, Shot, StoryboardFrame } from '../domain/schema.js';
 import { formatMilliseconds } from '../domain/time.js';
 
 export type AssetLoader = (assetId: string) => Promise<Buffer>;
 
 type FramePageItem = {
-  frame: StoryboardFrame; shot: Shot; image: Buffer | null; sourceText: string;
+  frame: StoryboardFrame; shot: Shot; image: Buffer | null; sourceText: string; gateText: string;
 };
 type FrameRect = { x: number; y: number; width: number; height: number };
 
@@ -15,8 +17,11 @@ async function pageItems(project: Project, loadAsset: AssetLoader): Promise<Fram
     .sort((left: StoryboardFrame, right: StoryboardFrame): number => left.offsetMs - right.offsetMs));
   return Promise.all(orderedFrames.map(async (frame: StoryboardFrame): Promise<FramePageItem> => {
     const shot: Shot = project.shots.find((candidate: Shot): boolean => candidate.id === frame.shotId) as Shot;
-    const sourceText: string = shot.sourceLinks.map((link): string => `[${link.usage}/${link.status}] ${project.dataset.units.find((unit): boolean => unit.id === link.unitId)?.text ?? link.unitId}`).join(' / ');
-    return { frame, shot, image: frame.imageAssetId === null ? null : await loadAsset(frame.imageAssetId), sourceText };
+    const sourceText: string = shot.sourceLinks.map((link): string => `[${link.usage}/${link.status}/${link.temporalAnchor.kind}:${link.temporalAnchor.basis}] ${project.dataset.units.find((unit): boolean => unit.id === link.unitId)?.text ?? link.unitId}`).join(' / ');
+    const gates: EffectiveInformationGate[] = project.dataset.informationRules.filter((rule): boolean => rule.segmentId === shot.segmentId)
+      .map((rule): EffectiveInformationGate => effectiveInformationGate(project, rule.id));
+    const gateText: string = gates.map((gate: EffectiveInformationGate): string => `${gate.id} B${gate.baseNotBeforeMs}→E${gate.effectiveNotBeforeMs} ${gate.evidenceType}${gate.reviewRequired ? ' REVIEW' : ''}`).join(' / ');
+    return { frame, shot, image: frame.imageAssetId === null ? null : await loadAsset(frame.imageAssetId), sourceText, gateText };
   }));
 }
 
@@ -59,7 +64,9 @@ function drawCard(document: PDFKit.PDFDocument, item: FramePageItem, index: numb
   document.fillColor('#101820').fontSize(8.5).text(item.shot.action, x + 228, y + 95, { width: 143, height: 61, ellipsis: true });
   document.moveTo(x + 8, y + 166).lineTo(x + width - 8, y + 166).lineWidth(0.5).strokeColor('#d8dce0').stroke();
   document.fillColor('#59636d').fontSize(7).text('SOURCE', x + 8, y + 174, { width: 50 });
-  document.fillColor('#101820').fontSize(7.5).text(item.sourceText, x + 58, y + 173, { width: width - 74, height: 32, ellipsis: true });
+  document.fillColor('#101820').fontSize(7.5).text(item.sourceText, x + 58, y + 173, { width: width - 74, height: 16, ellipsis: true });
+  document.fillColor('#59636d').fontSize(7).text('GATE', x + 8, y + 194, { width: 50 });
+  document.fillColor('#101820').fontSize(7).text(item.gateText || '—', x + 58, y + 193, { width: width - 74, height: 13, ellipsis: true });
   document.fillColor('#59636d').fontSize(7).text(`FRAME  ${item.frame.role.toUpperCase()}  ·  ${item.frame.visualReview.toUpperCase()}`, x + 8, y + 211, { width: width - 16, lineBreak: false });
 }
 

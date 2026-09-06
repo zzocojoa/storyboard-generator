@@ -68,11 +68,11 @@ describe('원문 뼈대와 편집', (): void => {
 
   it('미공개 정보는 초안 편집을 허용하지만 컷 승인을 거부한다', async (): Promise<void> => {
     const project = createSourceOutline(importPackage(await productionPackage()), { proposedTextHoldMs: 3000 });
-    const later = project.dataset.informationRules.find((rule): boolean => rule.notBeforeMs > 0);
+    const later = project.dataset.informationRules.find((rule): boolean => rule.baseNotBeforeMs > 0);
     if (later === undefined) throw new Error('공개 시점 검증 자료가 없습니다.');
     const shot = requireShot(project, 'shot-1');
     const changed = updateShotContent(project, shot.id, { ...shotContent(shot), informationIds: [...shot.informationIds, later.id] });
-    expect(() => approveShot(changed, shot.id)).toThrowError(expect.objectContaining({ code: 'SHOT_APPROVAL_BLOCKED', issues: expect.arrayContaining([expect.objectContaining({ code: 'EARLY_INFORMATION_REVEAL' })]) }));
+    expect(() => approveShot(changed, shot.id)).toThrowError(expect.objectContaining({ code: 'SHOT_APPROVAL_BLOCKED', issues: expect.arrayContaining([expect.objectContaining({ code: 'INFORMATION_WITHOUT_SOURCE_LINK' })]) }));
   });
 
   it('편집 입력에 시간이나 잠금 필드를 숨겨 넣어 우회할 수 없다', async (): Promise<void> => {

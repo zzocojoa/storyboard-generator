@@ -1,5 +1,6 @@
 import { issue } from './errors.js';
 import type { Dataset, InformationRule, Issue, Project, Segment, Shot, ShotSourceLink, Snapshot, SourceRef, SourceUnit, TextMappingDecision, TextPlacement } from './schema.js';
+import { sourcePolicyIssues } from './source-policy.js';
 
 function duplicateIssues(ids: readonly string[], entity: string): Issue[] {
   return [...new Set(ids.filter((id: string, index: number): boolean => ids.indexOf(id) !== index))]
@@ -69,7 +70,7 @@ export function validateDataset(dataset: Dataset, snapshots: readonly Snapshot[]
     const unit: SourceUnit | undefined = rule.notBeforeUnitId === null ? undefined : dataset.units.find((value: SourceUnit): boolean => value.id === rule.notBeforeUnitId);
     return [
       ...referenceIssue(segment !== undefined, rule.id, 'segmentId', rule.segmentId, rule.sourceRefs),
-      ...(segment !== undefined && (rule.notBeforeMs < segment.startMs || rule.notBeforeMs >= segment.endMs) ? [issue('IMPOSSIBLE_INFORMATION_GATE', 'error', rule.id, 'notBeforeMs', '정보 공개 시각이 지정 구간 밖입니다.', `${segment.startMs}..${segment.endMs}`, String(rule.notBeforeMs), rule.sourceRefs)] : []),
+      ...(segment !== undefined && (rule.baseNotBeforeMs < segment.startMs || rule.baseNotBeforeMs >= segment.endMs) ? [issue('IMPOSSIBLE_INFORMATION_GATE', 'error', rule.id, 'baseNotBeforeMs', '기준 정보 공개 시각이 지정 구간 밖입니다.', `${segment.startMs}..${segment.endMs}`, String(rule.baseNotBeforeMs), rule.sourceRefs)] : []),
       ...(rule.notBeforeUnitId === null ? [] : referenceIssue(unit !== undefined && unit.segmentId === rule.segmentId, rule.id, 'notBeforeUnitId', rule.notBeforeUnitId, rule.sourceRefs)),
       ...(unit !== undefined && rule.notBeforeUnitOrder !== unit.order ? [issue('INFORMATION_GATE_UNIT_ORDER', 'error', rule.id, 'notBeforeUnitOrder', '정보 공개 Unit 순서가 원문과 다릅니다.', String(unit.order), String(rule.notBeforeUnitOrder), [...rule.sourceRefs, ...unit.sourceRefs])] : []),
       ...(rule.precision === 'unit-order' && (rule.notBeforeUnitId === null || rule.notBeforeUnitOrder === null) ? [issue('INCOMPLETE_INFORMATION_GATE', 'error', rule.id, 'precision', 'unit-order Gate에는 원문 Unit과 순서가 필요합니다.', 'unit/order', null, rule.sourceRefs)] : []),
@@ -90,25 +91,10 @@ export function validateDataset(dataset: Dataset, snapshots: readonly Snapshot[]
 }
 
 function sourceOrderIssues(project: Project): Issue[] {
-  return project.dataset.segments.flatMap((segment: Segment): Issue[] => {
-    const shots: Shot[] = project.shots.filter((shot: Shot): boolean => shot.segmentId === segment.id);
-    let latestPrimaryOrder: number = 0;
-    const occurrences: Map<string, ShotSourceLink[]> = new Map<string, ShotSourceLink[]>();
-    const issues: Issue[] = [];
-    for (const shot of shots) {
-      for (const link of shot.sourceLinks) {
-        occurrences.set(link.unitId, [...(occurrences.get(link.unitId) ?? []), link]);
-        if (link.status !== 'confirmed' || link.usage !== 'primary-visual') continue;
-        const unit: SourceUnit | undefined = project.dataset.units.find((value: SourceUnit): boolean => value.id === link.unitId);
-        if (unit !== undefined && unit.order < latestPrimaryOrder) issues.push(issue('SOURCE_UNIT_ORDER_REVERSED', 'error', shot.id, 'sourceLinks', '컷 순서에 따라 primary-visual 원문 순서가 증가해야 합니다.', `>=${latestPrimaryOrder}`, String(unit.order), unit.sourceRefs));
-        if (unit !== undefined) latestPrimaryOrder = Math.max(latestPrimaryOrder, unit.order);
-      }
-    }
-    for (const [unitId, links] of occurrences) {
-      if (links.length > 1 && links.filter((link: ShotSourceLink): boolean => link.usage === 'primary-visual').length > 1) issues.push(issue('DUPLICATE_PRIMARY_SOURCE_LINK', 'error', segment.id, 'sourceLinks', `${unitId}를 여러 컷에 반복하려면 continued-visual 또는 context-only 용도를 사용하세요.`, 'one primary-visual', String(links.length), []));
-    }
-    return issues;
-  });
+  return project.dataset.segments.flatMap((segment: Segment): Issue[] => sourcePolicyIssues(
+    project.dataset.units.filter((unit: SourceUnit): boolean => unit.segmentId === segment.id),
+    project.shots.filter((shot: Shot): boolean => shot.segmentId === segment.id),
+  ));
 }
 
 export function validateProject(project: Project, expectedDataset: Dataset): Issue[] {
@@ -137,6 +123,11 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
       ...duplicateIssues(shot.continuityAfter.map((state): string => state.assetId), `${shot.id}.continuityAfter`),
       ...(segment === undefined ? [] : intervalIssues(shot.id, shot.startMs, shot.endMs, segment.startMs, segment.endMs)),
       ...shot.sourceLinks.flatMap((link: ShotSourceLink): Issue[] => referenceIssue(dataset.units.some((unit): boolean => unit.id === link.unitId && unit.segmentId === shot.segmentId), shot.id, 'sourceLinks', link.unitId, [])),
+      ...shot.sourceLinks.flatMap((link: ShotSourceLink): Issue[] => {
+        if (link.temporalAnchor.kind !== 'frame') return [];
+        const frameId: string = link.temporalAnchor.frameId;
+        return referenceIssue(project.frames.some((frame): boolean => frame.id === frameId && frame.shotId === shot.id), shot.id, 'sourceLinks.temporalAnchor.frameId', frameId, []);
+      }),
       ...(shot.visualLocationId === null ? [] : referenceIssue(dataset.locations.some((location): boolean => location.id === shot.visualLocationId), shot.id, 'visualLocationId', shot.visualLocationId, [])),
       ...shot.presence.flatMap((presence): Issue[] => referenceIssue(dataset.people.some((person): boolean => person.id === presence.personId), shot.id, 'presence', presence.personId, [])),
       ...shot.propIds.flatMap((id: string): Issue[] => referenceIssue(project.assets.some((asset): boolean => asset.id === id && asset.kind === 'prop'), shot.id, 'propIds', id, [])),
@@ -206,6 +197,13 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
       ...(audioKinds.some((mapping): boolean => mapping.cue === cue.kind && dataset.units.some((unit): boolean => unit.id === cue.unitId && unit.kind === mapping.unit)) ? [] : [issue('AUDIO_KIND_MISMATCH', 'error', cue.id, 'kind', '원문 유형과 음성 트랙의 유형이 다릅니다.', null, cue.kind, [])]),
       ...(cue.timingStatus === 'measured' && cue.assetId === null ? [issue('MISSING_MEASURED_AUDIO', 'error', cue.id, 'timingStatus', '실제 음성 자산 없이 측정 완료로 표시할 수 없습니다.', null, null, [])] : []),
       ...(cue.timingStatus === 'measured' && asset?.durationMs !== cue.endMs - cue.startMs ? [issue('AUDIO_DURATION_MISMATCH', 'error', cue.id, 'timing', '측정된 큐 길이와 오디오 자산 길이가 다릅니다.', String(asset?.durationMs ?? 'null'), String(cue.endMs - cue.startMs), [])] : []),
+      ...(cue.timingStatus === 'measured' && asset?.subjectId !== cue.id ? [issue('AUDIO_ASSET_SUBJECT_MISMATCH', 'error', cue.id, 'assetId', '측정된 오디오 자산은 해당 큐를 대상으로 해야 합니다.', cue.id, String(asset?.subjectId ?? 'null'), [])] : []),
+      ...((): Issue[] => {
+        const unit: SourceUnit | undefined = dataset.units.find((candidate: SourceUnit): boolean => candidate.id === cue.unitId);
+        const segment: Segment | undefined = unit === undefined ? undefined : dataset.segments.find((candidate: Segment): boolean => candidate.id === unit.segmentId);
+        return segment !== undefined && (cue.startMs < segment.startMs || cue.endMs > segment.endMs)
+          ? [issue('AUDIO_OUTSIDE_SOURCE_SEGMENT', 'error', cue.id, 'timing', '오디오 큐는 원문과 같은 구간 안에 있어야 합니다.', `${segment.startMs}..${segment.endMs}`, `${cue.startMs}..${cue.endMs}`, unit?.sourceRefs ?? [])] : [];
+      })(),
     ];
   });
   const textIssues: Issue[] = project.textCues.flatMap((cue): Issue[] => {
@@ -231,6 +229,7 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
     return [
       ...referenceIssue(placement !== undefined, decision.id, 'placementId', decision.placementId, []),
       ...(decision.canonicalUnitId === null ? [] : referenceIssue(unit !== undefined && placement !== undefined && unit.segmentId === placement.segmentId, decision.id, 'canonicalUnitId', decision.canonicalUnitId, placement?.sourceRefs ?? [])),
+      ...(unit !== undefined && !['SCREEN_TEXT', 'CHAT', 'NOTE'].includes(unit.kind) ? [issue('INVALID_CANONICAL_UNIT_KIND', 'error', decision.id, 'canonicalUnitId', 'Canonical 후보는 SCREEN_TEXT·CHAT·NOTE 원문이어야 합니다.', 'SCREEN_TEXT|CHAT|NOTE', unit.kind, unit.sourceRefs)] : []),
       ...(decision.status === 'confirmed' && decision.relation === 'exact' && placement !== undefined && unit !== undefined && placement.text !== unit.text ? [issue('INVALID_EXACT_TEXT_MAPPING', 'error', decision.id, 'relation', 'exact Mapping의 Placement와 Canonical 원문이 다릅니다.', unit.text, placement.text, [...placement.sourceRefs, ...unit.sourceRefs])] : []),
       ...((decision.canonicalStartMs === null) !== (decision.canonicalEndMs === null) ? [issue('INCOMPLETE_CANONICAL_TEXT_TIME', 'error', decision.id, 'canonicalTiming', 'Canonical 문구 시작·종료 시각을 함께 지정하세요.', 'both or null', null, placement?.sourceRefs ?? [])] : []),
       ...(placement !== undefined && decision.canonicalStartMs !== null && decision.canonicalEndMs !== null ? intervalIssues(decision.id, decision.canonicalStartMs, decision.canonicalEndMs, dataset.segments.find((segment: Segment): boolean => segment.id === placement.segmentId)?.startMs ?? 0, dataset.segments.find((segment: Segment): boolean => segment.id === placement.segmentId)?.endMs ?? totalEnd) : []),

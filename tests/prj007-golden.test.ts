@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { approveShot } from '../src/domain/edit.js';
-import { updateTextMappingDecision } from '../src/domain/mapping.js';
+import { effectiveInformationGate, updateTextMappingDecision } from '../src/domain/mapping.js';
 import type { Project, Shot, SourceUnit, StoryboardFrame, TextMappingDecision } from '../src/domain/schema.js';
 import { validateDataset, validateProject } from '../src/domain/validation.js';
 import { importPackage } from '../src/importers/import-package.js';
@@ -26,7 +26,7 @@ function contextAt(project: Project, unitId: string, absoluteMs: number): Return
   const shot: Shot = project.shots.find((candidate: Shot): boolean => candidate.segmentId === 'SEG-024') as Shot;
   const frame: StoryboardFrame = { id: `golden-frame-${unitId}`, shotId: shot.id, offsetMs: absoluteMs - shot.startMs, role: 'key', description: unitId, imageAssetId: null, visualReview: 'pending' };
   const changed: Project = { ...project,
-    shots: project.shots.map((candidate: Shot): Shot => candidate.id === shot.id ? { ...candidate, sourceLinks: [{ unitId, usage: 'primary-visual', status: 'confirmed' }], informationIds: [] } : candidate),
+    shots: project.shots.map((candidate: Shot): Shot => candidate.id === shot.id ? { ...candidate, sourceLinks: [{ unitId, usage: 'primary-visual', status: 'confirmed', temporalAnchor: { kind: 'frame', frameId: frame.id, basis: 'manual', status: 'confirmed' } }], informationIds: [] } : candidate),
     frames: [...project.frames.filter((candidate: StoryboardFrame): boolean => candidate.id !== frame.id), frame],
   };
   return buildFrameImageContext(changed, frame.id);
@@ -51,7 +51,7 @@ describe('PRJ-007 Golden Acceptance', (): void => {
 
   it('SEG-024 축약 자막과 공개 Gate가 18:08·18:28·19:08 순서를 유지한다', async (): Promise<void> => {
     const project: Project = await goldenProject();
-    const gates = Object.fromEntries(project.dataset.informationRules.filter((rule) => rule.segmentId === 'SEG-024').map((rule) => [rule.id, rule.notBeforeMs]));
+    const gates = Object.fromEntries(project.dataset.informationRules.filter((rule) => rule.segmentId === 'SEG-024').map((rule) => [rule.id, effectiveInformationGate(project, rule.id).effectiveNotBeforeMs]));
     expect(gates['fact:FACT-03']).toBe(1088000);
     expect(gates['fact:FACT-02']).toBe(1108000);
     expect(gates['fact:FACT-09']).toBe(1108000);
@@ -66,14 +66,14 @@ describe('PRJ-007 Golden Acceptance', (): void => {
     expect(contextAt(project, 'UNIT-060', 1088000).allowedInformationIds).toEqual(expect.arrayContaining(['fact:FACT-03']));
     expect(contextAt(project, 'UNIT-061', 1108000).allowedInformationIds).toEqual(expect.arrayContaining(['fact:FACT-02', 'fact:FACT-09']));
     expect(contextAt(project, 'UNIT-064', 1148000).allowedInformationIds).toEqual(expect.arrayContaining(['fact:FACT-10']));
-    expect(() => contextAt(project, 'UNIT-064', 1088000)).toThrowError(expect.objectContaining({ code: 'FORBIDDEN_PROMPT_INFORMATION' }));
+    expect(() => contextAt(project, 'UNIT-064', 1088000)).toThrowError(expect.objectContaining({ code: 'FRAME_GENERATION_BLOCKED', issues: expect.arrayContaining([expect.objectContaining({ code: 'EARLY_INFORMATION_REVEAL' })]) }));
   });
 
   it('seg024_later_information_is_rejected_from_earlier_shot', async (): Promise<void> => {
     const project: Project = confirmSegmentMappings(await goldenProject(), 'SEG-024');
     const shot: Shot = project.shots.find((candidate: Shot): boolean => candidate.segmentId === 'SEG-024') as Shot;
     const changed: Project = { ...project, shots: project.shots.map((candidate: Shot): Shot => candidate.id === shot.id
-      ? { ...candidate, sourceLinks: [{ unitId: 'UNIT-064', usage: 'primary-visual', status: 'confirmed' }], informationIds: [] }
+      ? { ...candidate, sourceLinks: [{ unitId: 'UNIT-064', usage: 'primary-visual', status: 'confirmed', temporalAnchor: { kind: 'shot-offset', startOffsetMs: 0, endOffsetMs: 1, basis: 'manual', status: 'confirmed' } }], informationIds: [] }
       : candidate) };
     expect(() => approveShot(changed, shot.id)).toThrowError(expect.objectContaining({
       code: 'SHOT_APPROVAL_BLOCKED', issues: expect.arrayContaining([expect.objectContaining({ code: 'EARLY_INFORMATION_REVEAL' })]),

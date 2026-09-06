@@ -50,7 +50,7 @@ $storyboard-workbench 대기 중인 콘티 생성 요청을 처리해 주세요.
 
 자막 Placement마다 `TextMappingDecision`이 생긴다. 문자열이 정확히 같으면 `exact/confirmed`, 축약 후보나 독립 요소가 감지되면 `unresolved`로 시작한다. `abbreviation`과 `replacement`는 별도 Canonical 렌더링을 끌 수 있고, `separate-element` 또는 별도 렌더링은 Canonical 문구의 시작·종료 시각을 명시해야 한다. 미해결 결정은 초안 저장을 막지 않지만 관련 컷의 확정·이미지 생성·구간 제안 적용을 막는다.
 
-각 컷은 `sourceLinks`를 권한 원본으로 사용한다. Link는 `primary-visual`, `continued-visual`, `audio-only`, `context-only` 용도와 `confirmed`, `mapping-required` 상태를 가진다. 수동 분할에서 시간 근거가 없는 원문은 한쪽 후보에만 배치되고 `mapping-required`로 표시된다. Inspector의 **TEXT MAPPING REVIEW**와 **SOURCE MAPPING**에서 관계·시각·용도·상태를 검토하고 같은 구간의 앞뒤 컷으로 연결을 이동할 수 있다.
+각 컷은 `sourceLinks`를 권한 원본으로 사용한다. Link는 `primary-visual`, `continued-visual`, `audio-only`, `context-only` 용도와 `confirmed`, `mapping-required` 상태, 컷 안에서 처음 유효해지는 `temporalAnchor`를 가진다. Anchor는 컷 상대 구간이나 특정 프레임으로 확정하거나 검토 필요 상태로 둘 수 있다. 수동 분할에서 시간 근거가 없는 원문은 한쪽 후보에만 배치되고 `mapping-required`로 표시된다. Inspector의 **TEXT MAPPING REVIEW**, **SOURCE TEMPORAL MAPPING**, **INFORMATION GATE**에서 관계·시각·용도·상태와 기준/유효 공개 시점을 검토하고 같은 구간의 앞뒤 컷으로 연결을 이동할 수 있다.
 
 ## CLI
 
@@ -65,7 +65,7 @@ npm run cli -- export-csv --project .local/plant-care.project.json --output .loc
 
 `outline`은 구간마다 편집 시작용 컷과 프레임을 만든다. 카메라·화면 위치·출연 인물을 임의로 확정하지 않는다. 음성 슬롯은 글자 수에 비례한 제안 시간이며 생성한 가이드 음성의 WAV 길이를 측정한 뒤 `measured` 상태가 된다. 원본에 화면 글자 종료점이 없으면 `--text-hold-ms` 값이 제안값으로 기록된다. 기존 출력 경로를 덮어쓰지 않는다.
 
-현재 프로젝트 형식은 `1.2.0`이다. `1.0.0` 저장본은 먼저 0ms 직접 전환을 명시한 `1.1.0` 구조로 변환한 뒤 `1.2.0`으로 올린다. 기존 `sourceUnitIds`는 손실 없이 `context-only/mapping-required` Link로 바꾸고, 자막 결정은 원문과 정확히 일치하는 경우에만 자동 확정한다. 축약·모호한 후보는 `unresolved`로 남으므로 사용자가 Mapping을 확인해야 한다. 원문·컷 시간·자산·기존 검토 상태는 유지된다.
+현재 프로젝트 형식은 `1.3.0`이다. 이전 저장본은 `1.0.0 → 1.1.0 → 1.2.0 → 1.3.0` 순서로 변환한다. 기존 `sourceUnitIds`는 손실 없이 `context-only/mapping-required` Link로 바꾸고, 1.2 Link의 시간 Anchor는 자동 확정하지 않고 `unresolved/migration`으로 둔다. 자막 결정은 유일한 정확 일치만 자동 확정하며 축약·대체·별도 요소·독립 Placement는 관계 불변식을 지켜야 한다. Information Rule의 `baseNotBeforeMs`는 원본 기준 하한으로 보존하고, 현재 Text Mapping·Source Anchor·검증된 측정 Audio Cue에서 유효 Gate를 다시 계산한다. 원문·컷 시간·자산·생성 기록은 유지되며 불확실한 이전 승인 상태는 재검토된다.
 
 Codex App 생성 브리지의 현재 요청과 적용 명령은 다음과 같이 확인할 수 있다. 일반 사용에서는 저장소 스킬이 이 명령을 실행한다.
 

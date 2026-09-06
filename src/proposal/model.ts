@@ -3,6 +3,7 @@ import { contractError } from '../domain/errors.js';
 import { effectiveInformationGate } from '../domain/mapping.js';
 import type { Project, Segment, Shot, ShotSourceLink, SourceUnit, StoryboardFrame } from '../domain/schema.js';
 import { PresenceSchema, ProjectSchema, ShotSourceLinkSchema, TransitionSchema } from '../domain/schema.js';
+import { sourcePolicyIssues } from '../domain/source-policy.js';
 import { validateProject } from '../domain/validation.js';
 import { assertNoErrors } from '../domain/errors.js';
 
@@ -25,19 +26,16 @@ function validateProposalSources(project: Project, segmentId: string, proposal: 
   const unknown: string[] = [...new Set(proposedIds.filter((id: string): boolean => !sourceIds.includes(id)))];
   const missing: string[] = sourceIds.filter((id: string): boolean => !proposedIds.includes(id));
   if (unknown.length > 0 || missing.length > 0) throw contractError('PROPOSAL_SOURCE_COVERAGE', `${segmentId}: 원문 연결을 확인하세요. unknown=${unknown.join(',')}, missing=${missing.join(',')}`, []);
-  let latestPrimaryOrder: number = 0;
-  const primaryCounts: Map<string, number> = new Map<string, number>();
-  for (const shot of proposal.shots) {
-    for (const link of shot.sourceLinks) {
-      if (link.usage !== 'primary-visual') continue;
-      const unit: SourceUnit = sourceUnits.find((value: SourceUnit): boolean => value.id === link.unitId) as SourceUnit;
-      if (unit.order < latestPrimaryOrder) throw contractError('PROPOSAL_SOURCE_ORDER_REVERSED', `${segmentId}: ${unit.id}(${unit.order})가 앞선 원문 순서 ${latestPrimaryOrder} 뒤에 역순 배치됐습니다.`, []);
-      latestPrimaryOrder = Math.max(latestPrimaryOrder, unit.order);
-      primaryCounts.set(unit.id, (primaryCounts.get(unit.id) ?? 0) + 1);
-    }
+  const policyShots = proposal.shots.map((shot, index: number) => ({ id: `${segmentId}:proposal:${index + 1}`, sourceLinks: shot.sourceLinks.map((link): ShotSourceLink => ({
+    ...link, status: 'confirmed', temporalAnchor: { kind: 'shot-offset', startOffsetMs: 0, endOffsetMs: 1, basis: 'proposal', status: 'confirmed' },
+  })) }));
+  const policyIssues = sourcePolicyIssues(sourceUnits, policyShots);
+  if (policyIssues.length > 0) {
+    const visualMissing: boolean = policyIssues.some((value): boolean => value.code === 'SHOT_VISUAL_SOURCE_REQUIRED');
+    const reversed: boolean = policyIssues.some((value): boolean => value.code === 'SOURCE_UNIT_ORDER_REVERSED');
+    const code: string = visualMissing ? 'PROPOSAL_VISUAL_SOURCE_REQUIRED' : reversed ? 'PROPOSAL_SOURCE_ORDER_REVERSED' : 'PROPOSAL_SOURCE_POLICY';
+    throw contractError(code, policyIssues.map((value): string => `${value.code}: ${value.message}`).join('\n'), policyIssues);
   }
-  const repeated: string[] = [...primaryCounts].filter(([, count]): boolean => count > 1).map(([id]): string => id);
-  if (repeated.length > 0) throw contractError('PROPOSAL_DUPLICATE_PRIMARY_SOURCE', `${segmentId}: 반복 원문은 continued-visual 또는 context-only로 지정하세요. units=${repeated.join(',')}`, []);
 }
 
 function validateProposalInformation(project: Project, segment: Segment, proposal: SegmentProposal, durations: readonly number[]): void {
@@ -50,7 +48,7 @@ function validateProposalInformation(project: Project, segment: Segment, proposa
     const directInformationIds: string[] = shot.sourceLinks.filter((link): boolean => ['primary-visual', 'continued-visual'].includes(link.usage)).flatMap((link): string[] => linkedUnits.find((unit: SourceUnit): boolean => unit.id === link.unitId)?.informationIds ?? []);
     for (const informationId of [...new Set([...shot.informationIds, ...directInformationIds])]) {
       const gate = effectiveInformationGate(project, informationId);
-      if (gate.reviewRequired || startMs < gate.notBeforeMs) throw contractError('PROPOSAL_INFORMATION_GATE', `${segment.id}: ${informationId}를 ${startMs}ms 컷에 배치할 수 없습니다. notBefore=${gate.notBeforeMs}`, []);
+      if (gate.reviewRequired || startMs < gate.effectiveNotBeforeMs) throw contractError('PROPOSAL_INFORMATION_GATE', `${segment.id}: ${informationId}를 ${startMs}ms 컷에 배치할 수 없습니다. effectiveNotBefore=${gate.effectiveNotBeforeMs}, reasons=${gate.reviewReasons.join(',')}`, []);
       if (shot.informationIds.includes(informationId) && !linkedUnits.some((unit: SourceUnit): boolean => unit.informationIds.includes(informationId))) throw contractError('PROPOSAL_INFORMATION_WITHOUT_SOURCE', `${segment.id}: ${informationId}를 뒷받침하는 Source Link가 필요합니다.`, []);
     }
   });
@@ -83,7 +81,7 @@ export function applySegmentProposal(project: Project, segmentId: string, input:
   const shots: Shot[] = proposal.shots.map((shot, index): Shot => {
     const startMs: number = segment.startMs + durations.slice(0, index).reduce((sum: number, value: number): number => sum + value, 0);
     return { id: `${proposalId}:shot:${index + 1}`, segmentId, startMs, endMs: startMs + (durations[index] as number),
-      sourceLinks: shot.sourceLinks.map((link): ShotSourceLink => ({ ...link, status: 'confirmed' })), visualLocationId: shot.visualLocationId, action: shot.action, camera: shot.camera,
+      sourceLinks: shot.sourceLinks.map((link): ShotSourceLink => ({ ...link, status: 'confirmed', temporalAnchor: { kind: 'shot-offset', startOffsetMs: 0, endOffsetMs: durations[index] as number, basis: 'proposal', status: 'confirmed' } })), visualLocationId: shot.visualLocationId, action: shot.action, camera: shot.camera,
       presence: shot.presence, propIds: shot.propIds, continuityBefore: [], continuityAfter: [], cameraAxis: shot.cameraAxis,
       screenDirection: shot.screenDirection, informationIds: shot.informationIds, transitionOut: shot.transitionOut,
       proposalOrigin: 'model', approvalStatus: 'proposed', lockedFields: [] };

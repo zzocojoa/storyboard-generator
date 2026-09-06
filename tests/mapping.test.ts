@@ -55,12 +55,12 @@ describe('자막 Mapping 결정', (): void => {
   it('separate_element_requires_explicit_second_timing', async (): Promise<void> => {
     const project: Project = await productionOutline();
     const decision: TextMappingDecision = segmentDecision(project, 'SEG-024', 'UNIT-061');
-    const changed: Project = updateTextMappingDecision(project, decision.id, {
-      canonicalUnitId: 'UNIT-061', relation: 'separate-element', status: 'confirmed', renderCanonicalSeparately: true,
+    const changed = { ...project, textMappingDecisions: project.textMappingDecisions.map((candidate: TextMappingDecision): TextMappingDecision => candidate.id === decision.id ? {
+      ...candidate, canonicalUnitId: 'UNIT-061', relation: 'separate-element', status: 'confirmed', renderCanonicalSeparately: true,
       canonicalStartMs: null, canonicalEndMs: null, note: '별도 요소',
-    });
+    } : candidate) } as Project;
     const shot: Shot = changed.shots.find((candidate: Shot): boolean => candidate.segmentId === 'SEG-024') as Shot;
-    expect(approvalIssuesForShot(changed, shot.id)).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'CANONICAL_TEXT_TIMING_REQUIRED' })]));
+    expect(approvalIssuesForShot(changed, shot.id)).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'INVALID_TEXT_MAPPING_STATE' })]));
   });
 });
 
@@ -73,19 +73,19 @@ describe('Shot Source Link', (): void => {
     ] }, 'reverse')).toThrowError(expect.objectContaining({ code: 'PROPOSAL_SOURCE_ORDER_REVERSED' }));
   });
 
-  it('manual_split_marks_ambiguous_units_mapping_required', async (): Promise<void> => {
+  it('manual_split_rebases_confirmed_source_anchor', async (): Promise<void> => {
     const project: Project = await nativeOutline();
     const split: Project = splitShot(project, 'shot-2', 8000, 'split-shot', 'split-frame');
     const actionLinks: ShotSourceLink[] = split.shots.flatMap((shot: Shot): ShotSourceLink[] => shot.sourceLinks.filter((link: ShotSourceLink): boolean => link.unitId === '동작'));
-    expect(actionLinks).toHaveLength(1);
-    expect(actionLinks[0]?.status).toBe('mapping-required');
+    expect(actionLinks).toHaveLength(2);
+    expect(actionLinks.every((link: ShotSourceLink): boolean => link.status === 'confirmed' && link.temporalAnchor.kind === 'shot-offset')).toBe(true);
   });
 
   it('image_context_rejects_mapping_required_source', async (): Promise<void> => {
     const project: Project = await nativeOutline();
     const split: Project = splitShot(project, 'shot-2', 8000, 'split-shot', 'split-frame');
     const shot: Shot = split.shots.find((candidate: Shot): boolean => candidate.sourceLinks.some((link: ShotSourceLink): boolean => link.unitId === '동작')) as Shot;
-    expect(() => buildImageContext(split, shot.id)).toThrowError(expect.objectContaining({ code: 'SOURCE_MAPPING_REQUIRED' }));
+    expect(() => buildImageContext(split, shot.id)).toThrowError(expect.objectContaining({ code: 'FRAME_GENERATION_BLOCKED' }));
   });
 
   it('source_links_survive_split_merge_and_reorder', async (): Promise<void> => {
@@ -97,14 +97,14 @@ describe('Shot Source Link', (): void => {
     const merged: Project = mergeShots(split, 'shot-2', 'split-shot');
     const mergedLinks: ShotSourceLink[] = merged.shots.find((shot: Shot): boolean => shot.id === 'shot-2')?.sourceLinks ?? [];
     expect(new Set(mergedLinks.map((link: ShotSourceLink): string => link.unitId))).toEqual(new Set(before.map((link: ShotSourceLink): string => link.unitId)));
-    expect(mergedLinks.find((link: ShotSourceLink): boolean => link.unitId === '동작')?.status).toBe('mapping-required');
+    expect(mergedLinks.find((link: ShotSourceLink): boolean => link.unitId === '동작')?.status).toBe('confirmed');
   });
 
   it('수동 Source Mapping 수정이 원문을 바꾸지 않는다', async (): Promise<void> => {
     const project: Project = await nativeOutline();
     const shot: Shot = project.shots.find((candidate: Shot): boolean => candidate.id === 'shot-2') as Shot;
     const before: string = JSON.stringify(project.dataset);
-    const links: ShotSourceLink[] = shot.sourceLinks.map((link: ShotSourceLink): ShotSourceLink => link.unitId === '동작' ? { ...link, usage: 'continued-visual', status: 'confirmed' } : link);
+    const links: ShotSourceLink[] = shot.sourceLinks.map((link: ShotSourceLink): ShotSourceLink => link.unitId === '동작' ? { ...link, usage: 'primary-visual', status: 'confirmed', temporalAnchor: { kind: 'shot-offset', startOffsetMs: 0, endOffsetMs: shot.endMs - shot.startMs, basis: 'manual', status: 'confirmed' } } : link);
     const changed: Project = updateShotSourceLinks(project, shot.id, { links });
     expect(changed.shots.find((candidate: Shot): boolean => candidate.id === shot.id)?.sourceLinks).toEqual(links);
     expect(JSON.stringify(changed.dataset)).toBe(before);
@@ -114,23 +114,23 @@ describe('Shot Source Link', (): void => {
 describe('Migration과 Source Update', (): void => {
   it('old_1_1_project_migrates_to_source_links', async (): Promise<void> => {
     const project: Project = await nativeOutline();
-    const legacy = JSON.parse(JSON.stringify(project)) as { schemaVersion: string; shots: { sourceLinks: ShotSourceLink[]; sourceUnitIds?: string[] }[]; textMappingDecisions?: unknown; dataset: { informationRules: { id: string; segmentId: string; notBeforeMs: number; sourceRefs: unknown[] }[]; segments: { id: string; startMs: number }[] } };
+    const legacy = JSON.parse(JSON.stringify(project)) as { schemaVersion: string; shots: { sourceLinks: ShotSourceLink[]; sourceUnitIds?: string[] }[]; textMappingDecisions?: unknown; dataset: { informationRules: { id: string; segmentId: string; baseNotBeforeMs: number; notBeforeMs?: number; sourceRefs: unknown[] }[]; segments: { id: string; startMs: number }[] } };
     legacy.schemaVersion = '1.1.0';
     delete legacy.textMappingDecisions;
-    legacy.dataset.informationRules = legacy.dataset.informationRules.map((rule) => ({ id: rule.id, segmentId: rule.segmentId, notBeforeMs: legacy.dataset.segments.find((segment) => segment.id === rule.segmentId)?.startMs ?? rule.notBeforeMs, sourceRefs: [rule.sourceRefs[0]] }));
+    legacy.dataset.informationRules = legacy.dataset.informationRules.map((rule) => ({ id: rule.id, segmentId: rule.segmentId, baseNotBeforeMs: rule.baseNotBeforeMs, notBeforeMs: legacy.dataset.segments.find((segment) => segment.id === rule.segmentId)?.startMs ?? rule.baseNotBeforeMs, sourceRefs: [rule.sourceRefs[0]] }));
     for (const rule of legacy.dataset.informationRules) { delete (rule as { segmentId?: string }).segmentId; }
     for (const shot of legacy.shots) { shot.sourceUnitIds = shot.sourceLinks.map((link: ShotSourceLink): string => link.unitId); delete (shot as { sourceLinks?: ShotSourceLink[] }).sourceLinks; }
     const migrated: Project = parseProject(legacy);
-    expect(migrated.schemaVersion).toBe('1.2.0');
+    expect(migrated.schemaVersion).toBe('1.3.0');
     expect(migrated.shots.every((shot: Shot): boolean => shot.sourceLinks.length > 0)).toBe(true);
   });
 
   it('migration_does_not_silently_confirm_ambiguous_mapping', async (): Promise<void> => {
     const project: Project = await productionOutline();
-    const legacy = JSON.parse(JSON.stringify(project)) as { schemaVersion: string; shots: { sourceLinks: ShotSourceLink[]; sourceUnitIds?: string[] }[]; textMappingDecisions?: unknown; dataset: { informationRules: { id: string; segmentId: string; notBeforeMs: number; sourceRefs: unknown[] }[]; segments: { id: string; startMs: number }[] } };
+    const legacy = JSON.parse(JSON.stringify(project)) as { schemaVersion: string; shots: { sourceLinks: ShotSourceLink[]; sourceUnitIds?: string[] }[]; textMappingDecisions?: unknown; dataset: { informationRules: { id: string; segmentId: string; baseNotBeforeMs: number; notBeforeMs?: number; sourceRefs: unknown[] }[]; segments: { id: string; startMs: number }[] } };
     legacy.schemaVersion = '1.1.0';
     delete legacy.textMappingDecisions;
-    legacy.dataset.informationRules = legacy.dataset.informationRules.map((rule) => ({ id: rule.id, segmentId: rule.segmentId, notBeforeMs: legacy.dataset.segments.find((segment) => segment.id === rule.segmentId)?.startMs ?? rule.notBeforeMs, sourceRefs: [rule.sourceRefs[0]] }));
+    legacy.dataset.informationRules = legacy.dataset.informationRules.map((rule) => ({ id: rule.id, segmentId: rule.segmentId, baseNotBeforeMs: rule.baseNotBeforeMs, notBeforeMs: legacy.dataset.segments.find((segment) => segment.id === rule.segmentId)?.startMs ?? rule.baseNotBeforeMs, sourceRefs: [rule.sourceRefs[0]] }));
     for (const rule of legacy.dataset.informationRules) { delete (rule as { segmentId?: string }).segmentId; }
     for (const shot of legacy.shots) { shot.sourceUnitIds = shot.sourceLinks.map((link: ShotSourceLink): string => link.unitId); delete (shot as { sourceLinks?: ShotSourceLink[] }).sourceLinks; }
     const migrated: Project = parseProject(legacy);

@@ -1,5 +1,5 @@
 import { assertNoErrors, contractError } from './errors.js';
-import type { Asset, AudioCue, GenerationRecord, Project, StoryboardFrame } from './schema.js';
+import type { Asset, AudioCue, GenerationRecord, Project, Shot, ShotSourceLink, StoryboardFrame } from './schema.js';
 import { ProjectSchema } from './schema.js';
 import { validateProject } from './validation.js';
 import { sha256Bytes, sha256Text } from '../importers/integrity.js';
@@ -118,8 +118,7 @@ export function applyGeneratedSpeech(
   if (segment === undefined) throw contractError('SEGMENT_NOT_FOUND', `원문의 구간을 찾을 수 없습니다: ${unit.segmentId}`, []);
   const durationMs: number = wavDurationMs(result.bytes);
   const endMs: number = cue.startMs + durationMs;
-  const totalEndMs: number = project.dataset.segments.at(-1)?.endMs ?? 0;
-  if (endMs > totalEndMs) throw contractError('GENERATED_SPEECH_TOO_LONG', `${cueId}: 생성 음성이 전체 타임라인 종료를 ${endMs - totalEndMs}ms 초과합니다. 큐 시작점이나 원본 구간을 조정하세요.`, []);
+  if (cue.startMs < segment.startMs || endMs > segment.endMs) throw contractError('GENERATED_SPEECH_TOO_LONG', `${cueId}: 생성 음성이 원문 구간 ${segment.id}의 범위를 벗어납니다. segment=${segment.startMs}..${segment.endMs}, audio=${cue.startMs}..${endMs}`, []);
   const assetId: string = `${generationId}:audio`;
   if (project.assets.some((asset: Asset): boolean => asset.id === assetId)) throw contractError('DUPLICATE_ASSET_ID', `자산 ID가 이미 존재합니다: ${assetId}`, []);
   const prior: Asset | undefined = cue.assetId === null ? undefined : project.assets.find((asset: Asset): boolean => asset.id === cue.assetId);
@@ -127,8 +126,19 @@ export function applyGeneratedSpeech(
   const asset: Asset = { id: assetId, kind: 'audio', subjectId: cue.id, path: relativePath, mimeType: result.mimeType, sha256: sha256Bytes(result.bytes), description: `가이드 음성: ${unit.text}`, durationMs, version: (prior?.version ?? 0) + 1 };
   const shotIds: string[] = project.shots.filter((shot): boolean => shot.sourceLinks.some((link): boolean => link.unitId === unit.id)).map((shot): string => shot.id);
   const record: GenerationRecord = generationRecord(generationId, result, [assetId], shotIds, [], createdAt);
+  const affectedShotIds: Set<string> = new Set<string>();
+  const shots: Shot[] = project.shots.map((shot: Shot): Shot => {
+    if (!shot.sourceLinks.some((link: ShotSourceLink): boolean => link.unitId === unit.id)) return shot;
+    affectedShotIds.add(shot.id);
+    return { ...shot, approvalStatus: 'proposed', sourceLinks: shot.sourceLinks.map((link: ShotSourceLink): ShotSourceLink => {
+      if (link.unitId !== unit.id || cue.startMs < shot.startMs || endMs > shot.endMs) return link;
+      return { ...link, status: 'confirmed', temporalAnchor: { kind: 'shot-offset', startOffsetMs: cue.startMs - shot.startMs, endOffsetMs: endMs - shot.startMs, basis: 'audio-cue', status: 'confirmed' } };
+    }) };
+  });
   const next: Project = { ...project, assets: [...project.assets, asset],
     audioCues: project.audioCues.map((candidate: AudioCue): AudioCue => candidate.id === cueId ? { ...candidate, endMs, timingStatus: 'measured', assetId } : candidate),
+    shots,
+    frames: project.frames.map((frame: StoryboardFrame): StoryboardFrame => affectedShotIds.has(frame.shotId) ? { ...frame, visualReview: 'pending' } : frame),
     generationRecords: [...project.generationRecords, record] };
   return { project: finalize(project, next), relativePath, content: result.bytes };
 }

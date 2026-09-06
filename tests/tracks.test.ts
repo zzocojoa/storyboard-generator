@@ -14,11 +14,12 @@ describe('독립 오디오·글자 트랙 편집', (): void => {
     const project: Project = await outline();
     const cue: AudioCue | undefined = project.audioCues[0];
     if (cue === undefined) throw new Error('검증용 오디오 큐가 없습니다.');
-    const asset: Asset = { id: 'audio-asset', kind: 'audio', subjectId: null, path: 'assets/audio.wav', mimeType: 'audio/wav', sha256: '0'.repeat(64), description: '가이드 음성', durationMs: cue.endMs - cue.startMs, version: 1 };
-    const measured: Project = { ...project, assets: [asset], audioCues: project.audioCues.map((candidate): AudioCue => candidate.id === cue.id ? { ...candidate, assetId: asset.id, timingStatus: 'measured' } : candidate) };
-    const shifted: Project = updateAudioCueTiming(measured, cue.id, { startMs: cue.startMs + 100, endMs: cue.endMs + 100 });
-    expect(shifted.audioCues.find((candidate): boolean => candidate.id === cue.id)).toEqual(expect.objectContaining({ assetId: asset.id, timingStatus: 'measured' }));
-    const resized: Project = updateAudioCueTiming(shifted, cue.id, { startMs: cue.startMs + 100, endMs: cue.endMs + 200 });
+    const measuredCue: AudioCue = { ...cue, endMs: cue.endMs - 200, assetId: 'audio-asset', timingStatus: 'measured' };
+    const asset: Asset = { id: 'audio-asset', kind: 'audio', subjectId: cue.id, path: 'assets/audio.wav', mimeType: 'audio/wav', sha256: '0'.repeat(64), description: '가이드 음성', durationMs: measuredCue.endMs - measuredCue.startMs, version: 1 };
+    const measured: Project = { ...project, assets: [asset], audioCues: project.audioCues.map((candidate): AudioCue => candidate.id === cue.id ? measuredCue : candidate) };
+    const shifted: Project = updateAudioCueTiming(measured, cue.id, { startMs: measuredCue.startMs + 100, endMs: measuredCue.endMs + 100 });
+    expect(shifted.audioCues.find((candidate): boolean => candidate.id === cue.id)).toEqual(expect.objectContaining({ assetId: asset.id, timingStatus: 'proposed' }));
+    const resized: Project = updateAudioCueTiming(shifted, cue.id, { startMs: measuredCue.startMs + 100, endMs: measuredCue.endMs + 200 });
     expect(resized.audioCues.find((candidate): boolean => candidate.id === cue.id)).toEqual(expect.objectContaining({ assetId: null, timingStatus: 'proposed' }));
     expect(project.audioCues[0]).toEqual(cue);
   });

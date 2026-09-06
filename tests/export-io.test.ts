@@ -9,11 +9,22 @@ import { sha256Text } from '../src/importers/integrity.js';
 import { readPackage } from '../src/io/package.js';
 import { readProject, writeNewText } from '../src/io/project.js';
 import { createSourceOutline } from '../src/proposal/outline.js';
-import { nativePackage } from './helpers.js';
+import type { NativeDataset } from '../src/domain/schema.js';
+import { nativeData, nativePackage, withNativeData } from './helpers.js';
 
 describe('저장과 출력 경계', (): void => {
   it('JSON 재열기가 원문·컷·시간·검토 상태를 보존하고 기존 파일을 덮어쓰지 않는다', async (): Promise<void> => {
-    const project = createSourceOutline(importPackage(await nativePackage()), { proposedTextHoldMs: 3000 });
+    const payload = await nativePackage();
+    const data: NativeDataset = nativeData(payload);
+    const gateData: NativeDataset = {
+      ...data,
+      units: data.units.map((unit) => unit.id === '동작' ? { ...unit, informationIds: ['info:watering'] } : unit),
+      informationRules: [{
+        id: 'info:watering', segmentId: 'demonstration', notBeforeMs: 5000,
+        notBeforeUnitId: '동작', notBeforeUnitOrder: 2, precision: 'exact-time',
+      }],
+    };
+    const project = createSourceOutline(importPackage(withNativeData(payload, gateData)), { proposedTextHoldMs: 3000 });
     const directory: string = await mkdtemp(join(tmpdir(), 'storyboard-json-'));
     const path: string = join(directory, 'project.json');
     await writeNewText(path, exportProjectJson(project));
@@ -26,6 +37,11 @@ describe('저장과 출력 경계', (): void => {
     expect(csv).toContain('"17500"');
     expect(csv).toContain('proposed');
     expect(csv).toContain('"source_links"');
+    expect(csv).toContain('"source_temporal_anchors"');
+    expect(csv).toContain('"information_gates"');
+    expect(csv).toContain('baseNotBeforeMs');
+    expect(csv).toContain('effectiveNotBeforeMs');
+    expect(csv).toContain('temporalAnchor');
     expect(csv).toContain('primary-visual');
     expect(csv).toContain('confirmed');
     expect(csvCell('=2+2')).toBe('"\'=2+2"');

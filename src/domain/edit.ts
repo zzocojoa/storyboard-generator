@@ -1,7 +1,7 @@
 import { assertNoErrors, contractError } from './errors.js';
-import { approvalIssuesForShot, effectiveInformationGate } from './mapping.js';
+import { approvalIssuesForShot, effectiveInformationGate, sourceAnchorRange } from './mapping.js';
 import { ProjectSchema, ShotContentSchema } from './schema.js';
-import type { AudioCue, Issue, LockedField, Project, Shot, ShotContent, ShotSourceLink, SourceUnit, StoryboardFrame, TextCue, TextMappingDecision, TextPlacement } from './schema.js';
+import type { Asset, AudioCue, Issue, LockedField, Project, Shot, ShotContent, ShotSourceLink, SourceUnit, StoryboardFrame, TextCue, TextMappingDecision, TextPlacement } from './schema.js';
 import { validateProject } from './validation.js';
 
 export function shotContent(shot: Shot): ShotContent {
@@ -62,25 +62,44 @@ export function approveShot(project: Project, shotId: string): Project {
   return finishEdit(project, { ...project, shots: project.shots.map((shot: Shot): Shot => shot.id === shotId ? { ...shot, lockedFields: fields, approvalStatus: 'approved' } : shot) });
 }
 
-type TimedEvidence = { startMs: number; endMs: number; kind: 'audio' | 'text' };
+type TimedEvidence = { startMs: number; endMs: number; kind: 'audio' | 'text' | 'anchor'; basis: 'manual' | 'text-cue' | 'audio-cue' | 'proposal' | 'native-exact' };
 
-function linkEvidence(project: Project, link: ShotSourceLink): TimedEvidence[] {
-  const audio: TimedEvidence[] = project.audioCues.filter((cue: AudioCue): boolean => cue.unitId === link.unitId)
-    .map((cue: AudioCue): TimedEvidence => ({ startMs: cue.startMs, endMs: cue.endMs, kind: 'audio' }));
-  const directText: TimedEvidence[] = project.textCues.filter((cue: TextCue): boolean => cue.unitId === link.unitId)
-    .map((cue: TextCue): TimedEvidence => ({ startMs: cue.startMs, endMs: cue.endMs, kind: 'text' }));
-  const mappedPlacementIds: string[] = project.textMappingDecisions.filter((decision: TextMappingDecision): boolean => decision.canonicalUnitId === link.unitId).map((decision: TextMappingDecision): string => decision.placementId);
+function validMeasuredCue(project: Project, cue: AudioCue): boolean {
+  const asset: Asset | undefined = cue.assetId === null ? undefined : project.assets.find((candidate: Asset): boolean => candidate.id === cue.assetId && candidate.kind === 'audio');
+  return cue.timingStatus === 'measured' && asset !== undefined && asset.subjectId === cue.id && asset.durationMs === cue.endMs - cue.startMs;
+}
+
+function linkEvidence(project: Project, shot: Shot, link: ShotSourceLink): TimedEvidence[] {
+  const anchor = sourceAnchorRange(project, shot, link);
+  const anchored: TimedEvidence[] = anchor === null || link.temporalAnchor.kind === 'unresolved' ? [] : [{ startMs: anchor.startMs, endMs: anchor.endMs, kind: 'anchor', basis: link.temporalAnchor.basis }];
+  const audio: TimedEvidence[] = project.audioCues.filter((cue: AudioCue): boolean => cue.unitId === link.unitId && validMeasuredCue(project, cue))
+    .map((cue: AudioCue): TimedEvidence => ({ startMs: cue.startMs, endMs: cue.endMs, kind: 'audio', basis: 'audio-cue' }));
+  const directText: TimedEvidence[] = project.textCues.filter((cue: TextCue): boolean => cue.unitId === link.unitId && cue.timingStatus === 'confirmed')
+    .map((cue: TextCue): TimedEvidence => ({ startMs: cue.startMs, endMs: cue.endMs, kind: 'text', basis: 'text-cue' }));
+  const mappedPlacementIds: string[] = project.textMappingDecisions.filter((decision: TextMappingDecision): boolean => decision.canonicalUnitId === link.unitId && decision.status === 'confirmed').map((decision: TextMappingDecision): string => decision.placementId);
   const mappedText: TimedEvidence[] = project.dataset.textPlacements.filter((placement: TextPlacement): boolean => mappedPlacementIds.includes(placement.id))
     .map((placement: TextPlacement): TimedEvidence => {
       const cue: TextCue | undefined = project.textCues.find((value: TextCue): boolean => value.placementId === placement.id);
-      return { startMs: placement.startMs, endMs: placement.endMs ?? cue?.endMs ?? placement.startMs + 1, kind: 'text' };
+      return { startMs: placement.startMs, endMs: placement.endMs ?? cue?.endMs ?? placement.startMs + 1, kind: 'text', basis: 'text-cue' };
     });
-  return [...audio, ...directText, ...mappedText];
+  const values: TimedEvidence[] = [...anchored, ...audio, ...directText, ...mappedText];
+  const keys: Set<string> = new Set<string>();
+  return values.filter((value: TimedEvidence): boolean => {
+    const key: string = `${value.startMs}:${value.endMs}:${value.basis}`;
+    if (keys.has(key)) return false;
+    keys.add(key);
+    return true;
+  });
 }
 
-function crossingLinks(link: ShotSourceLink, kind: TimedEvidence['kind']): { first: ShotSourceLink; second: ShotSourceLink } {
-  const usage: ShotSourceLink['usage'] = kind === 'text' || ['primary-visual', 'continued-visual'].includes(link.usage) ? 'continued-visual' : 'audio-only';
-  return { first: { ...link, usage }, second: { ...link, usage } };
+function anchoredLink(link: ShotSourceLink, evidence: TimedEvidence, startMs: number, endMs: number, continued: boolean): ShotSourceLink {
+  const overlapStart: number = Math.max(startMs, evidence.startMs);
+  const overlapEnd: number = Math.min(endMs, evidence.endMs);
+  const anchorEnd: number = Math.max(overlapStart + 1, overlapEnd);
+  const usage: ShotSourceLink['usage'] = continued && (link.usage === 'primary-visual' || link.usage === 'continued-visual') ? 'continued-visual' : link.usage;
+  return { ...link, usage, status: 'confirmed', temporalAnchor: {
+    kind: 'shot-offset', startOffsetMs: overlapStart - startMs, endOffsetMs: anchorEnd - startMs, basis: evidence.basis, status: 'confirmed',
+  } };
 }
 
 function estimatedSide(project: Project, shot: Shot, link: ShotSourceLink, atMs: number): 'first' | 'second' {
@@ -95,19 +114,18 @@ function estimatedSide(project: Project, shot: Shot, link: ShotSourceLink, atMs:
 
 function allocateSplitLinks(project: Project, shot: Shot, atMs: number): { first: ShotSourceLink[]; second: ShotSourceLink[] } {
   return shot.sourceLinks.reduce((result: { first: ShotSourceLink[]; second: ShotSourceLink[] }, link: ShotSourceLink) => {
-    const evidence: TimedEvidence[] = linkEvidence(project, link);
+    const evidence: TimedEvidence[] = linkEvidence(project, shot, link);
     const crosses: TimedEvidence | undefined = evidence.find((value: TimedEvidence): boolean => value.startMs < atMs && value.endMs > atMs);
     if (crosses !== undefined) {
-      const split = crossingLinks(link, crosses.kind);
-      return { first: [...result.first, split.first], second: [...result.second, split.second] };
+      return { first: [...result.first, anchoredLink(link, crosses, shot.startMs, atMs, false)], second: [...result.second, anchoredLink(link, crosses, atMs, shot.endMs, true)] };
     }
-    if (evidence.length > 0 && evidence.every((value: TimedEvidence): boolean => value.endMs <= atMs)) return { ...result, first: [...result.first, link] };
-    if (evidence.length > 0 && evidence.every((value: TimedEvidence): boolean => value.startMs >= atMs)) return { ...result, second: [...result.second, link] };
+    if (evidence.length > 0 && evidence.every((value: TimedEvidence): boolean => value.endMs <= atMs)) return { ...result, first: [...result.first, anchoredLink(link, evidence[0] as TimedEvidence, shot.startMs, atMs, false)] };
+    if (evidence.length > 0 && evidence.every((value: TimedEvidence): boolean => value.startMs >= atMs)) return { ...result, second: [...result.second, anchoredLink(link, evidence[0] as TimedEvidence, atMs, shot.endMs, false)] };
     if (evidence.length > 0) {
-      const split = crossingLinks(link, evidence.some((value: TimedEvidence): boolean => value.kind === 'text') ? 'text' : 'audio');
-      return { first: [...result.first, split.first], second: [...result.second, split.second] };
+      const unresolved: ShotSourceLink = { ...link, status: 'mapping-required', temporalAnchor: { kind: 'unresolved', basis: 'mapping-change', status: 'review-required' } };
+      return { first: [...result.first, unresolved], second: [...result.second, { ...unresolved, usage: link.usage === 'primary-visual' ? 'continued-visual' : link.usage }] };
     }
-    const uncertain: ShotSourceLink = { ...link, status: 'mapping-required' };
+    const uncertain: ShotSourceLink = { ...link, status: 'mapping-required', temporalAnchor: { kind: 'unresolved', basis: 'estimated', status: 'review-required' } };
     return estimatedSide(project, shot, link, atMs) === 'first' ? { ...result, first: [...result.first, uncertain] } : { ...result, second: [...result.second, uncertain] };
   }, { first: [], second: [] });
 }
@@ -115,7 +133,7 @@ function allocateSplitLinks(project: Project, shot: Shot, atMs: number): { first
 function splitInformationIds(project: Project, links: readonly ShotSourceLink[], startMs: number, ids: readonly string[]): string[] {
   const unitIds: Set<string> = new Set(links.map((link: ShotSourceLink): string => link.unitId));
   return ids.filter((id: string): boolean => project.dataset.units.some((unit: SourceUnit): boolean => unitIds.has(unit.id) && unit.informationIds.includes(id))
-    && effectiveInformationGate(project, id).notBeforeMs <= startMs);
+    && !effectiveInformationGate(project, id).reviewRequired && effectiveInformationGate(project, id).effectiveNotBeforeMs <= startMs);
 }
 
 export function splitShot(project: Project, shotId: string, atMs: number, newShotId: string, newFrameId: string): Project {
@@ -138,13 +156,21 @@ export function splitShot(project: Project, shotId: string, atMs: number, newSho
   });
 }
 
-function mergeSourceLinks(first: readonly ShotSourceLink[], second: readonly ShotSourceLink[]): ShotSourceLink[] {
-  const unitIds: string[] = [...new Set([...first, ...second].map((link: ShotSourceLink): string => link.unitId))];
+function mergeSourceLinks(project: Project, first: Shot, second: Shot): ShotSourceLink[] {
+  const unitIds: string[] = [...new Set([...first.sourceLinks, ...second.sourceLinks].map((link: ShotSourceLink): string => link.unitId))];
   return unitIds.map((unitId: string): ShotSourceLink => {
-    const links: ShotSourceLink[] = [...first, ...second].filter((link: ShotSourceLink): boolean => link.unitId === unitId);
-    const primary: ShotSourceLink | undefined = links.find((link: ShotSourceLink): boolean => link.usage === 'primary-visual');
-    const selected: ShotSourceLink = primary ?? links[0] as ShotSourceLink;
-    return { ...selected, status: links.some((link: ShotSourceLink): boolean => link.status === 'mapping-required') ? 'mapping-required' : 'confirmed' };
+    const entries: { shot: Shot; link: ShotSourceLink }[] = [
+      ...first.sourceLinks.filter((link: ShotSourceLink): boolean => link.unitId === unitId).map((link: ShotSourceLink) => ({ shot: first, link })),
+      ...second.sourceLinks.filter((link: ShotSourceLink): boolean => link.unitId === unitId).map((link: ShotSourceLink) => ({ shot: second, link })),
+    ];
+    const selected: ShotSourceLink = entries.find((entry): boolean => entry.link.usage === 'primary-visual')?.link ?? (entries[0] as { link: ShotSourceLink }).link;
+    const ranges = entries.map((entry) => sourceAnchorRange(project, entry.shot, entry.link));
+    const bases = entries.flatMap((entry): string[] => entry.link.temporalAnchor.kind === 'unresolved' ? [] : [entry.link.temporalAnchor.basis]);
+    if (ranges.some((range): boolean => range === null) || new Set(bases).size !== 1) return { ...selected, status: 'mapping-required', temporalAnchor: { kind: 'unresolved', basis: 'mapping-change', status: 'review-required' } };
+    const starts: number[] = ranges.map((range): number => (range as { startMs: number }).startMs);
+    const ends: number[] = ranges.map((range): number => (range as { endMs: number }).endMs);
+    const basis = bases[0] as 'manual' | 'text-cue' | 'audio-cue' | 'proposal' | 'native-exact';
+    return { ...selected, status: 'confirmed', temporalAnchor: { kind: 'shot-offset', startOffsetMs: Math.min(...starts) - first.startMs, endOffsetMs: Math.max(...ends) - first.startMs, basis, status: 'confirmed' } };
   });
 }
 
@@ -159,7 +185,7 @@ export function mergeShots(project: Project, firstId: string, secondId: string):
   }
   const offset: number = first.endMs - first.startMs;
   const merged: Shot = { ...first, endMs: second.endMs, action: [...new Set([first.action, second.action])].filter(Boolean).join('\n'),
-    sourceLinks: mergeSourceLinks(first.sourceLinks, second.sourceLinks),
+    sourceLinks: mergeSourceLinks(project, first, second),
     propIds: [...new Set([...first.propIds, ...second.propIds])], informationIds: [...new Set([...first.informationIds, ...second.informationIds])],
     continuityAfter: second.continuityAfter, transitionOut: second.transitionOut, proposalOrigin: 'manual', approvalStatus: 'proposed', lockedFields: [...new Set([...first.lockedFields, ...second.lockedFields])],
   };
@@ -184,7 +210,12 @@ export function reorderShots(project: Project, segmentId: string, orderedIds: re
     const startMs: number = start + ordered.slice(0, index).reduce((total: number, value: Shot): number => total + value.endMs - value.startMs, 0);
     if (shot.startMs === startMs) return shot;
     requireUnlocked(shot, ['timing']);
-    return { ...shot, startMs, endMs: startMs + shot.endMs - shot.startMs, proposalOrigin: 'manual', approvalStatus: 'proposed' };
+    const sourceLinks: ShotSourceLink[] = shot.sourceLinks.map((link: ShotSourceLink): ShotSourceLink => {
+      if (link.temporalAnchor.kind === 'unresolved' || link.temporalAnchor.basis === 'manual' || link.temporalAnchor.basis === 'proposal') return link;
+      const basis: 'mapping-change' | 'audio-change' = link.temporalAnchor.basis === 'audio-cue' ? 'audio-change' : 'mapping-change';
+      return { ...link, status: 'mapping-required', temporalAnchor: { kind: 'unresolved', basis, status: 'review-required' } };
+    });
+    return { ...shot, startMs, endMs: startMs + shot.endMs - shot.startMs, sourceLinks, proposalOrigin: 'manual', approvalStatus: 'proposed' };
   });
   const firstId: string | undefined = original[0]?.id;
   return finishEdit(project, { ...project, shots: project.shots.flatMap((shot: Shot): Shot[] => shot.id === firstId ? moved : shot.segmentId === segmentId ? [] : [shot]),

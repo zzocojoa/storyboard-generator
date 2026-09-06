@@ -63,7 +63,7 @@ export const UnitSchema = z.strictObject({
   sourceRefs: z.array(SourceRefSchema).min(1),
 });
 export const InformationRuleSchema = z.strictObject({
-  id: IdSchema, segmentId: IdSchema, notBeforeMs: MillisecondsSchema,
+  id: IdSchema, segmentId: IdSchema, baseNotBeforeMs: MillisecondsSchema,
   notBeforeUnitId: IdSchema.nullable(), notBeforeUnitOrder: z.number().int().positive().nullable(),
   precision: z.enum(['exact-time', 'unit-order', 'segment-start']), sourceRefs: z.array(SourceRefSchema).min(1),
 });
@@ -75,12 +75,38 @@ export const TextPlacementSchema = z.strictObject({
   id: IdSchema, segmentId: IdSchema, startMs: MillisecondsSchema, endMs: MillisecondsSchema.nullable(),
   text: z.string().min(1), unitId: IdSchema.nullable(), sourceRefs: z.array(SourceRefSchema).min(1),
 });
-export const TextMappingDecisionSchema = z.strictObject({
+const TextMappingDecisionFieldsSchema = z.strictObject({
   id: IdSchema, placementId: IdSchema, canonicalUnitId: IdSchema.nullable(),
-  relation: z.enum(['exact', 'abbreviation', 'separate-element', 'replacement']),
+  relation: z.enum(['exact', 'abbreviation', 'separate-element', 'replacement', 'standalone-placement']),
   status: z.enum(['unresolved', 'confirmed']), renderCanonicalSeparately: z.boolean(),
   canonicalStartMs: MillisecondsSchema.nullable(), canonicalEndMs: MillisecondsSchema.nullable(),
   note: z.string().nullable(),
+});
+export const TextMappingDecisionSchema = TextMappingDecisionFieldsSchema.superRefine((decision, context): void => {
+  const hasCanonical: boolean = decision.canonicalUnitId !== null;
+  const hasStart: boolean = decision.canonicalStartMs !== null;
+  const hasEnd: boolean = decision.canonicalEndMs !== null;
+  const hasValidRange: boolean = hasStart && hasEnd && (decision.canonicalEndMs as number) > (decision.canonicalStartMs as number);
+  const addIssue = (message: string, path: string): void => context.addIssue({ code: 'custom', message, path: [path] });
+  if (decision.relation === 'standalone-placement') {
+    if (hasCanonical) addIssue('독립 Placement는 Canonical Unit을 가질 수 없습니다.', 'canonicalUnitId');
+    if (decision.renderCanonicalSeparately) addIssue('독립 Placement는 Canonical 문구를 별도로 렌더링할 수 없습니다.', 'renderCanonicalSeparately');
+    if (hasStart || hasEnd) addIssue('독립 Placement는 Canonical 시각을 가질 수 없습니다.', 'canonicalStartMs');
+    return;
+  }
+  if (!hasCanonical) addIssue(`${decision.relation} 관계에는 Canonical Unit이 필요합니다.`, 'canonicalUnitId');
+  if (decision.relation === 'exact') {
+    if (decision.renderCanonicalSeparately) addIssue('정확 일치 관계는 Canonical 문구를 중복 렌더링할 수 없습니다.', 'renderCanonicalSeparately');
+    if (hasStart || hasEnd) addIssue('정확 일치 관계는 별도 Canonical 시각을 가질 수 없습니다.', 'canonicalStartMs');
+    return;
+  }
+  if (decision.relation === 'separate-element') {
+    if (!decision.renderCanonicalSeparately) addIssue('별도 요소 관계는 Canonical 문구를 별도로 렌더링해야 합니다.', 'renderCanonicalSeparately');
+    if (!hasValidRange) addIssue('별도 요소 관계에는 올바른 Canonical 시작·종료 시각이 필요합니다.', 'canonicalStartMs');
+    return;
+  }
+  if (decision.renderCanonicalSeparately && !hasValidRange) addIssue('Canonical 문구를 별도로 렌더링하려면 올바른 시작·종료 시각이 필요합니다.', 'canonicalStartMs');
+  if (!decision.renderCanonicalSeparately && (hasStart || hasEnd)) addIssue('별도 렌더링을 사용하지 않으면 Canonical 시각은 비워야 합니다.', 'canonicalStartMs');
 });
 export const IssueSchema = z.strictObject({
   code: z.string().min(1), severity: z.enum(['error', 'conflict', 'warning']),
@@ -119,10 +145,24 @@ export const TransitionSchema = z.strictObject({
   note: z.string(),
 });
 export const LockedFieldSchema = z.enum(['timing', 'sources', 'action', 'camera', 'location', 'presence', 'continuity', 'transition', 'frames']);
+export const SourceAnchorBasisSchema = z.enum(['manual', 'text-cue', 'audio-cue', 'proposal', 'native-exact', 'estimated', 'migration', 'mapping-change', 'source-move', 'audio-change']);
+export const SourceTemporalAnchorSchema = z.discriminatedUnion('kind', [
+  z.strictObject({
+    kind: z.literal('shot-offset'), startOffsetMs: MillisecondsSchema, endOffsetMs: MillisecondsSchema,
+    basis: z.enum(['manual', 'text-cue', 'audio-cue', 'proposal', 'native-exact']), status: z.literal('confirmed'),
+  }).refine((anchor): boolean => anchor.endOffsetMs > anchor.startOffsetMs, { message: 'Source Anchor 종료 시각은 시작 시각보다 늦어야 합니다.', path: ['endOffsetMs'] }),
+  z.strictObject({
+    kind: z.literal('frame'), frameId: IdSchema, basis: z.enum(['manual', 'proposal']), status: z.literal('confirmed'),
+  }),
+  z.strictObject({
+    kind: z.literal('unresolved'), basis: z.enum(['estimated', 'migration', 'mapping-change', 'source-move', 'audio-change']), status: z.literal('review-required'),
+  }),
+]);
 export const ShotSourceLinkSchema = z.strictObject({
   unitId: IdSchema,
   usage: z.enum(['primary-visual', 'continued-visual', 'audio-only', 'context-only']),
   status: z.enum(['confirmed', 'mapping-required']),
+  temporalAnchor: SourceTemporalAnchorSchema,
 });
 export const ShotSchema = z.strictObject({
   id: IdSchema, segmentId: IdSchema, startMs: MillisecondsSchema, endMs: MillisecondsSchema,
@@ -161,7 +201,7 @@ export const GenerationSchema = z.strictObject({
   referenceHashes: z.array(HashSchema), resultAssetIds: z.array(IdSchema), shotIds: z.array(IdSchema), createdAt: z.iso.datetime(),
 });
 export const ProjectSchema = z.strictObject({
-  schemaVersion: z.literal('1.2.0'), projectId: IdSchema, title: z.string().min(1), revision: z.number().int().nonnegative(),
+  schemaVersion: z.literal('1.3.0'), projectId: IdSchema, title: z.string().min(1), revision: z.number().int().nonnegative(),
   profile: ProfileSchema,
   handoff: HandoffSchema, sources: z.array(SnapshotSchema), dataset: DatasetSchema, importIssues: z.array(IssueSchema),
   textMappingDecisions: z.array(TextMappingDecisionSchema),
@@ -193,6 +233,7 @@ export type NativeDataset = z.infer<typeof NativeDatasetSchema>;
 export type Transition = z.infer<typeof TransitionSchema>;
 export type Shot = z.infer<typeof ShotSchema>;
 export type ShotSourceLink = z.infer<typeof ShotSourceLinkSchema>;
+export type SourceTemporalAnchor = z.infer<typeof SourceTemporalAnchorSchema>;
 export type ShotContent = z.infer<typeof ShotContentSchema>;
 export type LockedField = z.infer<typeof LockedFieldSchema>;
 export type StoryboardFrame = z.infer<typeof FrameSchema>;

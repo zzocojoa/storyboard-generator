@@ -37,12 +37,104 @@
               "confirmed",
               "mapping-required"
             ]
+          },
+          "temporalAnchor": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "$ref": "#/$defs/__schema2"
+                  },
+                  "startOffsetMs": {
+                    "$ref": "#/$defs/__schema1"
+                  },
+                  "endOffsetMs": {
+                    "$ref": "#/$defs/__schema1"
+                  },
+                  "basis": {
+                    "$ref": "#/$defs/__schema3"
+                  },
+                  "status": {
+                    "$ref": "#/$defs/__schema4"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "startOffsetMs",
+                  "endOffsetMs",
+                  "basis",
+                  "status"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "frame"
+                  },
+                  "frameId": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "basis": {
+                    "type": "string",
+                    "enum": [
+                      "manual",
+                      "proposal"
+                    ]
+                  },
+                  "status": {
+                    "type": "string",
+                    "const": "confirmed"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "frameId",
+                  "basis",
+                  "status"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "unresolved"
+                  },
+                  "basis": {
+                    "type": "string",
+                    "enum": [
+                      "estimated",
+                      "migration",
+                      "mapping-change",
+                      "source-move",
+                      "audio-change"
+                    ]
+                  },
+                  "status": {
+                    "type": "string",
+                    "const": "review-required"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "basis",
+                  "status"
+                ],
+                "additionalProperties": false
+              }
+            ]
           }
         },
         "required": [
           "unitId",
           "usage",
-          "status"
+          "status",
+          "temporalAnchor"
         ],
         "additionalProperties": false
       }
@@ -117,13 +209,13 @@
     "continuityBefore": {
       "type": "array",
       "items": {
-        "$ref": "#/$defs/__schema2"
+        "$ref": "#/$defs/__schema5"
       }
     },
     "continuityAfter": {
       "type": "array",
       "items": {
-        "$ref": "#/$defs/__schema2"
+        "$ref": "#/$defs/__schema5"
       }
     },
     "cameraAxis": {
@@ -240,6 +332,24 @@
       "maximum": 9007199254740991
     },
     "__schema2": {
+      "type": "string",
+      "const": "shot-offset"
+    },
+    "__schema3": {
+      "type": "string",
+      "enum": [
+        "manual",
+        "text-cue",
+        "audio-cue",
+        "proposal",
+        "native-exact"
+      ]
+    },
+    "__schema4": {
+      "type": "string",
+      "const": "confirmed"
+    },
+    "__schema5": {
       "type": "object",
       "properties": {
         "assetId": {

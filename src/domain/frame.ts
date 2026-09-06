@@ -30,7 +30,7 @@ export function addStoryboardFrame(project: Project, shotId: string, frameId: st
   requireEditableShot(project, shotId);
   if (project.frames.some((frame: StoryboardFrame): boolean => frame.id === frameId)) throw contractError('DUPLICATE_FRAME_ID', `프레임 ID가 이미 존재합니다: ${frameId}`, []);
   const frame: StoryboardFrame = { id: frameId, shotId, ...frameInput, imageAssetId: null, visualReview: 'pending' };
-  return finish(project, { ...project, frames: [...project.frames, frame] });
+  return finish(project, { ...project, frames: [...project.frames, frame], shots: project.shots.map((shot: Shot): Shot => shot.id === shotId ? { ...shot, approvalStatus: 'proposed' } : shot) });
 }
 
 export function updateStoryboardFrame(project: Project, frameId: string, input: StoryboardFrameInput): Project {
@@ -38,7 +38,10 @@ export function updateStoryboardFrame(project: Project, frameId: string, input: 
   const frame: StoryboardFrame = requireFrame(project, frameId);
   requireEditableShot(project, frame.shotId);
   if (frame.offsetMs === frameInput.offsetMs && frame.role === frameInput.role && frame.description === frameInput.description) return project;
-  return finish(project, { ...project, frames: project.frames.map((candidate: StoryboardFrame): StoryboardFrame => candidate.id === frameId ? { ...candidate, ...frameInput, visualReview: 'pending' } : candidate) });
+  return finish(project, { ...project,
+    frames: project.frames.map((candidate: StoryboardFrame): StoryboardFrame => candidate.id === frameId ? { ...candidate, ...frameInput, visualReview: 'pending' } : candidate),
+    shots: project.shots.map((candidate: Shot): Shot => candidate.id === frame.shotId ? { ...candidate, approvalStatus: 'proposed' } : candidate),
+  });
 }
 
 export function setFrameReview(project: Project, frameId: string, review: StoryboardFrame['visualReview']): Project {

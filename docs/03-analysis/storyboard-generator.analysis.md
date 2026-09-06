@@ -1,57 +1,46 @@
 # 범용 콘티 도구 — 구현 일치 분석
 
-분석 기준은 [Plan](../01-plan/features/storyboard-generator.plan.md)의 첫 완성본 필수 요구사항 FR-01~FR-10, [Design](../02-design/features/storyboard-generator.design.md), 1.2.0의 Text/Source Mapping과 Information Gate 계약이다. 완료 판단은 문서가 아니라 현재 코드, 생성 Schema, fixture, 자동 검사 결과를 따른다.
+분석 기준은 [Plan](../01-plan/features/storyboard-generator.plan.md)의 FR-01~FR-10, [Design](../02-design/features/storyboard-generator.design.md), 1.3.0의 Text Mapping·Source Temporal Anchor·Information Gate 계약이다. 완료 판단은 현재 코드, 생성 Schema, fixture와 자동 검사 결과를 따른다.
 
-## 결과
+## 요구사항 일치
 
-필수 요구사항 10개는 모두 코드와 자동 검사에 연결되어 코드 기준 일치율은 **100%**다. 이번 P0 세 영역도 Schema, Migration, Domain, Validator, API, UI, Export, Test에 반영됐다. 제작 이미지의 의미·연출과 낭독 품질은 자동 검사 대상이 아니며 사람이 별도로 검토한다.
-
-| 요구사항 | 판정 | 구현·검증 근거 |
+| 요구사항 | 판정 | 구현 근거 |
 |---|---|---|
-| FR-01 입력 패키지 | 일치 | `native-v1`, `production-v1`, 경로·버전·해시·권한 검사, 서로 다른 fixture 및 PRJ-007 전체 가져오기 |
-| FR-02 차이·누락·미정 표시 | 일치 | 불변 `importIssues`, 별도 `TextMappingDecision`, Mapping review API·화면 |
-| FR-03 제작 프로필·시각 기준 | 일치 | 프로젝트별 profile과 인물·장소·소품 기준 자산, 이미지 문맥 연결 |
-| FR-04 컷 생성·편집 | 일치 | 역할 기반 `sourceLinks`, 순서 검사, 분할·병합·재정렬·수동 Mapping 편집 |
-| FR-05 구도·행동·독립 트랙 | 일치 | 컷 연출·전환, Audio/Text Cue 독립 시간, 축약/Canonical 단일·별도 렌더링 결정 |
-| FR-06 그림 콘티 생성 | 일치 | Codex App 큐, `image_gen`, 직접 시각 Link 제한, Mapping·정보 Gate 차단 |
-| FR-07 시간순 재생 | 일치 | 프레임 절대 시각, 독립 글자·음성 트랙, 컷 전환 미리보기 |
-| FR-08 자동·사람 검토 | 일치 | 구조 오류와 승인 검토 분리, 구체적인 승인 차단 사유, Frame 시각 검토 상태 |
-| FR-09 잠금·revision·영향 범위 | 일치 | 낙관적 revision, Mapping 변경 무효화, Information Rule 포함 Source Impact·Update |
-| FR-10 JSON·PDF·CSV | 일치 | 1.2.0 JSON과 Migration, Source Link 역할·상태를 보존하는 PDF·CSV |
+| FR-01 입력 패키지 | 일치 | `native-v1`, `production-v1`, 경로·버전·해시·권한 검사 |
+| FR-02 차이·누락·미정 | 일치 | 불변 `importIssues`, Text/Source Mapping 검토 상태 |
+| FR-03 제작 프로필·시각 기준 | 일치 | 프로젝트별 profile과 인물·장소·소품 기준 자산 |
+| FR-04 컷 생성·편집 | 일치 | Source 사용·순서 정책, 분할·병합·재정렬·Link 이동 |
+| FR-05 독립 트랙 | 일치 | 컷 연출·전환과 Audio/Text Cue의 독립 시간 |
+| FR-06 그림 콘티 생성 | 일치 | Codex App 큐, 내장 `image_gen`, 프레임 단위 공개 검사 |
+| FR-07 시간순 재생 | 일치 | 프레임 절대 시각, 독립 글자·음성 트랙, 전환 미리보기 |
+| FR-08 자동·사람 검토 | 일치 | 프로젝트·구간·컷·프레임 공통 Review 함수와 시각 승인 |
+| FR-09 잠금·revision·영향 | 일치 | 모든 Mapping API의 `expectedRevision`, 변경 시 승인 무효화 |
+| FR-10 JSON·PDF·CSV | 일치 | 기준 Gate, 재계산 입력, 유효 Gate와 Anchor 출력 |
 
-## P0 해결 분석
+## 정보 공개 안전장치
 
-### 축약 자막과 Canonical 원문
+`InformationRule.baseNotBeforeMs`는 입력 원본에서 온 권한 하한이다. `effectiveInformationGate`는 현재 Text Mapping, Source Temporal Anchor, 검증된 측정 Audio Cue와 Unit 순서 근거를 읽어 유효 시각을 동적으로 계산한다. 유도 시각은 기준 규칙으로 저장하지 않으며 어떤 근거도 기준 하한보다 이른 공개를 허용하지 않는다.
 
-Placement마다 원본 검토 항목과 독립된 `TextMappingDecision`을 만든다. 문자열이 정확히 일치할 때만 `exact/confirmed`가 되고, 축약 후보와 별도 요소는 `unresolved`다. 미해결 상태에서도 원본 Placement Cue는 원래 시각에 남지만 Canonical 전체 문구를 Segment 시작에 만들지 않는다. `abbreviation` 또는 `replacement`를 별도 렌더링 없이 확정하면 하나의 Cue만 유지한다. 별도 요소는 Canonical 시작·종료 시각이 없으면 승인할 수 없다.
+Unit 순서만으로 계산한 시각은 확인 근거가 생길 때까지 review-required다. 확정 Source Anchor나 같은 Segment의 유효한 측정 Audio Cue가 유도 시각 이후에 있어야 검토가 해소된다. 오디오 자산은 cue ID, 종류, 길이와 Segment 범위를 모두 만족해야 시간 근거가 된다. 오디오 이동이나 길이 변경은 관련 Anchor와 승인 상태를 무효화한다.
 
-### Shot–Source 시간 Mapping
+직접 시각 Source Link는 `shot-offset` 또는 `frame` Anchor가 확정돼야 한다. 프레임 생성은 해당 프레임 시각에 활성화된 직접 Link만 문맥에 넣고, Text Mapping·Source 정책·정보 Gate 충돌을 모두 검사한다. `SOUND`와 `MUSIC`은 직접 시각 Link가 될 수 없고, 모든 Link를 `audio-only`나 `context-only`로 돌려 검사를 우회하는 제안은 거부한다.
 
-1.2.0의 권한 필드는 `sourceLinks` 하나다. Link는 시각·연속·음성·문맥 용도와 확정 상태를 가진다. 모델 제안은 Unit 누락·혼입·primary 중복·순서 역전을 거부한다. 수동 분할은 Audio/Text Cue의 분할점 관계를 사용하고, 시간 근거가 없는 원문은 한쪽에만 `mapping-required`로 배치한다. 승인과 이미지 생성은 미확정 Link를 거부하며 UI에서 용도·상태 수정과 같은 Segment의 앞뒤 컷 이동을 제공한다.
+## Mapping과 편집 의미
 
-### Segment 내부 Information Gate
+Canonical 후보는 `placement.unitId`, 허용 종류의 유일한 정확 일치, 유일한 휴리스틱 후보 순서로 선택한다. 중복 정확 일치는 unresolved로 남는다. `exact`, `abbreviation`, `replacement`, `separate-element`, `standalone-placement`는 Canonical 연결·별도 렌더링·시간 범위 조합을 Schema에서 검사한다.
 
-`InformationRule`은 Segment, 시각, 최초 Unit·순서, 정밀도를 보존한다. 유효 Gate는 확정 Text Placement, 측정 Audio Cue, Unit 순서, Segment 시작의 순서로 계산한다. 이미지 문맥은 직접 시각 Link의 정보와 컷 정보를 합쳐 `shot.startMs + frame.offsetMs`에서 검사한다. 승인 검사도 직접 시각 Link가 포함한 후반 정보를 검사하므로 빈 `informationIds`로 우회할 수 없다. Mapping과 Gate는 Codex basis hash 문맥에 포함된다.
+컷 분할은 확정된 Source Anchor, Text Mapping, Text Cue 또는 측정 Audio Cue만 시간 근거로 사용한다. 근거가 없거나 경계에 걸친 Link는 자동 복제하지 않고 검토 상태로 남긴다. 병합은 호환 Anchor를 합치고, 재정렬은 수동 컷 상대 Anchor를 보존하되 절대 시각에서 유도된 Text/Audio Anchor를 무효화한다. 다른 컷으로 Link를 옮길 때 기존 Anchor가 새 컷 범위에 안전하게 대응되지 않으면 재확정을 요구한다.
 
-## Migration과 호환성
+## Migration과 출력
 
-`1.0.0 → 1.1.0`의 전환 기본값 변환을 유지하고 `1.1.0 → 1.2.0`을 추가했다. 기존 `sourceUnitIds`는 원문 ID를 보존한 `context-only/mapping-required` Link가 된다. 기존 Placement에서는 정확한 문자열 일치만 자동 확정하며 축약·모호한 후보는 `unresolved`다. 기존 원문·컷·시간·자산·생성 기록·검토 상태는 보존한다. 이전 프로젝트는 열 수 있지만 Mapping 검토를 끝내기 전 관련 승인·생성은 차단된다.
+저장본은 `1.0.0 → 1.1.0 → 1.2.0 → 1.3.0` 순서로 변환한다. 1.2 Source Link에는 `unresolved/migration` Anchor를 부여하고 기존 승인 상태를 재검토한다. 정보 규칙은 보관된 handoff와 source snapshot에서 다시 정규화해 권한 `baseNotBeforeMs`를 복원한다. 원문, 컷, 시간, 자산, 생성 기록은 보존한다.
 
-## 검증 결과
+JSON은 기준 규칙과 모든 재계산 입력을 보존한다. CSV는 `source_temporal_anchors`와 `information_gates` 열을 제공하며, PDF는 Source Anchor 종류·근거와 기준/유효 Gate를 표시한다.
 
-- P0 재현 테스트는 구현 전 Canonical 조기 렌더링, 분할 Source 전체 복제, 프레임 시각 오계산을 각각 재현했다.
-- 전체 자동 검사는 18개 테스트 파일의 65개 테스트를 통과한다.
-- 생성 JSON Schema는 Zod 기준과 일치하고 운영 웹 빌드가 완료된다.
-- 로컬 브라우저에서 이전 1.1 저장 프로젝트가 1.2.0으로 열리고, `SEG-024`에 Source Mapping 7개, unresolved Text Mapping 2개, 정확한 세 Placement 시각과 구체적인 승인 차단 사유가 표시됨을 확인했다. 미해결 상태의 이미지 요청은 큐를 만들지 않고 관련 Mapping ID와 함께 거부된다.
-- PRJ-007 Golden은 Scene 12개, Segment 32개, screenplay Source Unit 79개, Panel Turn 16개, 1,500,000ms, 원문 변경 0건과 Segment 공백·겹침 0건을 확인한다.
-- `SEG-024`의 공개 Gate는 1,088,000ms, 1,108,000ms, 1,148,000ms를 유지한다. Canonical 조기 렌더링, Unit 역순, 다른 Segment 혼입, 미확정 Mapping 승인, 후반 정보의 앞 프레임 전달을 거부한다.
+## 검증 범위
 
-GitHub Actions workflow는 현재 저장소에 없으므로 이 결과는 로컬 검증 결과다.
+정보 공개 회귀 파일에는 요구된 27개 이름의 시나리오가 있다. 기준 Gate 불변성, 연속 컷 키 프레임 공개, Mapping 관계 불변식, 중복 정확 일치, Source 사용 우회, 편집 후 Anchor 의미, 공통 Review 계층, 오디오 엄격성, 보수적 Migration과 PRJ-007 공개 시각을 포함한다.
 
-## 남은 제작 검토
+현재 로컬 자동 검사는 19개 파일의 92개 테스트를 통과한다. PRJ-007 Golden은 12 Scene, 32 Segment, screenplay Unit 79개, Panel Turn 16개, 1,500,000ms와 원문·시간·참조 보존을 검사한다. `SEG-024`의 세 공개 시각은 1,088,000ms, 1,108,000ms, 1,148,000ms다.
 
-- PRJ-007 전체 32개 구간의 이미지 연출·시각 연속성과 낭독 호흡 검토
-- 구조가 다른 실제 두 번째 작품의 제작 품질과 입력 계약 적합성 검토
-- 사람 판단이 필요한 축약·대체·별도 요소 Mapping의 실제 확정
-
-지원 입력은 `native-v1`과 `production-v1`이다. 임의 문서 가져오기, 클라우드 협업, 전체 영상 렌더링은 현재 범위가 아니다.
+자동 검사는 구조·문자열·시간·참조·상태 무결성을 판정한다. 그림의 연출, 정보의 시각적 암시, 자막 가독성과 낭독 자연스러움은 사람이 실제 결과를 검토해야 한다. 지원 입력은 `native-v1`과 `production-v1`이며 임의 문서 가져오기, 클라우드 협업, 전체 영상 렌더링은 현재 범위가 아니다.

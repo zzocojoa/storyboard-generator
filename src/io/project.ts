@@ -2,11 +2,10 @@ import { link, mkdir, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { assertNoErrors, contractError } from '../domain/errors.js';
-import { createInitialTextMappingDecisions, reconcileTextCues, refineInformationRules } from '../domain/mapping.js';
-import { DatasetSchema, ProjectSchema } from '../domain/schema.js';
-import type { Dataset, Project, TextMappingDecision } from '../domain/schema.js';
+import { ProjectSchema } from '../domain/schema.js';
+import type { Project } from '../domain/schema.js';
 import { validateProject } from '../domain/validation.js';
-import { recoverSourceProject } from '../importers/import-package.js';
+import { importPackage, recoverSourceProject } from '../importers/import-package.js';
 import { isSafePackagePath, parseJson } from '../importers/integrity.js';
 import { readUtf8 } from './package.js';
 
@@ -45,23 +44,55 @@ function migratedInformationRules(dataset: JsonObject): unknown[] {
 
 function migrate11To12(input: JsonObject): JsonObject {
   if (input.schemaVersion !== '1.1.0' || !Array.isArray(input.shots) || !isJsonObject(input.dataset)) return input;
-  const migratedDataset: Dataset = DatasetSchema.parse({ ...input.dataset, informationRules: migratedInformationRules(input.dataset) });
-  const textMappingDecisions: TextMappingDecision[] = createInitialTextMappingDecisions(migratedDataset);
-  const dataset: Dataset = DatasetSchema.parse({ ...migratedDataset, informationRules: refineInformationRules(migratedDataset, textMappingDecisions) });
+  const dataset: JsonObject = { ...input.dataset, informationRules: migratedInformationRules(input.dataset) };
   const shots: unknown[] = input.shots.map((shot: unknown): unknown => {
     if (!isJsonObject(shot) || !Array.isArray(shot.sourceUnitIds)) return shot;
     const { sourceUnitIds, ...rest } = shot;
     return { ...rest, sourceLinks: sourceUnitIds.map((unitId: unknown): unknown => ({ unitId, usage: 'context-only', status: 'mapping-required' })) };
   });
-  const provisional = { ...input, schemaVersion: '1.2.0', dataset, textMappingDecisions, shots } as Project;
-  const holdMs: number = Math.max(1, ...Array.isArray(input.textCues) ? input.textCues.filter(isJsonObject).map((cue: JsonObject): number => typeof cue.startMs === 'number' && typeof cue.endMs === 'number' ? cue.endMs - cue.startMs : 1) : [2000]);
-  return { ...provisional, textCues: reconcileTextCues(provisional, textMappingDecisions, holdMs) };
+  return { ...input, schemaVersion: '1.2.0', dataset, textMappingDecisions: [], shots };
 }
 
-/** 1.0·1.1 저장본을 불확실한 Source Mapping이 드러나는 1.2 형식으로 올린다. */
+function sourceProjectFromStoredInput(input: JsonObject): Project {
+  if (!isJsonObject(input.handoff) || !Array.isArray(input.sources)) throw contractError('MIGRATION_SOURCE_REQUIRED', '1.2 저장본을 변환하려면 handoff와 원본 sources가 필요합니다.', []);
+  const files: unknown[] = input.sources.map((source: unknown): unknown => {
+    if (!isJsonObject(source)) return source;
+    return { path: source.path, content: source.content };
+  });
+  return importPackage({ handoff: input.handoff, files });
+}
+
+function migratedTextMapping(decision: unknown): unknown {
+  if (!isJsonObject(decision)) return decision;
+  if (decision.canonicalUnitId === null) return { ...decision, relation: 'standalone-placement', renderCanonicalSeparately: false, canonicalStartMs: null, canonicalEndMs: null };
+  if (decision.relation === 'exact') return { ...decision, renderCanonicalSeparately: false, canonicalStartMs: null, canonicalEndMs: null };
+  const hasRange: boolean = typeof decision.canonicalStartMs === 'number' && typeof decision.canonicalEndMs === 'number' && decision.canonicalEndMs > decision.canonicalStartMs;
+  if (decision.relation === 'separate-element' && !hasRange) return { ...decision, relation: 'abbreviation', status: 'unresolved', renderCanonicalSeparately: false, canonicalStartMs: null, canonicalEndMs: null };
+  if (decision.renderCanonicalSeparately !== true) return { ...decision, renderCanonicalSeparately: false, canonicalStartMs: null, canonicalEndMs: null };
+  return decision;
+}
+
+function migrate12To13(input: JsonObject): JsonObject {
+  if (input.schemaVersion !== '1.2.0' || !Array.isArray(input.shots) || !isJsonObject(input.dataset)) return input;
+  const source: Project = sourceProjectFromStoredInput(input);
+  const existingMappings: unknown[] = Array.isArray(input.textMappingDecisions) && input.textMappingDecisions.length > 0
+    ? input.textMappingDecisions.map(migratedTextMapping) : source.textMappingDecisions;
+  const shots: unknown[] = input.shots.map((shot: unknown): unknown => {
+    if (!isJsonObject(shot) || !Array.isArray(shot.sourceLinks)) return shot;
+    return { ...shot, approvalStatus: 'proposed', sourceLinks: shot.sourceLinks.map((link: unknown): unknown => isJsonObject(link)
+      ? { ...link, status: 'mapping-required', temporalAnchor: { kind: 'unresolved', basis: 'migration', status: 'review-required' } } : link) };
+  });
+  return {
+    ...input, schemaVersion: '1.3.0',
+    dataset: { ...input.dataset, informationRules: source.dataset.informationRules },
+    textMappingDecisions: existingMappings, shots,
+  };
+}
+
+/** 1.0·1.1·1.2 저장본을 기준 Gate와 불확실한 Source Anchor가 분리된 1.3 형식으로 올린다. */
 export function migrateProjectInput(input: unknown): unknown {
   if (!isJsonObject(input)) return input;
-  return migrate11To12(migrate10To11(input));
+  return migrate12To13(migrate11To12(migrate10To11(input)));
 }
 
 /** 저장된 원본 스냅샷에서 데이터를 다시 계산해 편집 가능한 값과 원문을 구분한다. */
