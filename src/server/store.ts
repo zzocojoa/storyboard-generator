@@ -3,6 +3,7 @@ import { hostname } from 'node:os';
 import { dirname, join, relative, sep } from 'node:path';
 import { stat } from 'node:fs/promises';
 import { z } from 'zod';
+import { assertAssetFreeInitialProject, assertAssetReferenceClosure } from '../domain/asset-references.js';
 import { contractError } from '../domain/errors.js';
 import { reviewFrameOutput } from '../domain/frame-output.js';
 import { inspectAudioFileBytes, verifyStoredAsset } from '../domain/media-inspection.js';
@@ -16,6 +17,9 @@ import { parseProject } from '../io/project.js';
 import { SafeStoreFilesystem, sameFileIdentity } from './safe-filesystem.js';
 import type { FileIdentity, SafePathKind } from './safe-filesystem.js';
 
+export { collectProjectAssetReferences } from '../domain/asset-references.js';
+export type { ProjectAssetReference } from '../domain/asset-references.js';
+
 export type ProjectSummary = {
   projectId: string; title: string; revision: number; durationMs: number; shots: number;
   framesWithAsset: number; framesAccepted: number; framesOutputSafe: number; framesTotal: number;
@@ -23,7 +27,6 @@ export type ProjectSummary = {
   textPlayable: number; textTotal: number; blockedOutputCount: number; issues: number; updatedAt: string;
 };
 export type AssetWrite = { relativePath: string; content: Buffer };
-export type ProjectAssetReference = { assetId: string; field: string };
 export type AssetCatalogTransition = {
   preservedAssets: readonly Asset[];
   newAssets: readonly Asset[];
@@ -43,7 +46,9 @@ export type StorageFaultPoint = 'after-update-lock-acquired' | 'after-update-cur
   | 'before-update-journal-create' | 'after-update-preflight' | 'after-update-journal-prepared' | 'after-update-asset-linked'
   | 'after-update-version-linked' | 'after-update-current-published' | 'before-update-cleanup'
   | 'after-create-journal-prepared' | 'after-create-version-zero-written' | 'after-create-current-written'
-  | 'before-create-directory-publish' | 'after-create-directory-publish' | 'before-create-cleanup';
+  | 'before-create-directory-publish' | 'after-create-directory-publish' | 'before-create-cleanup'
+  | 'before-lock-write' | 'after-lock-file-created' | 'after-lock-write-eexist' | 'before-lock-directory-sync'
+  | 'after-lock-directory-sync' | 'after-create-lock-written' | 'before-create-journal-cleanup' | 'before-create-lock-removal';
 export type StorageFaultInjector = { ownerPid: number; trigger(point: StorageFaultPoint): void | Promise<void> };
 
 export class SimulatedStorageCrash extends Error {
@@ -109,7 +114,8 @@ const StoreLockSchema = z.strictObject({
   transactionId: z.uuid(), createdAt: z.iso.datetime(),
 });
 type StoreLock = z.infer<typeof StoreLockSchema>;
-type RecoveryLock = { metadata: StoreLock; path: string };
+type RecoveryLock = { metadata: StoreLock; path: string; identity: FileIdentity };
+type LockAcquisitionState = { createdByThisCall: boolean; metadata: StoreLock; identity: FileIdentity | null };
 const StorageRecoveryBlockSchema = z.strictObject({
   version: z.literal(1), projectId: z.string().min(1), directoryName: Sha256Schema,
   transactionId: z.string().min(1), code: z.string().min(1), message: z.string().min(1), detectedAt: z.iso.datetime(),
@@ -140,31 +146,13 @@ function assetFailureCode(error: unknown): string | null {
 }
 
 function storageProtectionRequired(error: unknown): boolean {
-  return ['STORE_RECOVERY_REQUIRED', 'STORE_PATH_UNSAFE', 'STORE_CONCURRENT_MODIFICATION'].includes(errorCode(error));
+  return ['STORE_RECOVERY_REQUIRED', 'STORE_CREATE_RECOVERY_REQUIRED', 'STORE_PATH_UNSAFE', 'STORE_CONCURRENT_MODIFICATION',
+    'STORE_LOCK_CLEANUP_REQUIRED'].includes(errorCode(error));
 }
 
 function assetDifferenceFields(current: Asset, next: Asset): string[] {
   const fields: string[] = [...new Set([...Object.keys(current), ...Object.keys(next)])].sort();
   return fields.filter((field: string): boolean => JSON.stringify(current[field as keyof Asset]) !== JSON.stringify(next[field as keyof Asset]));
-}
-
-/** Project Schema에서 Asset ID를 참조하는 모든 필드를 한 곳에서 수집한다. */
-export function collectProjectAssetReferences(project: Project): ProjectAssetReference[] {
-  const references: ProjectAssetReference[] = [];
-  for (const frame of project.frames) if (frame.imageAssetId !== null) references.push({ assetId: frame.imageAssetId, field: `frames.${frame.id}.imageAssetId` });
-  for (const cue of project.audioCues) if (cue.assetId !== null) references.push({ assetId: cue.assetId, field: `audioCues.${cue.id}.assetId` });
-  for (const record of project.generationRecords) for (const assetId of record.resultAssetIds) {
-    references.push({ assetId, field: `generationRecords.${record.id}.resultAssetIds` });
-  }
-  for (const shot of project.shots) {
-    for (const [index, continuity] of shot.continuityBefore.entries()) {
-      references.push({ assetId: continuity.assetId, field: `shots.${shot.id}.continuityBefore.${index}.assetId` });
-    }
-    for (const [index, continuity] of shot.continuityAfter.entries()) {
-      references.push({ assetId: continuity.assetId, field: `shots.${shot.id}.continuityAfter.${index}.assetId` });
-    }
-  }
-  return references;
 }
 
 /** Revision 사이의 Asset catalog와 write 집합이 append-only 계약을 만족하는지 검사한다. */
@@ -522,24 +510,61 @@ export class ProjectStore {
     catch (error: unknown) { recoveryRequired(`Project lock을 해석할 수 없습니다. directory=${directoryName}, cause=${error instanceof Error ? error.message : String(error)}`); }
     if (projectKey(metadata.projectId) !== directoryName) recoveryRequired(`Project lock과 저장 디렉터리가 다릅니다. projectId=${metadata.projectId}`);
     if (metadata.host !== hostname()) recoveryRequired(`다른 Host의 Project lock은 자동 삭제할 수 없습니다. projectId=${metadata.projectId}`);
-    return { metadata, path };
+    return { metadata, path, identity: await this.#fs.identity(path) };
   }
 
   async #acquireProjectLock(projectId: string, transactionId: string): Promise<RecoveryLock> {
-    const directory: string = this.#directory(projectId);
-    const path: string = join(directory, 'write.lock');
-    if (await this.#fs.exists(path)) throw contractError('PROJECT_BUSY', `${projectId}: 다른 저장 작업이 진행 중입니다.`, []);
     const metadata: StoreLock = StoreLockSchema.parse({ version: 2, projectId, host: hostname(), pid: this.#faultInjector?.ownerPid ?? process.pid,
       transactionId, createdAt: new Date().toISOString() });
-    try { await this.#fs.writeExclusive(path, JSON.stringify(metadata)); await this.#fs.syncDirectory(directory); }
-    catch (error: unknown) { if (await this.#fs.exists(path)) throw contractError('PROJECT_BUSY', `${projectId}: 다른 저장 작업이 진행 중입니다.`, []); throw error; }
-    return { metadata, path };
+    return this.#acquireOwnedLock(join(this.#directory(projectId), 'write.lock'), metadata);
+  }
+
+  async #acquireOwnedLock(path: string, metadata: StoreLock): Promise<RecoveryLock> {
+    const state: LockAcquisitionState = { createdByThisCall: false, metadata, identity: null };
+    let exclusiveWriteInProgress: boolean = false;
+    try {
+      await this.#fault('before-lock-write');
+      exclusiveWriteInProgress = true;
+      state.identity = await this.#fs.writeExclusiveWithIdentity(path, JSON.stringify(metadata));
+      exclusiveWriteInProgress = false;
+      state.createdByThisCall = true;
+      await this.#fault('after-lock-file-created');
+      const lock: RecoveryLock = { metadata, path, identity: state.identity };
+      await this.#verifyOwnedLock(lock);
+      await this.#fault('before-lock-directory-sync');
+      await this.#fs.syncDirectory(dirname(path));
+      await this.#fault('after-lock-directory-sync');
+      await this.#verifyOwnedLock(lock);
+      return lock;
+    } catch (error: unknown) {
+      if (exclusiveWriteInProgress && errorCode(error) === 'EEXIST') {
+        await this.#fault('after-lock-write-eexist');
+        throw contractError('PROJECT_BUSY', `${metadata.projectId}: 다른 저장 작업이 진행 중입니다.`, []);
+      }
+      if (isSimulatedCrash(error)) throw error;
+      if (state.createdByThisCall && state.identity !== null) {
+        const lock: RecoveryLock = { metadata, path, identity: state.identity };
+        try { await this.#removeRecoveryLock(lock); }
+        catch (cleanupError: unknown) {
+          const protectedError = contractError('STORE_LOCK_CLEANUP_REQUIRED',
+            `Project lock 획득 실패 후 소유 lock을 정리할 수 없습니다. projectId=${metadata.projectId}, transactionId=${metadata.transactionId}, cause=${error instanceof Error ? error.message : String(error)}, cleanup=${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`, []);
+          await this.#writeRecoveryBlock(projectKey(metadata.projectId), metadata.projectId, metadata.transactionId, protectedError);
+          throw protectedError;
+        }
+      } else if (error instanceof AggregateError) {
+        const protectedError = contractError('STORE_LOCK_CLEANUP_REQUIRED',
+          `Project lock 원자 생성 실패의 정리 상태를 증명할 수 없습니다. projectId=${metadata.projectId}, transactionId=${metadata.transactionId}, cause=${error.message}`, []);
+        await this.#writeRecoveryBlock(projectKey(metadata.projectId), metadata.projectId, metadata.transactionId, protectedError);
+        throw protectedError;
+      }
+      throw contractError('STORE_LOCK_ACQUISITION_FAILED',
+        `Project lock을 획득할 수 없습니다. projectId=${metadata.projectId}, transactionId=${metadata.transactionId}, cause=${error instanceof Error ? error.message : String(error)}, causeCode=${errorCode(error)}`, []);
+    }
   }
 
   async #removeRecoveryLock(lock: RecoveryLock): Promise<void> {
-    const current: StoreLock = StoreLockSchema.parse(JSON.parse(await this.#fs.readText(lock.path)) as unknown);
-    if (JSON.stringify(current) !== JSON.stringify(lock.metadata)) recoveryRequired(`Project lock 소유권이 바뀌었습니다. projectId=${lock.metadata.projectId}`);
-    await this.#fs.unlinkFile(lock.path);
+    await this.#verifyOwnedLock(lock);
+    await this.#fs.unlinkFile(lock.path, lock.identity);
     await this.#fs.syncDirectory(dirname(lock.path));
   }
 
@@ -552,6 +577,8 @@ export class ProjectStore {
       || current.host !== lock.metadata.host || current.pid !== lock.metadata.pid || JSON.stringify(current) !== JSON.stringify(lock.metadata)) {
       recoveryRequired(`현재 Update의 Project lock 소유권이 일치하지 않습니다. projectId=${lock.metadata.projectId}, transactionId=${lock.metadata.transactionId}`);
     }
+    const actualIdentity: FileIdentity = await this.#fs.identity(lock.path);
+    if (!sameFileIdentity(actualIdentity, lock.identity)) recoveryRequired(`현재 Update의 Project lock 파일 identity가 바뀌었습니다. projectId=${lock.metadata.projectId}, transactionId=${lock.metadata.transactionId}, expected=${lock.identity.dev}:${lock.identity.ino}, actual=${actualIdentity.dev}:${actualIdentity.ino}`);
   }
 
   async #recoverTransaction(projectId: string, transactionId: string, lock: RecoveryLock | null): Promise<void> {
@@ -668,13 +695,38 @@ export class ProjectStore {
 
   async #verifyCompleteProjectDirectory(projectId: string): Promise<Project> {
     const current: Project = await this.#verifyCurrentSnapshot(projectId);
+    await this.#verifyProjectAssetFiles(projectId);
+    return current;
+  }
+
+  async #verifyCompleteProjectDirectoryUnderLock(projectId: string, lock: RecoveryLock, requireAssetFree: boolean): Promise<Project> {
+    const current: Project = await this.#verifyCurrentSnapshotUnderLock(projectId, lock);
+    await this.#verifyProjectAssetFiles(projectId);
+    if (requireAssetFree) assertAssetFreeInitialProject(current);
+    await this.#verifyOwnedLock(lock);
+    return current;
+  }
+
+  async #verifyProjectAssetFiles(projectId: string): Promise<void> {
     const versions: Project[] = await this.#versionProjects(projectId, null);
     for (const project of versions) for (const asset of project.assets) {
       const path: string = this.#safeAssetPath(projectId, asset);
       await this.#requireFileProof(path, asset.sha256, `Project Asset 완전성 검증 projectId=${projectId}, assetId=${asset.id}`);
       await verifyStoredAsset(project, asset, await this.#fs.read(path));
     }
-    return current;
+  }
+
+  async #readCreateStagingLock(transactionId: string, journal: CreateJournal): Promise<RecoveryLock | null> {
+    const path: string = join(this.#createTransactionPath(transactionId), CREATE_STAGED_PROJECT_DIRECTORY, 'write.lock');
+    if (await this.#fs.kind(path) === 'missing') return null;
+    let metadata: StoreLock;
+    try { metadata = StoreLockSchema.parse(JSON.parse(await this.#fs.readText(path)) as unknown); }
+    catch (error: unknown) { recoveryRequired(`Create staging lock을 해석할 수 없습니다. transactionId=${transactionId}, cause=${error instanceof Error ? error.message : String(error)}`); }
+    if (metadata.projectId !== journal.projectId || metadata.transactionId !== journal.transactionId
+      || metadata.host !== journal.owner.host || metadata.pid !== journal.owner.pid) {
+      recoveryRequired(`Create staging lock과 journal 소유권이 다릅니다. projectId=${journal.projectId}, transactionId=${transactionId}`);
+    }
+    return { metadata, path, identity: await this.#fs.identity(path) };
   }
 
   async #verifyCreateStaging(transactionId: string, journal: CreateJournal): Promise<void> {
@@ -686,7 +738,7 @@ export class ProjectStore {
     const stagedProject: string = join(transactionPath, CREATE_STAGED_PROJECT_DIRECTORY);
     if (await this.#fs.kind(stagedProject) === 'missing') return;
     await this.#fs.requireDirectory(stagedProject);
-    const unknown: string[] = (await this.#fs.entries(stagedProject)).filter((entry): boolean => !['project.json', 'versions', 'assets', TRANSACTIONS_DIRECTORY].includes(entry.name)).map((entry): string => entry.name);
+    const unknown: string[] = (await this.#fs.entries(stagedProject)).filter((entry): boolean => !['project.json', 'versions', 'assets', TRANSACTIONS_DIRECTORY, 'write.lock'].includes(entry.name)).map((entry): string => entry.name);
     if (unknown.length > 0) recoveryRequired(`Create Project staging에 증명되지 않은 항목이 있습니다. transactionId=${transactionId}, entries=${unknown.join(',')}`);
     const currentProof: NormalizedFileProof = journal.version === 3 ? journal.currentFile
       : { stagedRelativePath: `project/${journal.currentFile.relativePath}`, finalRelativePath: journal.currentFile.relativePath, sha256: journal.currentFile.sha256 };
@@ -696,10 +748,37 @@ export class ProjectStore {
       const path: string = join(transactionPath, proof.stagedRelativePath);
       if (await this.#fs.kind(path) === 'file') await this.#requireFileProof(path, proof.sha256, `Create staging 증명 transactionId=${transactionId}`);
     }
+    await this.#readCreateStagingLock(transactionId, journal);
+  }
+
+  async #verifyCompleteCreateStagingUnderLock(transactionId: string, journal: CreateJournalV3, lock: RecoveryLock): Promise<void> {
+    await this.#verifyCreateStaging(transactionId, journal);
+    await this.#verifyOwnedLock(lock);
+    const stagedProject: string = join(this.#createTransactionPath(transactionId), CREATE_STAGED_PROJECT_DIRECTORY);
+    await this.#fs.requireDirectory(join(stagedProject, 'versions'));
+    await this.#fs.requireDirectory(join(stagedProject, 'assets'));
+    await this.#fs.requireDirectory(join(stagedProject, TRANSACTIONS_DIRECTORY));
+    const versionEntries: string[] = (await this.#fs.entries(join(stagedProject, 'versions'))).map((entry): string => entry.name);
+    if (versionEntries.length !== 1 || versionEntries[0] !== transactionVersionFileName(0)) {
+      recoveryRequired(`Create staging의 Initial revision 구성이 다릅니다. projectId=${journal.projectId}, entries=${versionEntries.join(',')}`);
+    }
+    if ((await this.#fs.entries(join(stagedProject, 'assets'))).length !== 0
+      || (await this.#fs.entries(join(stagedProject, TRANSACTIONS_DIRECTORY))).length !== 0) {
+      recoveryRequired(`Asset-free Create staging의 관리 디렉터리가 비어 있지 않습니다. projectId=${journal.projectId}`);
+    }
+    const current: Project = await this.#readProjectFile(join(stagedProject, 'project.json'));
+    const versionZero: Project = await this.#readProjectFile(join(stagedProject, 'versions', transactionVersionFileName(0)));
+    if (current.projectId !== journal.projectId || current.revision !== 0 || exportProjectJson(current) !== exportProjectJson(versionZero)) {
+      recoveryRequired(`Create staging의 Current와 Version 0이 일치하지 않습니다. projectId=${journal.projectId}`);
+    }
+    assertAssetFreeInitialProject(current);
+    await this.#verifyOwnedLock(lock);
   }
 
   async #removeCreateTransaction(transactionId: string, journal: CreateJournal): Promise<void> {
     await this.#verifyCreateStaging(transactionId, journal);
+    const stagedLock: RecoveryLock | null = await this.#readCreateStagingLock(transactionId, journal);
+    if (stagedLock !== null) await this.#removeRecoveryLock(stagedLock);
     await this.#fs.removeTree(this.#createTransactionPath(transactionId));
     await this.#fs.syncDirectory(this.#createTransactionsPath());
   }
@@ -731,11 +810,41 @@ export class ProjectStore {
     const versionFinal: string = journal.version === 3 ? journal.versionFile.finalRelativePath : journal.versionFile.relativePath;
     if (currentFinal !== 'project.json' || versionFinal !== `versions/${transactionVersionFileName(0)}`) recoveryRequired(`Create journal 경로가 다릅니다. transactionId=${transactionId}`);
     if (journal.owner.host !== hostname()) recoveryRequired(`다른 Host의 Create transaction을 자동 복구할 수 없습니다. transactionId=${transactionId}`);
+    const finalDirectory: string = this.#directory(journal.projectId);
+    const finalExists: boolean = await this.#fs.kind(finalDirectory) !== 'missing';
+    if (journal.version === 3 && finalExists) {
+      const lock: RecoveryLock | null = await this.#readRecoveryLock(journal.projectDirectoryName);
+      if (lock === null) {
+        if (journal.phase === 'published' || journal.phase === 'verified') {
+          createRecoveryRequired(`게시된 Initial Project의 create lock이 없습니다. projectId=${journal.projectId}`, 'missing write.lock');
+        }
+        let final: Project;
+        try { final = await this.#verifyCompleteProjectDirectory(journal.projectId); }
+        catch (error: unknown) { createRecoveryRequired(`동시에 게시된 Initial Project를 완전한 저장소로 증명할 수 없습니다. projectId=${journal.projectId}`, error); }
+        await this.#removeCreateTransaction(transactionId, journal);
+        this.#recordRecovery({ projectId: journal.projectId, transactionId, outcome: sha256Text(exportProjectJson(final)) === journal.currentFile.sha256 ? 'create-committed' : 'create-superseded' });
+        return journal.projectId;
+      }
+      if (lock.metadata.transactionId !== journal.transactionId || lock.metadata.projectId !== journal.projectId
+        || lock.metadata.host !== journal.owner.host || lock.metadata.pid !== journal.owner.pid) {
+        createRecoveryRequired(`게시된 Initial Project의 create lock과 journal 소유권이 다릅니다. projectId=${journal.projectId}`, 'lock owner mismatch');
+      }
+      if (processIsAlive(journal.owner.pid)) throw contractError('PROJECT_BUSY', `${journal.projectId}: create transactionId=${transactionId}, pid=${journal.owner.pid} 작업이 진행 중입니다.`, []);
+      let final: Project;
+      try { final = await this.#verifyCompleteProjectDirectoryUnderLock(journal.projectId, lock, true); }
+      catch (error: unknown) { createRecoveryRequired(`게시된 Initial Project를 create lock 아래 완전한 저장소로 증명할 수 없습니다. projectId=${journal.projectId}`, error); }
+      if (sha256Text(exportProjectJson(final)) !== journal.currentFile.sha256) {
+        createRecoveryRequired(`게시된 Initial Project가 create journal 내용과 다릅니다. projectId=${journal.projectId}`, 'project hash mismatch');
+      }
+      await this.#removeCreateTransaction(transactionId, journal);
+      await this.#removeRecoveryLock(lock);
+      this.#recordRecovery({ projectId: journal.projectId, transactionId, outcome: 'create-committed' });
+      return journal.projectId;
+    }
     if (processIsAlive(journal.owner.pid)) throw contractError('PROJECT_BUSY', `${journal.projectId}: create transactionId=${transactionId}, pid=${journal.owner.pid} 작업이 진행 중입니다.`, []);
     await this.#verifyCreateStaging(transactionId, journal);
-    const finalDirectory: string = this.#directory(journal.projectId);
     let outcome: StorageRecoveryEvent['outcome'] = 'create-rolled-back';
-    if (await this.#fs.kind(finalDirectory) !== 'missing') {
+    if (finalExists) {
       let final: Project;
       try { final = await this.#verifyCompleteProjectDirectory(journal.projectId); }
       catch (error: unknown) { createRecoveryRequired(`게시된 Initial Project를 완전한 저장소로 증명할 수 없습니다. projectId=${journal.projectId}`, error); }
@@ -824,6 +933,16 @@ export class ProjectStore {
     }
     if (await this.#fs.kind(this.#directory(projectId)) === 'missing') throw contractError('PROJECT_NOT_FOUND', `저장된 프로젝트를 찾을 수 없습니다: ${projectId}`, []);
     if (await this.#fs.kind(join(this.#directory(projectId), 'write.lock')) !== 'missing') throw contractError('PROJECT_BUSY', `${projectId}: 다른 저장 작업이 진행 중입니다.`, []);
+  }
+
+  async #assertCreateTargetAvailable(projectId: string): Promise<void> {
+    const directory: string = this.#directory(projectId);
+    if (await this.#fs.kind(directory) === 'missing') return;
+    if (await this.#fs.kind(join(directory, 'write.lock')) === 'file') {
+      throw contractError('PROJECT_BUSY', `${projectId}: Initial Create 저장 작업이 진행 중입니다.`, []);
+    }
+    await this.#verifyCompleteProjectDirectory(projectId);
+    throw contractError('PROJECT_ALREADY_EXISTS', `같은 프로젝트 ID가 이미 저장되어 있습니다: ${projectId}`, []);
   }
 
   async #verifyMutationReadyUnderLock(projectId: string, lock: RecoveryLock): Promise<Project> {
@@ -922,7 +1041,12 @@ export class ProjectStore {
 
   async initialize(): Promise<void> {
     if (this.#initialization === null) this.#initialization = this.#initialize();
-    await this.#initialization;
+    const initialization: Promise<void> = this.#initialization;
+    try { await initialization; }
+    catch (error: unknown) {
+      if (errorCode(error) === 'PROJECT_BUSY' && this.#initialization === initialization) this.#initialization = null;
+      throw error;
+    }
   }
 
   recoveryEvents(): readonly StorageRecoveryEvent[] { return [...this.#recoveryEvents]; }
@@ -956,17 +1080,13 @@ export class ProjectStore {
   async create(project: Project): Promise<Project> {
     const shaped: Project = ProjectSchema.parse(project);
     if (shaped.revision !== 0) throw contractError('INITIAL_PROJECT_REVISION_INVALID', `새 Project revision은 0이어야 합니다. projectId=${shaped.projectId}, revision=${shaped.revision}`, []);
-    const assetReferences: ProjectAssetReference[] = collectProjectAssetReferences(shaped);
-    if (shaped.assets.length > 0 || assetReferences.length > 0) {
-      const fields: string = [...new Set(assetReferences.map((reference: ProjectAssetReference): string => reference.field))].join(',') || '없음';
-      throw contractError('UNSUPPORTED_INITIAL_PROJECT_ASSETS', `Initial Create는 Asset-free Project만 지원합니다. projectId=${shaped.projectId}, assetMetadataCount=${shaped.assets.length}, assetReferenceCount=${assetReferences.length}, referenceFields=${fields}. Asset-free Project를 먼저 생성한 뒤 Revision Update로 신규 Asset ID와 실제 파일을 등록하세요.`, []);
-    }
+    assertAssetFreeInitialProject(shaped);
     const valid: Project = parseProject(shaped);
     await this.initialize();
     const directoryName: string = projectKey(valid.projectId);
     if (this.#recoveryBlocks.has(directoryName)) throw contractError('STORE_RECOVERY_BLOCKED', `${valid.projectId}: 저장 복구가 필요합니다.`, []);
     const directory: string = this.#directory(valid.projectId);
-    if (await this.#fs.kind(directory) !== 'missing') { await this.#verifyCompleteProjectDirectory(valid.projectId); throw contractError('PROJECT_ALREADY_EXISTS', `같은 프로젝트 ID가 이미 저장되어 있습니다: ${valid.projectId}`, []); }
+    await this.#assertCreateTargetAvailable(valid.projectId);
     const transactionId: string = randomUUID();
     const transactionPath: string = this.#createTransactionPath(transactionId);
     const stagedDirectory: string = join(transactionPath, CREATE_STAGED_PROJECT_DIRECTORY);
@@ -977,6 +1097,7 @@ export class ProjectStore {
       currentFile: { stagedRelativePath: 'project/project.json', finalRelativePath: 'project.json', sha256: contentSha256 },
       versionFile: { stagedRelativePath: 'project/versions/000000.json', finalRelativePath: 'versions/000000.json', sha256: contentSha256 } });
     let published: boolean = false;
+    let createLock: RecoveryLock | null = null;
     try {
       await this.#fs.ensureDirectory(transactionPath);
       await this.#fs.writeExclusive(join(transactionPath, TRANSACTION_JOURNAL), JSON.stringify(journal));
@@ -992,19 +1113,36 @@ export class ProjectStore {
       await this.#fs.syncDirectory(stagedDirectory);
       journal = await this.#writeCreateJournalPhase(transactionId, journal, 'current-written');
       await this.#fault('after-create-current-written');
+      const lockMetadata: StoreLock = StoreLockSchema.parse({ version: 2, projectId: valid.projectId, host: journal.owner.host,
+        pid: journal.owner.pid, transactionId, createdAt: new Date().toISOString() });
+      createLock = await this.#acquireOwnedLock(join(stagedDirectory, 'write.lock'), lockMetadata);
+      await this.#fault('after-create-lock-written');
+      await this.#verifyCompleteCreateStagingUnderLock(transactionId, journal, createLock);
       await this.#fault('before-create-directory-publish');
-      if (await this.#fs.kind(directory) !== 'missing') { await this.#verifyCompleteProjectDirectory(valid.projectId); throw contractError('PROJECT_ALREADY_EXISTS', `같은 프로젝트 ID가 이미 저장되어 있습니다: ${valid.projectId}`, []); }
-      await this.#fs.renameNewDirectory(stagedDirectory, directory); published = true; await this.#fs.syncDirectory(this.#fs.root());
+      await this.#assertCreateTargetAvailable(valid.projectId);
+      await this.#fs.renameNewDirectory(stagedDirectory, directory); published = true;
+      createLock = { ...createLock, path: join(directory, 'write.lock') };
+      await this.#fs.syncDirectory(this.#fs.root());
       journal = await this.#writeCreateJournalPhase(transactionId, journal, 'published');
       await this.#fault('after-create-directory-publish');
-      await this.#verifyCompleteProjectDirectory(valid.projectId);
+      await this.#verifyCompleteProjectDirectoryUnderLock(valid.projectId, createLock, true);
       journal = await this.#writeCreateJournalPhase(transactionId, journal, 'verified');
       await this.#fault('before-create-cleanup');
+      await this.#fault('before-create-journal-cleanup');
       await this.#removeCreateTransaction(transactionId, journal);
+      await this.#fault('before-create-lock-removal');
+      await this.#removeRecoveryLock(createLock);
+      createLock = null;
     } catch (error: unknown) {
       if (isSimulatedCrash(error)) throw error;
       if (!published) {
-        try { if (await this.#fs.kind(transactionPath) !== 'missing') await this.#fs.removeTree(transactionPath); await this.#fs.syncDirectory(this.#createTransactionsPath()); }
+        if (storageProtectionRequired(error)) {
+          await this.#writeRecoveryBlock(directoryName, valid.projectId, transactionId, error);
+          throw error;
+        }
+        try {
+          if (await this.#fs.kind(transactionPath) !== 'missing') await this.#removeCreateTransaction(transactionId, journal);
+        }
         catch (cleanupError: unknown) { await this.#writeRecoveryBlock(directoryName, valid.projectId, transactionId, cleanupError); throw new AggregateError([error, cleanupError], `Initial Project 생성 실패 후 staging 정리도 실패했습니다. projectId=${valid.projectId}`); }
       } else {
         await this.#writeRecoveryBlock(directoryName, valid.projectId, transactionId, error);
@@ -1031,8 +1169,10 @@ export class ProjectStore {
       if (current.revision !== expectedRevision) throw contractError('REVISION_CONFLICT', `${projectId}: expected=${expectedRevision}, actual=${current.revision}`, []);
       const transformInput: Project = parseProject(structuredClone(current));
       const changed: Project = transform(transformInput);
-      const next: Project = parseProject({ ...changed, projectId: current.projectId, revision: current.revision + 1 });
-      const transition: AssetCatalogTransition = assertAssetCatalogTransition(current, next, assetWrites);
+      const shapedNext: Project = ProjectSchema.parse({ ...changed, projectId: current.projectId, revision: current.revision + 1 });
+      const transition: AssetCatalogTransition = assertAssetCatalogTransition(current, shapedNext, assetWrites);
+      assertAssetReferenceClosure(shapedNext);
+      const next: Project = parseProject(shapedNext);
       const committedVersion: string = this.#versionPath(projectId, next.revision);
       if (await this.#fs.kind(committedVersion) !== 'missing') throw contractError('PROJECT_VERSION_EXISTS', `Project revision snapshot이 이미 존재합니다. path=${committedVersion}`, []);
       const stagedAssets: StagedAsset[] = await this.#preflightAssetWrites(projectId, next, transition);

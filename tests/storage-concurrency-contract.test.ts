@@ -566,13 +566,13 @@ describe('H. PRJ-007 회귀', (): void => {
     expect(project.dataset.units.map((unit): string => unit.text)).toEqual(imported.dataset.units.map((unit): string => unit.text));
   });
   it('prj007_timeline_remains_1500000ms', async (): Promise<void> => { expect((await productionOutline()).dataset.segments.at(-1)?.endMs).toBe(1_500_000); });
-  it('prj007_unit045_asset_id_is_preserved', async (): Promise<void> => {
+  it('prj007_unit045_asset_is_preserved', async (): Promise<void> => {
     const fixture = await unit045AssetProject(); expect(fixture.project.audioCues.find((cue: AudioCue): boolean => cue.unitId === 'UNIT-045')?.assetId).toBe('unit045-audio');
   });
   it('prj007_unit045_j_cut_is_preserved', async (): Promise<void> => {
     const fixture = await unit045AssetProject(); expect(fixture.project.audioCues.find((cue: AudioCue): boolean => cue.unitId === 'UNIT-045')?.timingRelation).toBe('j-cut');
   });
-  it('prj007_unit045_safe_audio_still_works', async (): Promise<void> => {
+  it('prj007_safe_audio_still_returns_riff', async (): Promise<void> => {
     const media = await unit045AssetProject(); const root: string = await temporaryRoot('storyboard-prj007-'); const dataRoot: string = join(root, 'data'); const store: ProjectStore = new ProjectStore(dataRoot);
     await store.create(media.base); await store.update(media.base.projectId, 0, (): Project => media.project, [{ relativePath: media.asset.path, content: media.bytes }]);
     const app: FastifyInstance = await appForStore(root, dataRoot, store); const response = await app.inject({ method: 'GET', url: `/api/projects/PRJ-007/output/audio/${media.cue.id}` });

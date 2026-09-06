@@ -1,4 +1,5 @@
 import { audioTimingIssues } from './audio.js';
+import { assetReferenceIssues } from './asset-references.js';
 import { issue } from './errors.js';
 import type { Dataset, InformationRule, Issue, Project, Segment, Shot, ShotSourceLink, Snapshot, SourceRef, SourceUnit, TextMappingDecision, TextPlacement, TextPlacementInformationDecision } from './schema.js';
 import { sourcePolicyIssues } from './source-policy.js';
@@ -132,8 +133,6 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
       }),
       ...(shot.visualLocationId === null ? [] : referenceIssue(dataset.locations.some((location): boolean => location.id === shot.visualLocationId), shot.id, 'visualLocationId', shot.visualLocationId, [])),
       ...shot.presence.flatMap((presence): Issue[] => referenceIssue(dataset.people.some((person): boolean => person.id === presence.personId), shot.id, 'presence', presence.personId, [])),
-      ...shot.propIds.flatMap((id: string): Issue[] => referenceIssue(project.assets.some((asset): boolean => asset.id === id && asset.kind === 'prop'), shot.id, 'propIds', id, [])),
-      ...[...shot.continuityBefore, ...shot.continuityAfter].flatMap((state): Issue[] => referenceIssue(project.assets.some((asset): boolean => asset.id === state.assetId && ['character', 'location', 'prop'].includes(asset.kind)), shot.id, 'continuity', state.assetId, [])),
       ...(project.frames.some((frame): boolean => frame.shotId === shot.id) ? [] : [issue('SHOT_WITHOUT_FRAME', 'error', shot.id, 'frames', '컷에는 검토용 프레임이 하나 이상 필요합니다.', null, null, [])]),
       ...((shot.transitionOut.kind === 'cut' && shot.transitionOut.durationMs !== 0) || (shot.transitionOut.kind !== 'cut' && (shot.transitionOut.durationMs <= 0 || shot.transitionOut.durationMs > shot.endMs - shot.startMs)) ? [issue('INVALID_TRANSITION_DURATION', 'error', shot.id, 'transitionOut', 'CUT은 0ms, 그 밖의 전환은 컷 길이 안의 양수 밀리초여야 합니다.', `0..${shot.endMs - shot.startMs}`, String(shot.transitionOut.durationMs), [])] : []),
       ...(shot.transitionOut.kind === 'custom' && shot.transitionOut.note.trim() === '' ? [issue('MISSING_CUSTOM_TRANSITION_NOTE', 'error', shot.id, 'transitionOut.note', '사용자 정의 전환에는 구현 메모가 필요합니다.', '설명', '', [])] : []),
@@ -174,7 +173,6 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
       ...(shot !== undefined && frame.offsetMs > shot.endMs - shot.startMs ? [issue('FRAME_OUTSIDE_SHOT', 'error', frame.id, 'offsetMs', '프레임 위치가 컷 범위를 벗어났습니다.', String(shot.endMs - shot.startMs), String(frame.offsetMs), [])] : []),
       ...(shot !== undefined && ((frame.role === 'start' && frame.offsetMs !== 0) || (frame.role === 'end' && frame.offsetMs !== shot.endMs - shot.startMs) || (frame.role === 'key' && (frame.offsetMs <= 0 || frame.offsetMs >= shot.endMs - shot.startMs))) ? [issue('FRAME_ROLE_TIME', 'error', frame.id, 'role', '시작·종료·중간 프레임의 위치가 역할과 다릅니다.', null, frame.role, [])] : []),
       ...(frame.visualReview === 'accepted' && frame.imageAssetId === null ? [issue('MISSING_REVIEWED_IMAGE', 'error', frame.id, 'visualReview', '실제 그림이 없는 프레임은 시각 검토 완료로 표시할 수 없습니다.', null, null, [])] : []),
-      ...(frame.imageAssetId === null ? [] : referenceIssue(project.assets.some((asset): boolean => asset.id === frame.imageAssetId && asset.kind === 'image'), frame.id, 'imageAssetId', frame.imageAssetId, [])),
     ];
   });
   const frameGroupIssues: Issue[] = project.shots.flatMap((shot): Issue[] => {
@@ -195,11 +193,9 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
     return [
       ...referenceIssue(dataset.units.some((unit): boolean => unit.id === cue.unitId), cue.id, 'unitId', cue.unitId, []),
       ...intervalIssues(cue.id, cue.startMs, cue.endMs, 0, totalEnd),
-      ...(cue.assetId === null ? [] : referenceIssue(asset !== undefined, cue.id, 'assetId', cue.assetId, [])),
       ...(audioKinds.some((mapping): boolean => mapping.cue === cue.kind && dataset.units.some((unit): boolean => unit.id === cue.unitId && unit.kind === mapping.unit)) ? [] : [issue('AUDIO_KIND_MISMATCH', 'error', cue.id, 'kind', '원문 유형과 음성 트랙의 유형이 다릅니다.', null, cue.kind, [])]),
       ...(cue.timingStatus === 'measured' && cue.assetId === null ? [issue('MISSING_MEASURED_AUDIO', 'error', cue.id, 'timingStatus', '실제 음성 자산 없이 측정 완료로 표시할 수 없습니다.', null, null, [])] : []),
       ...(cue.timingStatus === 'measured' && asset?.durationMs !== cue.endMs - cue.startMs ? [issue('AUDIO_DURATION_MISMATCH', 'error', cue.id, 'timing', '측정된 큐 길이와 오디오 자산 길이가 다릅니다.', String(asset?.durationMs ?? 'null'), String(cue.endMs - cue.startMs), [])] : []),
-      ...(cue.timingStatus === 'measured' && asset?.subjectId !== cue.id ? [issue('AUDIO_ASSET_SUBJECT_MISMATCH', 'error', cue.id, 'assetId', '측정된 오디오 자산은 해당 큐를 대상으로 해야 합니다.', cue.id, String(asset?.subjectId ?? 'null'), [])] : []),
       ...audioTimingIssues(project, cue),
     ];
   });
@@ -279,12 +275,12 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
       return [issue('CONTINUITY_STATE_MISMATCH', severity, next.id, 'continuityBefore', '인접 컷의 자산 전후 상태가 이어지지 않습니다.', outgoing ?? '미기록', incoming ?? '미기록', [])];
     });
   });
-  const generationIssues: Issue[] = project.generationRecords.flatMap((record): Issue[] => record.resultAssetIds.flatMap((id: string): Issue[] => referenceIssue(project.assets.some((asset): boolean => asset.id === id), record.id, 'resultAssetIds', id, [])));
+  const assetClosureIssues: Issue[] = assetReferenceIssues(project);
   const assetSubjectIssues: Issue[] = project.assets.flatMap((asset): Issue[] => {
     if (asset.subjectId === null) return ['character', 'location'].includes(asset.kind) ? [issue('MISSING_ASSET_SUBJECT', 'error', asset.id, 'subjectId', '인물·장소 기준 자산은 연결 대상을 지정해야 합니다.', null, null, [])] : [];
     const exists: boolean = asset.kind === 'character' ? dataset.people.some((person): boolean => person.id === asset.subjectId)
       : asset.kind === 'location' ? dataset.locations.some((location): boolean => location.id === asset.subjectId) : true;
     return referenceIssue(exists, asset.id, 'subjectId', asset.subjectId, []);
   });
-  return [...sourceIssues, ...projectIssues, ...groups.flatMap((group): Issue[] => duplicateIssues(group.ids, group.name)), ...shotIssues, ...coverageIssues, ...unitCoverage, ...sourceOrderIssues(project), ...frameIssues, ...frameGroupIssues, ...audioIssues, ...textIssues, ...sourceUnitTextCueIssues, ...placementCoverage, ...mappingIssues, ...decisionCoverage, ...placementInformationIssues, ...placementInformationCoverage, ...orderIssues, ...continuityIssues, ...generationIssues, ...assetSubjectIssues];
+  return [...sourceIssues, ...projectIssues, ...groups.flatMap((group): Issue[] => duplicateIssues(group.ids, group.name)), ...shotIssues, ...coverageIssues, ...unitCoverage, ...sourceOrderIssues(project), ...frameIssues, ...frameGroupIssues, ...audioIssues, ...textIssues, ...sourceUnitTextCueIssues, ...placementCoverage, ...mappingIssues, ...decisionCoverage, ...placementInformationIssues, ...placementInformationCoverage, ...orderIssues, ...continuityIssues, ...assetClosureIssues, ...assetSubjectIssues];
 }

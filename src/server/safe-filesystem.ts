@@ -118,6 +118,46 @@ export class SafeStoreFilesystem {
     await this.requireFile(path);
   }
 
+  /** Lock처럼 원자 경쟁 판정이 필요한 파일을 O_EXCL로 만들고 생성 inode를 반환한다. */
+  async writeExclusiveWithIdentity(path: string, content: string | Buffer): Promise<FileIdentity> {
+    this.#assertWithin(path);
+    await this.requireDirectory(dirname(path));
+    const handle: FileHandle = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    let identity: FileIdentity | null = null;
+    let closed: boolean = false;
+    try {
+      const metadata = await handle.stat();
+      if (!metadata.isFile()) unsafe(path, 'created object is not a regular file');
+      identity = { dev: metadata.dev, ino: metadata.ino };
+      await handle.writeFile(content);
+      await handle.sync();
+      await handle.close();
+      closed = true;
+      await this.requireFile(path);
+      const current: FileIdentity = await this.identity(path);
+      if (!sameFileIdentity(identity, current)) unsafe(path, 'exclusive file identity changed after creation');
+      return identity;
+    } catch (error: unknown) {
+      let closeError: unknown = null;
+      if (!closed) {
+        try { await handle.close(); }
+        catch (failure: unknown) { closeError = failure; }
+      }
+      if (identity === null) {
+        throw new AggregateError(closeError === null ? [error] : [error, closeError], `원자 생성 파일의 소유권을 증명할 수 없습니다. path=${path}`);
+      }
+      try {
+        await this.unlinkFile(path, identity);
+        await this.syncDirectory(dirname(path));
+      } catch (cleanupError: unknown) {
+        throw new AggregateError(closeError === null ? [error, cleanupError] : [error, closeError, cleanupError],
+          `원자 생성 파일 실패 후 소유 파일을 정리할 수 없습니다. path=${path}`);
+      }
+      if (closeError !== null) throw new AggregateError([error, closeError], `원자 생성 파일을 닫을 수 없습니다. path=${path}`);
+      throw error;
+    }
+  }
+
   async hardLink(source: string, target: string): Promise<FileIdentity> {
     const sourceIdentity: FileIdentity = await this.identity(source);
     await this.#assertCreateTarget(target);
