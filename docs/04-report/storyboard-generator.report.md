@@ -4,7 +4,8 @@
 
 - 시작 Branch: `codex/storyboard-generator`
 - 시작 HEAD: `ecabc9403cdc3344968a40a7db7656138b98f8be`
-- 종료 HEAD: 구현·문서 commit과 GitHub Actions 검증 후 최종 보고에서 확정한다.
+- 구현 검증 HEAD: `1fb4e00b90326a0dcac037b16834a5b0afb820ae`
+- 문서 포함 종료 HEAD: 이 보고서 commit 뒤 최종 보고에서 확정한다.
 - Working Tree: `/Users/beatlefeed/Documents/ChatGPT/콘티제작/.worktrees/storyboard-generator`
 - Project Schema: `1.5.0`
 - Storage Journal: version 3, legacy version 2 보수적 읽기·복구 유지
@@ -121,7 +122,14 @@ PRJ-007은 회귀 기준이며 Asset 정책과 저장 직렬화는 특정 프로
 
 ## 11. CI
 
-구현 commit을 feature branch에 push한 뒤 Ubuntu 24.04, Node.js 24, `npm ci`, `npm run check`를 수행하는 GitHub Actions의 Run ID·Head SHA·결론을 이 절에 기록한다. 이전 Run `34035122120`의 성공은 이번 변경의 완료 근거로 사용하지 않는다.
+- 구현 Push HEAD: `1fb4e00b90326a0dcac037b16834a5b0afb820ae`
+- Workflow Run ID: [`34038096081`](https://github.com/zzocojoa/storyboard-generator/actions/runs/34038096081)
+- Run Head SHA: `1fb4e00b90326a0dcac037b16834a5b0afb820ae`
+- Result: `success`
+- 환경과 명령: Ubuntu 24.04, Node.js 24, `npm ci`, `npm run check`
+- CI 검사량: 27개 Test File, 569개 Test
+
+구현과 같은 SHA의 CI 결과다. 이 보고서를 포함한 문서 commit을 push한 뒤 최신 종료 HEAD의 CI도 별도로 확인한다. 이전 Run `34035122120`의 성공은 이번 변경의 완료 근거로 사용하지 않았다.
 
 ## 12. 남은 위험
 
