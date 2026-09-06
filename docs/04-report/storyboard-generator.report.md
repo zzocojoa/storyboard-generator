@@ -4,7 +4,7 @@
 
 - Branch: `codex/storyboard-generator`
 - 구현 시작 HEAD: `34646b9261fff80aefe915944e742e72fa457663`
-- 구현 종료 HEAD: CI 확인 뒤 이 문서에 기록한다.
+- 구현 종료 HEAD: `fdc24dc19f065a73b424074553ab56878e6b7ae1`
 - Project Schema: `1.3.0 → 1.4.0`
 - 실행 경계: Codex App의 현재 모델, 내장 `image_gen`, 설정된 macOS 음성을 사용한다. `OPENAI_API_KEY`, OpenAI SDK, 외부 생성 fallback은 사용하지 않는다.
 - 범위: 특정 프로젝트에 종속되지 않는 최종 정보 출력 경계다. PRJ-007은 fixture와 Golden 회귀로만 사용한다.
@@ -72,8 +72,11 @@
 
 ## 8. CI
 
-- 구현 commit push 뒤 현재 HEAD의 GitHub Actions 실행 ID, URL, 결과를 기록한다.
-- Workflow는 Node.js 24에서 `npm ci`와 `npm run check`를 실행한다.
+- Push HEAD: `fdc24dc19f065a73b424074553ab56878e6b7ae1`
+- Workflow Run ID: `34012724139`
+- 실행 결과: [GitHub Actions CI](https://github.com/zzocojoa/storyboard-generator/actions/runs/34012724139) 성공
+- GitHub는 깨끗한 Ubuntu runner와 Node.js 24에서 `npm ci`, `npm run check`를 실행했다.
+- 로컬은 Schema 생성 후 각 typecheck·test·Schema check·web build를 개별 실행하고 `npm run check`를 다시 실행했다. GitHub는 생성 파일을 수정하지 않고 저장소에 반영된 Schema의 drift를 검사했다.
 
 ## 9. 남은 위험
 
