@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { CodexRequestStore } from '../src/codex/requests.js';
@@ -19,7 +19,7 @@ async function fixtureApp(): Promise<{ app: FastifyInstance; root: string; reque
   await mkdir(join(webRoot, 'assets'));
   await writeFile(join(webRoot, 'assets', 'app.js'), 'document.body.dataset.ready="true";', 'utf8');
   const config: AppConfig = { host: '127.0.0.1', port: 4317, dataRoot: join(root, 'data'), webRoot,
-    pdfFontPath: '/System/Library/Fonts/Supplemental/AppleGothic.ttf', codex: { requestRoot: join(root, 'requests'), speechVoice: 'Yuna' } };
+    pdfFontPath: resolve('assets/fonts/NanumGothic-Regular.ttf'), codex: { requestRoot: join(root, 'requests'), speechVoice: 'Yuna' } };
   const requests: CodexRequestStore = new CodexRequestStore(config.codex.requestRoot);
   return { app: await createApp(config, new ProjectStore(config.dataRoot), requests), root, requests };
 }

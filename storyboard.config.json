@@ -3,7 +3,7 @@
   "port": 4317,
   "dataRoot": ".local/data",
   "webRoot": "dist/web",
-  "pdfFontPath": "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
+  "pdfFontPath": "assets/fonts/NanumGothic-Regular.ttf",
   "codex": {
     "requestRoot": ".local/codex-requests",
     "speechVoice": "Yuna"
