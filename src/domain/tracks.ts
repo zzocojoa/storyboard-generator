@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { assertNoErrors, contractError } from './errors.js';
-import type { AudioCue, Project, Shot, ShotSourceLink, StoryboardFrame, TextCue } from './schema.js';
+import type { Asset, AudioCue, InformationRule, Project, Shot, ShotSourceLink, SourceUnit, StoryboardFrame, TextCue } from './schema.js';
 import { MillisecondsSchema, ProjectSchema } from './schema.js';
 import { validateProject } from './validation.js';
 
@@ -35,14 +35,35 @@ function requireTextCue(project: Project, cueId: string): TextCue {
   return cue;
 }
 
+function gateInformationIds(project: Project, cue: AudioCue): Set<string> {
+  if (cue.timingStatus !== 'measured' || cue.assetId === null) return new Set<string>();
+  const asset: Asset | undefined = project.assets.find((candidate: Asset): boolean => candidate.id === cue.assetId && candidate.kind === 'audio');
+  const unit: SourceUnit | undefined = project.dataset.units.find((candidate: SourceUnit): boolean => candidate.id === cue.unitId);
+  const segment = unit === undefined ? undefined : project.dataset.segments.find((candidate): boolean => candidate.id === unit.segmentId);
+  if (asset === undefined || unit === undefined || segment === undefined || asset.subjectId !== cue.id
+    || asset.durationMs !== cue.endMs - cue.startMs || cue.startMs < segment.startMs || cue.endMs > segment.endMs) return new Set<string>();
+  return new Set<string>(unit.informationIds.filter((informationId: string): boolean => project.dataset.informationRules.some((rule: InformationRule): boolean => rule.id === informationId && rule.segmentId === unit.segmentId)));
+}
+
+function shotUsesGateInformation(project: Project, shot: Shot, informationIds: ReadonlySet<string>): boolean {
+  if (shot.informationIds.some((informationId: string): boolean => informationIds.has(informationId))) return true;
+  return shot.sourceLinks.some((link: ShotSourceLink): boolean => {
+    if (link.usage !== 'primary-visual' && link.usage !== 'continued-visual') return false;
+    const unit: SourceUnit | undefined = project.dataset.units.find((candidate: SourceUnit): boolean => candidate.id === link.unitId && candidate.segmentId === shot.segmentId);
+    return unit?.informationIds.some((informationId: string): boolean => informationIds.has(informationId)) === true;
+  });
+}
+
 export function updateAudioCueTiming(project: Project, cueId: string, input: AudioCueTimingInput): Project {
   const timing: AudioCueTimingInput = AudioCueTimingInputSchema.parse(input);
   const current: AudioCue = requireAudioCue(project, cueId);
   if (current.startMs === timing.startMs && current.endMs === timing.endMs) return project;
   const durationChanged: boolean = current.endMs - current.startMs !== timing.endMs - timing.startMs;
+  const informationIds: Set<string> = gateInformationIds(project, current);
   const affectedShotIds: Set<string> = new Set<string>();
   const shots: Shot[] = project.shots.map((shot: Shot): Shot => {
-    const affected: boolean = shot.sourceLinks.some((link: ShotSourceLink): boolean => link.unitId === current.unitId && link.temporalAnchor.kind === 'shot-offset' && link.temporalAnchor.basis === 'audio-cue');
+    const audioAnchored: boolean = shot.sourceLinks.some((link: ShotSourceLink): boolean => link.unitId === current.unitId && link.temporalAnchor.kind === 'shot-offset' && link.temporalAnchor.basis === 'audio-cue');
+    const affected: boolean = audioAnchored || shotUsesGateInformation(project, shot, informationIds);
     if (!affected) return shot;
     affectedShotIds.add(shot.id);
     return { ...shot, approvalStatus: 'proposed', sourceLinks: shot.sourceLinks.map((link: ShotSourceLink): ShotSourceLink => link.unitId === current.unitId && link.temporalAnchor.kind === 'shot-offset' && link.temporalAnchor.basis === 'audio-cue'

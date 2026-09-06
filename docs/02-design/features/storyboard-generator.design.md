@@ -65,7 +65,7 @@ native 파일은 일반적인 프로젝트 원본을 표현한다. ID는 불투�
 - `Shot`은 구간, 화면 위치, 구도·각도·이동, 행동 제안, 출연 형태, 소품, 연속성 전후 상태, 다음 컷으로 나가는 전환, 원문 참조를 가진다.
 - `StoryboardFrame`은 컷의 시작·종료·중간 keyframe과 이미지 자산을 별도로 연결한다. 컷 하나에 이미지 하나를 강제하지 않는다.
 - `AudioCue`와 `TextCue`는 영상 컷과 독립된 시작·종료를 가진다. 오디오는 발화·VO·패널·SFX·음악을 구분한다. 채팅·메모를 자동 낭독하지 않는다.
-- `TextMappingDecision`은 자막 Placement와 Canonical 원문의 관계를 `exact`, `abbreviation`, `separate-element`, `replacement`, `standalone-placement`로 기록한다. 명시적 `placement.unitId`, 허용 종류의 유일한 정확 일치, 유일한 휴리스틱 후보 순서로 찾는다. 중복 정확 일치는 자동 선택하지 않는다. 관계마다 Canonical 연결·별도 렌더링·시간 범위의 불변식을 검사한다.
+- `TextMappingDecision`은 자막 Placement와 Canonical 원문의 관계를 `exact`, `abbreviation`, `separate-element`, `replacement`, `standalone-placement`로 기록한다. 명시적 `placement.unitId`, 허용 종류의 유일한 정확 일치, 유일한 휴리스틱 후보 순서로 찾는다. 중복 정확 일치는 자동 선택하지 않는다. 관계마다 Canonical 연결·별도 렌더링·시간 범위의 불변식을 검사한다. `separate-element`의 Placement Cue는 Canonical Unit을 소유하지 않고, 별도 Canonical Cue만 명시한 시각과 Unit을 가진다.
 - `ShotSourceLink`는 컷과 원문 Unit의 권한 관계다. `primary-visual`, `continued-visual`, `audio-only`, `context-only` 용도와 `confirmed`, `mapping-required` 상태, `shot-offset`·`frame`·`unresolved` 시간 Anchor를 가진다. `SOUND`와 `MUSIC`은 직접 시각 근거가 될 수 없고 `continued-visual`은 앞선 `primary-visual`을 요구한다. `sourceUnitIds`는 1.3.0 프로젝트에 중복 저장하지 않는다.
 - 인물의 역할·시각 기준과 컷의 실제 출연 형태를 분리한다. 출연 형태는 VISIBLE, HAND_ONLY, SILHOUETTE, OFFSCREEN_VOICE, VOICE_OVER, IMPLIED, ARCHIVE_IMAGE다. 목록에 없으면 그 컷의 출연이 선언되지 않은 상태다.
 - 장소는 이야기 장소와 화면 장소를 분리한다. 모호한 장소를 이야기 장소로 자동 확정하지 않는다.
@@ -78,7 +78,7 @@ native 파일은 일반적인 프로젝트 원본을 표현한다. ID는 불투�
 
 구간에는 fixed/proposed 시간 상태가 있다. 미정 시간은 임의의 25분으로 채우지 않는다. 음성은 proposed/measured 상태를 별도로 가지며, 실제 가이드 음성 길이를 측정하기 전 낭독 가능성을 통과로 판정하지 않는다. J/L컷의 오디오 구간은 의도적으로 영상 구간을 넘어갈 수 있지만 전체 타임라인 범위를 넘지 않아야 한다.
 
-정보 공개 규칙은 information ID, 최초 Segment, 최초 Unit과 순서, 권한 하한 `baseNotBeforeMs`, `exact-time`·`unit-order`·`segment-start` 정밀도를 가진다. `effectiveNotBeforeMs`는 저장 필드가 아니며 확정 Text Mapping, 확정 Source Temporal Anchor, 같은 Segment의 유효한 측정 Audio Cue, 유일한 Unit 순서 근거에서 매 검사마다 계산한다. 어떤 근거도 기준 하한을 앞당길 수 없다. Unit 순서만 있고 확정 시간 근거가 없으면 검토 필요 상태로 남겨 승인과 생성을 막는다. 프레임 Prompt는 `shot.startMs + frame.offsetMs`와 해당 시각에 활성화된 직접 시각 Link를 함께 검사한다. 금지 사실의 설명 자체를 이미지 prompt에 넣지 않는다. 기록된 정보 ID를 비교하는 검사는 의미적·시각적 반전 누설을 완전히 검증하지 못하므로 그림 검토 상태를 따로 둔다.
+정보 공개 규칙은 information ID, 최초 Segment, 최초 Unit과 순서, 권한 하한 `baseNotBeforeMs`, `exact-time`·`unit-order`·`segment-start` 정밀도를 가진다. `effectiveNotBeforeMs`는 저장 필드가 아니며 확정 Text Mapping, 확정 Source Temporal Anchor, 같은 Segment의 유효한 측정 Audio Cue, 유일한 Unit 순서 근거에서 매 검사마다 계산한다. 어떤 근거도 기준 하한을 앞당길 수 없다. Source나 Audio가 더 늦은 Unit-order 근거보다 앞서면 후반 근거를 유효 하한으로 유지하고 충돌을 검토 항목으로 만든다. Unit 순서만 있고 확정 시간 근거가 없으면 검토 필요 상태로 남겨 승인과 생성을 막는다. 프레임 Prompt는 `shot.startMs + frame.offsetMs`와 해당 시각에 활성화된 직접 시각 Link 및 Text Mapping만 함께 검사한다. 모든 시간 활성 구간은 `[startMs, endMs)`로 판정한다. 금지 사실의 설명 자체를 이미지 prompt에 넣지 않는다. 기록된 정보 ID를 비교하는 검사는 의미적·시각적 반전 누설을 완전히 검증하지 못하므로 그림 검토 상태를 따로 둔다.
 
 ## 6. 제안·잠금·충돌 처리
 
@@ -86,7 +86,7 @@ native 파일은 일반적인 프로젝트 원본을 표현한다. ID는 불투�
 
 컷은 proposed/approved 상태와 잠근 필드를 가진다. 재생성은 원문·확정 시간·잠긴 필드를 변경할 수 없다. 컷 분할은 Audio/Text 타이밍을 기준으로 Source Link를 한쪽 또는 양쪽 continuation에 배분한다. 시간 근거가 없는 Link는 Unit 순서로 한쪽 후보에만 두고 `mapping-required`로 표시한다. 합치기·재정렬은 Link의 용도와 상태를 보존하며 Source Unit 역전을 구조 오류로 거부한다. 잠금과 충돌을 해결하지 못한 요청은 이전 프로젝트 상태를 보존한 채 명시적 오류로 끝낸다.
 
-초안은 `unresolved` Text Mapping과 `mapping-required` Source Link를 포함할 수 있다. 관련 컷 승인, 이미지 생성, 구간 컷 제안 적용은 검토가 끝날 때까지 차단한다. Mapping 변경은 관련 컷을 proposed로 돌리고 Frame의 시각 검토를 pending으로 바꾼다. Source Mapping, Text Mapping, Information Gate, Frame offset, Text Placement가 달라지면 Codex 요청의 basis hash도 달라진다.
+초안은 `unresolved` Text Mapping과 `mapping-required` Source Link를 포함할 수 있다. 관련 컷 승인, 이미지 생성, 구간 컷 제안 적용은 검토가 끝날 때까지 차단한다. Mapping·측정 Audio·Anchor 연결 프레임의 시각 변경은 관련 컷을 proposed로 돌리고 Frame의 시각 검토를 pending으로 바꾼다. 프레임 시각 변경은 해당 `frame` Anchor를 `unresolved/frame-change`로 전환한다. Source Mapping, Text Mapping, Information Gate, Frame offset, Text Placement가 달라지면 Codex 요청의 basis hash도 달라진다.
 
 원본 변경은 파일 해시와 unit ID·문자열·시간 변화로 비교한다. 사용자 수정과 영향을 받는 컷을 구분하고 원본을 자동 덮어쓰지 않는다. 첫 버전은 파일마다 별도 revision과 프로젝트 revision을 사용한다.
 

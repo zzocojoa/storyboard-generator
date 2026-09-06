@@ -1,5 +1,5 @@
 import { assertNoErrors, contractError } from './errors.js';
-import type { Project, Shot, StoryboardFrame } from './schema.js';
+import type { Project, Shot, ShotSourceLink, StoryboardFrame } from './schema.js';
 import { FrameSchema, ProjectSchema } from './schema.js';
 import { validateProject } from './validation.js';
 
@@ -38,9 +38,13 @@ export function updateStoryboardFrame(project: Project, frameId: string, input: 
   const frame: StoryboardFrame = requireFrame(project, frameId);
   requireEditableShot(project, frame.shotId);
   if (frame.offsetMs === frameInput.offsetMs && frame.role === frameInput.role && frame.description === frameInput.description) return project;
+  const timingChanged: boolean = frame.offsetMs !== frameInput.offsetMs;
   return finish(project, { ...project,
     frames: project.frames.map((candidate: StoryboardFrame): StoryboardFrame => candidate.id === frameId ? { ...candidate, ...frameInput, visualReview: 'pending' } : candidate),
-    shots: project.shots.map((candidate: Shot): Shot => candidate.id === frame.shotId ? { ...candidate, approvalStatus: 'proposed' } : candidate),
+    shots: project.shots.map((candidate: Shot): Shot => candidate.id === frame.shotId ? { ...candidate, approvalStatus: 'proposed',
+      sourceLinks: timingChanged ? candidate.sourceLinks.map((link: ShotSourceLink): ShotSourceLink => link.temporalAnchor.kind === 'frame' && link.temporalAnchor.frameId === frameId
+        ? { ...link, status: 'mapping-required', temporalAnchor: { kind: 'unresolved', basis: 'frame-change', status: 'review-required' } } : link) : candidate.sourceLinks,
+    } : candidate),
   });
 }
 

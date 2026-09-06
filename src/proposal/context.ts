@@ -95,6 +95,14 @@ function contextMappings(project: Project, segmentId: string): ContextTextMappin
   });
 }
 
+function frameContextMappings(project: Project, segmentId: string, absoluteMs: number, activeUnitIds: ReadonlySet<string>): ContextTextMapping[] {
+  return contextMappings(project, segmentId).filter((mapping: ContextTextMapping): boolean => {
+    const placement: TextPlacement | undefined = project.dataset.textPlacements.find((value: TextPlacement): boolean => value.id === mapping.placementId);
+    if (placement === undefined || placement.startMs > absoluteMs || (placement.endMs !== null && absoluteMs >= placement.endMs)) return false;
+    return mapping.canonicalUnitId === null || activeUnitIds.has(mapping.canonicalUnitId);
+  });
+}
+
 /** 컷 제안에는 현재 구간의 원문 순서와 공개 Gate를 함께 전달한다. */
 export function buildSegmentContext(project: Project, segmentId: string): SegmentContext {
   const segment: Segment | undefined = project.dataset.segments.find((value: Segment): boolean => value.id === segmentId);
@@ -125,9 +133,10 @@ function imageContext(project: Project, shot: Shot, frame: StoryboardFrame): Ima
   if (reviewIssues.length > 0) throw contractError('FRAME_GENERATION_BLOCKED', reviewIssues.map((value: Issue): string => `${value.code}: ${value.message}`).join('\n'), reviewIssues);
   const links: ShotSourceLink[] = directVisualLinks(shot).filter((link: ShotSourceLink): boolean => {
     const range = sourceAnchorRange(project, shot, link);
-    return range !== null && range.startMs <= absoluteMs && absoluteMs <= range.endMs;
+    return range !== null && range.startMs <= absoluteMs && absoluteMs < range.endMs;
   });
   const units: ProposalUnit[] = promptUnits(project, links, shot.segmentId, absoluteMs);
+  const activeUnitIds: ReadonlySet<string> = new Set<string>(units.map((unit: ProposalUnit): string => unit.id));
   const unitInformationIds: string[] = units.flatMap((unit: ProposalUnit): string[] => unit.informationIds);
   const allowedInformationIds: string[] = [...new Set(unitInformationIds)];
   const informationGates: ContextInformationGate[] = requireAllowedInformation(project, allowedInformationIds, absoluteMs, shot.id);
@@ -150,7 +159,7 @@ function imageContext(project: Project, shot: Shot, frame: StoryboardFrame): Ima
     sourceLinks: links, sourceUnits: units.filter((unit: ProposalUnit): boolean => !['SCREEN_TEXT', 'NOTE', 'CHAT'].includes(unit.kind)),
     people: promptPeople(project, visiblePersonIds), visualReferences, allowedInformationIds, informationGates,
     textOverlayUnitIds: units.filter((unit: ProposalUnit): boolean => ['SCREEN_TEXT', 'NOTE', 'CHAT'].includes(unit.kind)).map((unit: ProposalUnit): string => unit.id),
-    textMappings: contextMappings(project, shot.segmentId),
+    textMappings: frameContextMappings(project, shot.segmentId, absoluteMs, activeUnitIds),
   };
 }
 

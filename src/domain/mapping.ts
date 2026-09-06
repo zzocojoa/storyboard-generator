@@ -96,14 +96,15 @@ function uniqueRefs(refs: readonly SourceRef[]): SourceRef[] {
 }
 
 function anchorRange(project: Project, shot: Shot, anchor: SourceTemporalAnchor): SourceAnchorRange | null {
+  const shotDurationMs: number = shot.endMs - shot.startMs;
   if (anchor.status !== 'confirmed') return null;
   if (anchor.kind === 'frame') {
     const frame: StoryboardFrame | undefined = project.frames.find((candidate: StoryboardFrame): boolean => candidate.id === anchor.frameId && candidate.shotId === shot.id);
-    if (frame === undefined || frame.offsetMs > shot.endMs - shot.startMs) return null;
+    if (frame === undefined || frame.offsetMs >= shotDurationMs) return null;
     const startMs: number = shot.startMs + frame.offsetMs;
-    return { startMs, endMs: Math.min(shot.endMs, startMs + 1) };
+    return { startMs, endMs: startMs + 1 };
   }
-  if (anchor.startOffsetMs > anchor.endOffsetMs || anchor.endOffsetMs > shot.endMs - shot.startMs) return null;
+  if (anchor.startOffsetMs >= shotDurationMs || anchor.startOffsetMs >= anchor.endOffsetMs || anchor.endOffsetMs > shotDurationMs) return null;
   return { startMs: shot.startMs + anchor.startOffsetMs, endMs: shot.startMs + anchor.endOffsetMs };
 }
 
@@ -173,8 +174,10 @@ function audioEvidence(project: Project, rule: InformationRule): GateEvidence[] 
 }
 
 function prioritizedEvidence(project: Project, rule: InformationRule): GateEvidence[] {
-  const priority: Record<GateEvidenceType, number> = { 'text-mapping': 0, 'unit-order': 1, 'source-anchor': 2, 'measured-audio': 3, 'base-exact': 4, 'segment-start': 5 };
-  return [...mappingEvidence(project, rule), ...sourceEvidence(project, rule), ...audioEvidence(project, rule), ...heuristicUnitOrderEvidence(project, rule)]
+  const priority: Record<GateEvidenceType, number> = { 'base-exact': 0, 'text-mapping': 1, 'source-anchor': 2, 'measured-audio': 3, 'unit-order': 4, 'segment-start': 5 };
+  const authoritative: GateEvidence[] = rule.precision === 'exact-time'
+    ? [{ time: rule.baseNotBeforeMs, type: 'base-exact', id: rule.id, refs: rule.sourceRefs }] : [];
+  return [...authoritative, ...mappingEvidence(project, rule), ...sourceEvidence(project, rule), ...audioEvidence(project, rule), ...heuristicUnitOrderEvidence(project, rule)]
     .sort((left: GateEvidence, right: GateEvidence): number => priority[left.type] - priority[right.type] || left.time - right.time || left.id.localeCompare(right.id));
 }
 
@@ -190,10 +193,15 @@ export function effectiveInformationGate(project: Project, informationId: string
   const provisional: boolean = selectedMapping?.status === 'unresolved' || selected?.id.startsWith('heuristic:') === true;
   const confirmation: GateEvidence | undefined = provisional ? valid.find((candidate: GateEvidence): boolean => (candidate.type === 'source-anchor' || candidate.type === 'measured-audio') && candidate.time >= (selected?.time ?? rule.baseNotBeforeMs)) : undefined;
   const effectiveEvidence: GateEvidence | undefined = confirmation ?? selected;
+  const unitOrderConstraint: GateEvidence | undefined = rule.precision === 'unit-order' && (selected?.type === 'source-anchor' || selected?.type === 'measured-audio')
+    ? valid.find((candidate: GateEvidence): boolean => candidate.type === 'unit-order') : undefined;
   const reviewReasons: string[] = earlier.map((candidate: GateEvidence): string => `EVIDENCE_PRECEDES_BASE:${candidate.type}:${candidate.id}:${candidate.time}`);
   const conflictingConfirmations: GateEvidence[] = selected?.type === 'text-mapping' || selected?.id.startsWith('heuristic:') === true
     ? valid.filter((candidate: GateEvidence): boolean => (candidate.type === 'source-anchor' || candidate.type === 'measured-audio') && candidate.time < (selected?.time ?? rule.baseNotBeforeMs)) : [];
   reviewReasons.push(...conflictingConfirmations.map((candidate: GateEvidence): string => `EVIDENCE_PRECEDES_DERIVED:${candidate.type}:${candidate.id}:${candidate.time}`));
+  if (unitOrderConstraint !== undefined && selected !== undefined && selected.time < unitOrderConstraint.time) {
+    reviewReasons.push(`EVIDENCE_PRECEDES_UNIT_ORDER:${selected.type}:${selected.id}:${selected.time}:${unitOrderConstraint.time}`);
+  }
   if (selectedMapping?.status === 'unresolved' && confirmation === undefined) reviewReasons.push(`UNRESOLVED_TEXT_MAPPING:${selectedMapping.id}`);
   if (selected?.id.startsWith('heuristic:') === true && confirmation === undefined) reviewReasons.push(`HEURISTIC_GATE_EVIDENCE:${selected.id}`);
   const unresolvedMapping: boolean = selectedMapping === undefined && rule.notBeforeUnitId !== null && project.textMappingDecisions.some((decision: TextMappingDecision): boolean => decision.canonicalUnitId === rule.notBeforeUnitId && decision.status === 'unresolved');
@@ -202,11 +210,11 @@ export function effectiveInformationGate(project: Project, informationId: string
   const fallbackType: GateEvidenceType = rule.precision === 'exact-time' ? 'base-exact' : rule.precision === 'unit-order' ? 'unit-order' : 'segment-start';
   return {
     id: rule.id, segmentId: rule.segmentId, baseNotBeforeMs: rule.baseNotBeforeMs,
-    effectiveNotBeforeMs: Math.max(rule.baseNotBeforeMs, selected?.time ?? rule.baseNotBeforeMs, confirmation?.time ?? rule.baseNotBeforeMs),
+    effectiveNotBeforeMs: Math.max(rule.baseNotBeforeMs, selected?.time ?? rule.baseNotBeforeMs, confirmation?.time ?? rule.baseNotBeforeMs, unitOrderConstraint?.time ?? rule.baseNotBeforeMs),
     notBeforeUnitId: rule.notBeforeUnitId, notBeforeUnitOrder: rule.notBeforeUnitOrder, precision: rule.precision,
     evidenceType: effectiveEvidence?.type ?? fallbackType, evidenceId: effectiveEvidence?.id ?? null,
     reviewRequired: reviewReasons.length > 0, reviewReasons,
-    sourceRefs: uniqueRefs([...rule.sourceRefs, ...(selected?.refs ?? []), ...earlier.flatMap((candidate: GateEvidence): SourceRef[] => candidate.refs)]),
+    sourceRefs: uniqueRefs([...rule.sourceRefs, ...(selected?.refs ?? []), ...(confirmation?.refs ?? []), ...(unitOrderConstraint?.refs ?? []), ...earlier.flatMap((candidate: GateEvidence): SourceRef[] => candidate.refs)]),
   };
 }
 
@@ -218,7 +226,7 @@ function placementCue(project: Project, decision: TextMappingDecision, existing:
   if (segment === undefined) throw contractError('SEGMENT_NOT_FOUND', `자막 구간을 찾을 수 없습니다: ${placement.segmentId}`, []);
   return {
     id: current?.id ?? `text-placement-${project.dataset.textPlacements.indexOf(placement) + 1}`, segmentId: placement.segmentId,
-    unitId: decision.status === 'confirmed' && decision.relation !== 'standalone-placement' ? decision.canonicalUnitId : null,
+    unitId: decision.status === 'confirmed' && decision.relation !== 'standalone-placement' && decision.relation !== 'separate-element' ? decision.canonicalUnitId : null,
     placementId: placement.id, text: placement.text, startMs: placement.startMs,
     endMs: placement.endMs ?? current?.endMs ?? Math.min(segment.endMs, placement.startMs + 2000),
     kind: current?.kind ?? 'overlay', timingStatus: placement.endMs === null ? current?.timingStatus ?? 'proposed' : 'confirmed',
@@ -377,8 +385,23 @@ export function textMappingReviewIssues(project: Project, segmentId: string): Is
     if (placement === undefined) return [];
     const refs: SourceRef[] = [...placement.sourceRefs, ...(project.dataset.units.find((unit: SourceUnit): boolean => unit.id === decision.canonicalUnitId)?.sourceRefs ?? [])];
     const stateIssues: Issue[] = relationReviewIssues(decision, refs);
-    if (decision.status === 'unresolved') return [...stateIssues, issue('UNRESOLVED_TEXT_MAPPING', 'conflict', decision.id, 'status', 'Placement와 Canonical 문구의 관계를 확정하세요.', 'confirmed', decision.status, refs)];
-    return stateIssues;
+    const canonical: SourceUnit | undefined = decision.canonicalUnitId === null ? undefined : project.dataset.units.find((unit: SourceUnit): boolean => unit.id === decision.canonicalUnitId);
+    const segment: Segment | undefined = project.dataset.segments.find((candidate: Segment): boolean => candidate.id === segmentId);
+    const semanticIssues: Issue[] = [
+      ...(decision.relation !== 'standalone-placement' && canonical === undefined
+        ? [issue('UNKNOWN_CANONICAL_UNIT', 'conflict', decision.id, 'canonicalUnitId', '연결한 Canonical 원문을 찾을 수 없습니다.', 'existing canonical unit', decision.canonicalUnitId, refs)] : []),
+      ...(canonical !== undefined && canonical.segmentId !== segmentId
+        ? [issue('INVALID_CANONICAL_UNIT_SEGMENT', 'conflict', decision.id, 'canonicalUnitId', 'Canonical 원문은 Placement와 같은 구간에 있어야 합니다.', segmentId, canonical.segmentId, refs)] : []),
+      ...(canonical !== undefined && !canonicalKinds.has(canonical.kind)
+        ? [issue('INVALID_CANONICAL_UNIT_KIND', 'conflict', decision.id, 'canonicalUnitId', 'Canonical 원문은 SCREEN_TEXT·CHAT·NOTE 중 하나여야 합니다.', 'SCREEN_TEXT|CHAT|NOTE', canonical.kind, refs)] : []),
+      ...(decision.status === 'confirmed' && decision.relation === 'exact' && canonical !== undefined && canonical.text !== placement.text
+        ? [issue('INVALID_EXACT_TEXT_MAPPING', 'conflict', decision.id, 'relation', 'exact Mapping의 Placement와 Canonical 원문이 다릅니다.', canonical.text, placement.text, refs)] : []),
+      ...(segment !== undefined && decision.canonicalStartMs !== null && decision.canonicalEndMs !== null
+        && (decision.canonicalStartMs < segment.startMs || decision.canonicalEndMs > segment.endMs)
+        ? [issue('INVALID_CANONICAL_TEXT_TIME', 'conflict', decision.id, 'canonicalTiming', 'Canonical 별도 렌더링 시각이 구간 범위를 벗어났습니다.', `${segment.startMs}..${segment.endMs}`, `${decision.canonicalStartMs}..${decision.canonicalEndMs}`, refs)] : []),
+    ];
+    if (decision.status === 'unresolved') return [...stateIssues, ...semanticIssues, issue('UNRESOLVED_TEXT_MAPPING', 'conflict', decision.id, 'status', 'Placement와 Canonical 문구의 관계를 확정하세요.', 'confirmed', decision.status, refs)];
+    return [...stateIssues, ...semanticIssues];
   });
 }
 
@@ -454,7 +477,7 @@ export function reviewIssuesForFrame(project: Project, frameId: string): Issue[]
   const frameMs: number = absoluteFrameTime(shot, frame);
   const active: ShotSourceLink[] = directVisualLinks(shot).filter((link: ShotSourceLink): boolean => {
     const range: SourceAnchorRange | null = sourceAnchorRange(project, shot, link);
-    return range !== null && range.startMs <= frameMs && frameMs <= range.endMs;
+    return range !== null && range.startMs <= frameMs && frameMs < range.endMs;
   });
   const visualIssue: Issue[] = active.length === 0 ? [issue('FRAME_VISUAL_SOURCE_REQUIRED', 'conflict', frame.id, 'sourceLinks', '이 프레임 시각에 활성화된 직접 시각 원문이 필요합니다.', 'active primary or continued source', String(frameMs), [])] : [];
   return [...reviewIssuesForShot(project, shot.id), ...visualIssue];

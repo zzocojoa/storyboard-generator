@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, FormEvent, ReactElement } from 'react';
 import { activeStoryboardFrame } from '../../src/domain/playback.js';
 import type { StoryboardFrameInput } from '../../src/domain/frame.js';
-import { approvalIssuesForShot, effectiveInformationGate, textMappingReviewIssues } from '../../src/domain/mapping.js';
+import { approvalIssuesForShot, effectiveInformationGate, sourceAnchorRange, textMappingReviewIssues } from '../../src/domain/mapping.js';
 import type { EffectiveInformationGate, ShotSourceLinksInput, TextMappingDecisionInput } from '../../src/domain/mapping.js';
 import type { Asset, AudioCue, Issue, LockedField, Profile, Project, Segment, Shot, ShotContent, ShotSourceLink, SourceTemporalAnchor, SourceUnit, StoryboardFrame, TextCue, TextMappingDecision, TextPlacement } from '../../src/domain/schema.js';
 import type { AudioCueTimingInput, TextCueTimingInput } from '../../src/domain/tracks.js';
@@ -11,6 +11,7 @@ import type { AppStatus, CodexRequest, ProjectSummary, SourceImpact } from './ap
 
 type Notice = { tone: 'info' | 'error'; text: string };
 type ReferenceDraft = { kind: 'character' | 'location' | 'prop'; subjectId: string; description: string; file: File | null };
+type SourceGateComparison = { informationId: string; gateMs: number | null; result: 'allowed' | 'blocked' | 'review-required' | 'rule-missing' };
 
 const allLockedFields: LockedField[] = ['timing', 'sources', 'action', 'camera', 'location', 'presence', 'continuity', 'transition', 'frames'];
 
@@ -65,6 +66,16 @@ function continuityNotices(left: ShotContent['continuityAfter'], right: ShotCont
     const label: string = assets.find((asset: Asset): boolean => asset.id === id)?.description ?? id;
     if (before === after) return [];
     return [`${label}: ${before ?? '앞 컷 미기록'} → ${after ?? '뒤 컷 미기록'}`];
+  });
+}
+
+function sourceGateComparisons(project: Project, shot: Shot, link: ShotSourceLink, unit: SourceUnit): SourceGateComparison[] {
+  const revealMs: number | null = sourceAnchorRange(project, shot, link)?.startMs ?? null;
+  return unit.informationIds.map((informationId: string): SourceGateComparison => {
+    if (!project.dataset.informationRules.some((rule): boolean => rule.id === informationId)) return { informationId, gateMs: null, result: 'rule-missing' };
+    const gate: EffectiveInformationGate = effectiveInformationGate(project, informationId);
+    if (revealMs === null || gate.reviewRequired) return { informationId, gateMs: gate.effectiveNotBeforeMs, result: 'review-required' };
+    return { informationId, gateMs: gate.effectiveNotBeforeMs, result: revealMs < gate.effectiveNotBeforeMs ? 'blocked' : 'allowed' };
   });
 }
 
@@ -257,7 +268,7 @@ function TextMappingEditor(props: { decision: TextMappingDecision; placement: Te
   </article>;
 }
 
-function SourceMappingEditor(props: { link: ShotSourceLink; unit: SourceUnit; frames: StoryboardFrame[]; shotDurationMs: number; working: boolean; previousShotId: string | null; nextShotId: string | null;
+function SourceMappingEditor(props: { link: ShotSourceLink; unit: SourceUnit; frames: StoryboardFrame[]; shotDurationMs: number; absoluteRevealMs: number | null; gateComparisons: SourceGateComparison[]; working: boolean; previousShotId: string | null; nextShotId: string | null;
   onChange: (link: ShotSourceLink) => Promise<void>; onMove: (unitId: string, targetShotId: string, usage: ShotSourceLink['usage']) => Promise<void>; }): ReactElement {
   const [draft, setDraft] = useState<ShotSourceLink>(props.link);
   useEffect((): void => { setDraft(props.link); }, [props.link]);
@@ -268,6 +279,8 @@ function SourceMappingEditor(props: { link: ShotSourceLink; unit: SourceUnit; fr
     {draft.temporalAnchor.kind === 'shot-offset' && <div className="pair"><label className="field">ANCHOR START<input type="number" min="0" max={props.shotDurationMs} value={draft.temporalAnchor.startOffsetMs} onChange={(event): void => { setDraft({ ...draft, temporalAnchor: { ...draft.temporalAnchor as Extract<SourceTemporalAnchor, { kind: 'shot-offset' }>, startOffsetMs: Number(event.target.value), basis: 'manual' } }); }} /></label><label className="field">ANCHOR END<input type="number" min="1" max={props.shotDurationMs} value={draft.temporalAnchor.endOffsetMs} onChange={(event): void => { setDraft({ ...draft, temporalAnchor: { ...draft.temporalAnchor as Extract<SourceTemporalAnchor, { kind: 'shot-offset' }>, endOffsetMs: Number(event.target.value), basis: 'manual' } }); }} /></label></div>}
     {draft.temporalAnchor.kind === 'frame' && <label className="field">ANCHOR FRAME<select value={draft.temporalAnchor.frameId} onChange={(event): void => { setDraft({ ...draft, temporalAnchor: { kind: 'frame', frameId: event.target.value, basis: 'manual', status: 'confirmed' } }); }}>{props.frames.map((frame: StoryboardFrame): ReactElement => <option key={frame.id} value={frame.id}>{frame.role} · +{frame.offsetMs}ms</option>)}</select></label>}
     <p className="canonical-text">{draft.temporalAnchor.status.toUpperCase()} · {draft.temporalAnchor.basis}</p>
+    <p className="canonical-text">ABSOLUTE REVEAL · {props.absoluteRevealMs === null ? 'REVIEW REQUIRED' : `${props.absoluteRevealMs}ms`}</p>
+    {props.gateComparisons.map((comparison: SourceGateComparison): ReactElement => <p className={`mapping-issue ${comparison.result}`} key={comparison.informationId}>GATE · {comparison.informationId} · {comparison.gateMs === null ? 'RULE MISSING' : `${comparison.gateMs}ms`} · {comparison.result.toUpperCase()}</p>)}
     <small className="source-ref">{props.unit.sourceRefs.map((ref): string => `${ref.fileId}:${ref.locator}`).join(' · ')}</small>
     <div className="mapping-actions"><button disabled={props.working} onClick={(): void => { void props.onChange(draft); }}>Source Mapping 저장</button>{props.previousShotId !== null && <button disabled={props.working} onClick={(): void => { void props.onMove(props.unit.id, props.previousShotId as string, draft.usage); }}>← 앞 컷으로 이동</button>}{props.nextShotId !== null && <button disabled={props.working} onClick={(): void => { void props.onMove(props.unit.id, props.nextShotId as string, draft.usage); }}>뒤 컷으로 이동 →</button>}</div>
   </article>;
@@ -349,8 +362,8 @@ function Inspector(props: { project: Project; segment: Segment; shot: Shot | nul
       <section className="inspector-section continuity-block"><header>CONTINUITY STATES <span>{continuityReview.length} REVIEW</span></header>{continuityAssets.length === 0 && <p className="empty-note">인물·장소·소품 기준 자산을 등록하면 전후 상태를 기록할 수 있습니다.</p>}{continuityAssets.map((asset: Asset): ReactElement => <article key={asset.id}><b>{asset.description}</b><div className="pair"><label className="field">BEFORE<input value={props.draft?.continuityBefore.find((entry): boolean => entry.assetId === asset.id)?.state ?? ''} onChange={(event): void => { props.onDraft({ ...props.draft as ShotContent, continuityBefore: updateContinuityState((props.draft as ShotContent).continuityBefore, asset.id, event.target.value) }); }} /></label><label className="field">AFTER<input value={props.draft?.continuityAfter.find((entry): boolean => entry.assetId === asset.id)?.state ?? ''} onChange={(event): void => { props.onDraft({ ...props.draft as ShotContent, continuityAfter: updateContinuityState((props.draft as ShotContent).continuityAfter, asset.id, event.target.value) }); }} /></label></div></article>)}{continuityReview.length > 0 && <div className="continuity-review">{continuityReview.map((message: string): ReactElement => <p key={message}>{message}</p>)}</div>}</section>
       <div className="edit-actions"><button className="primary" disabled={props.working} onClick={(): void => { void props.onSave(); }}>컷 저장</button><button disabled={props.working} onClick={(): void => { void props.onSplit(); }}>중간 분할</button><button disabled={props.working} onClick={(): void => { void props.onMerge(); }}>다음 컷과 병합</button><button disabled={props.working} onClick={(): void => { void props.onMove(-1); }}>← 이동</button><button disabled={props.working} onClick={(): void => { void props.onMove(1); }}>이동 →</button></div>
       <div className="approval-actions"><button disabled={props.working} onClick={(): void => { void props.onLocks(shot.lockedFields.length === 0 ? allLockedFields : []); }}>{shot.lockedFields.length === 0 ? '전체 잠금' : '잠금 해제'}</button><button className="approve" disabled={props.working} onClick={(): void => { void props.onApprove(); }}>컷 확정</button></div>
-      {approvalIssues.length > 0 && <section className="approval-review"><b>APPROVAL BLOCKED · {approvalIssues.length}</b>{approvalIssues.map((item: Issue, index: number): ReactElement => <p key={`${item.code}:${item.entityId}:${index}`}>{item.code} · {item.message}{item.expected === null ? '' : ` · 기대 ${item.expected}`}{item.actual === null ? '' : ` · 현재 ${item.actual}`}{item.sourceRefs.length === 0 ? '' : ` · ${item.sourceRefs.map((ref): string => `${ref.fileId}:${ref.locator}`).join(', ')}`}</p>)}</section>}
-      <section className="inspector-section source-block"><header>SOURCE TEMPORAL MAPPING <span>{sourceMappings.length}</span></header>{sourceMappings.map((mapping): ReactElement => <SourceMappingEditor key={mapping.unit.id} link={mapping.link} unit={mapping.unit} frames={frames} shotDurationMs={duration} working={props.working} previousShotId={previousSegmentShotId} nextShotId={nextSegmentShotId}
+      {approvalIssues.length > 0 && <section className="approval-review"><b>APPROVAL BLOCKED · {approvalIssues.length}</b>{approvalIssues.map((item: Issue, index: number): ReactElement => <p key={`${item.code}:${item.entityId}:${index}`}>{item.code} · ENTITY {item.entityId} · FIELD {item.field} · {item.message}{item.expected === null ? '' : ` · 기대 ${item.expected}`}{item.actual === null ? '' : ` · 현재 ${item.actual}`}{item.sourceRefs.length === 0 ? '' : ` · ${item.sourceRefs.map((ref): string => `${ref.fileId}:${ref.locator}`).join(', ')}`}</p>)}</section>}
+      <section className="inspector-section source-block"><header>SOURCE TEMPORAL MAPPING <span>{sourceMappings.length}</span></header>{sourceMappings.map((mapping): ReactElement => <SourceMappingEditor key={mapping.unit.id} link={mapping.link} unit={mapping.unit} frames={frames} shotDurationMs={duration} absoluteRevealMs={sourceAnchorRange(props.project, shot, mapping.link)?.startMs ?? null} gateComparisons={sourceGateComparisons(props.project, shot, mapping.link, mapping.unit)} working={props.working} previousShotId={previousSegmentShotId} nextShotId={nextSegmentShotId}
         onChange={async (nextLink: ShotSourceLink): Promise<void> => { await props.onSourceLinks({ links: (shot.sourceLinks.map((link: ShotSourceLink): ShotSourceLink => link.unitId === nextLink.unitId ? nextLink : link)) }); }} onMove={props.onSourceMove} />)}</section>
       <section className="inspector-section text-mapping-block"><header>TEXT MAPPING REVIEW <span>{textMappingIssues.length} REVIEW</span></header>{textMappings.map((mapping): ReactElement => <TextMappingEditor key={mapping.decision.id} decision={mapping.decision} placement={mapping.placement} units={props.project.dataset.units.filter((unit: SourceUnit): boolean => unit.segmentId === props.segment.id)} issues={textMappingIssues.filter((item: Issue): boolean => item.entityId === mapping.decision.id)} working={props.working} onSave={props.onTextMapping} />)}</section>
       <section className="inspector-section information-gate-block"><header>INFORMATION GATE <span>{informationGates.filter((gate: EffectiveInformationGate): boolean => gate.reviewRequired).length} REVIEW</span></header>{informationGates.length === 0 && <p className="empty-note">이 구간에는 정보 공개 규칙이 없습니다.</p>}{informationGates.map((gate: EffectiveInformationGate): ReactElement => <article className={gate.reviewRequired ? 'mapping-editor unresolved' : 'mapping-editor'} key={gate.id}><header><b>{gate.id}</b><span>{gate.precision}</span></header><p>BASE {gate.baseNotBeforeMs}ms · EFFECTIVE {gate.effectiveNotBeforeMs}ms</p><p className="canonical-text">{gate.evidenceType} · {gate.evidenceId ?? 'authoritative base'}</p>{gate.reviewReasons.map((reason: string): ReactElement => <p className="mapping-issue" key={reason}>{reason}</p>)}<small className="source-ref">{gate.sourceRefs.map((ref): string => `${ref.fileId}:${ref.locator}`).join(' · ')}</small></article>)}</section>

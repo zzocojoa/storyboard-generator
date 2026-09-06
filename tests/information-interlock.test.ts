@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { mergeShots, reorderShots, splitShot } from '../src/domain/edit.js';
+import { addStoryboardFrame, updateStoryboardFrame } from '../src/domain/frame.js';
 import {
   approvalIssuesForShot, canonicalCandidate, createInitialTextMappingDecisions, effectiveInformationGate,
-  moveShotSourceLink, updateTextMappingDecision,
+  moveShotSourceLink, updateShotSourceLinks, updateTextMappingDecision,
 } from '../src/domain/mapping.js';
 import {
   DatasetSchema, NativeDatasetSchema, TextMappingDecisionSchema,
@@ -91,6 +92,34 @@ describe('정보 공개 시점 안전장치 결함 재현', (): void => {
     expect(TextMappingDecisionSchema.safeParse(invalid).success).toBe(false);
   });
 
+  it('separate_element_keeps_placement_and_canonical_cues_independent', async (): Promise<void> => {
+    const project: Project = await temporalMappingOutline();
+    const decision: TextMappingDecision = project.textMappingDecisions.find((candidate: TextMappingDecision): boolean => candidate.placementId === 'gate-placement-a') as TextMappingDecision;
+    const changed: Project = updateTextMappingDecision(project, decision.id, {
+      canonicalUnitId: 'gate-a', relation: 'separate-element', status: 'confirmed', renderCanonicalSeparately: true,
+      canonicalStartMs: 7500, canonicalEndMs: 7800, note: '독립 화면 요소',
+    });
+    const placementCue = changed.textCues.find((cue) => cue.placementId === decision.placementId);
+    const canonicalCue = changed.textCues.find((cue) => cue.placementId === null && cue.unitId === 'gate-a');
+    expect(placementCue).toEqual(expect.objectContaining({ unitId: null, text: '첫 공개 문구', startMs: 6000 }));
+    expect(canonicalCue).toEqual(expect.objectContaining({ unitId: 'gate-a', text: '첫 공개 문구', startMs: 7500, endMs: 7800 }));
+  });
+
+  it('separate_element_split_uses_canonical_time', async (): Promise<void> => {
+    const project: Project = await temporalMappingOutline();
+    const shot: Shot = segmentShot(project, 'demonstration');
+    const decision: TextMappingDecision = project.textMappingDecisions.find((candidate: TextMappingDecision): boolean => candidate.placementId === 'gate-placement-a') as TextMappingDecision;
+    const changed: Project = updateTextMappingDecision(project, decision.id, {
+      canonicalUnitId: 'gate-a', relation: 'separate-element', status: 'confirmed', renderCanonicalSeparately: true,
+      canonicalStartMs: 8500, canonicalEndMs: 9000, note: '분할 뒤 Canonical 표시',
+    });
+    const split: Project = splitShot(changed, shot.id, 8000, 'separate-canonical-shot', 'separate-canonical-frame');
+    const first: Shot = split.shots.find((candidate: Shot): boolean => candidate.id === shot.id) as Shot;
+    const second: Shot = split.shots.find((candidate: Shot): boolean => candidate.id === 'separate-canonical-shot') as Shot;
+    expect(first.sourceLinks.some((link: ShotSourceLink): boolean => link.unitId === 'gate-a')).toBe(false);
+    expect(second.sourceLinks.find((link: ShotSourceLink): boolean => link.unitId === 'gate-a')).toEqual(expect.objectContaining({ status: 'confirmed' }));
+  });
+
   it('duplicate_exact_text_remains_unresolved', async (): Promise<void> => {
     const project: Project = importPackage(await nativePackage());
     const original = project.dataset.units.find((unit): boolean => unit.id === '제목');
@@ -135,6 +164,13 @@ describe('정보 공개 시점 안전장치 결함 재현', (): void => {
       ? { ...decision, canonicalUnitId: null, relation: 'exact' as const, status: 'confirmed' as const, renderCanonicalSeparately: false, canonicalStartMs: null, canonicalEndMs: null }
       : decision) } as Project;
     expect(() => buildFrameImageContext(changed, frame.id)).toThrowError(expect.objectContaining({ code: 'FRAME_GENERATION_BLOCKED' }));
+
+    const temporal: Project = await temporalMappingOutline();
+    const temporalShot: Shot = segmentShot(temporal, 'demonstration');
+    const mismatched: Project = { ...temporal, textMappingDecisions: temporal.textMappingDecisions.map((decision) => decision.placementId === 'gate-placement-a'
+      ? { ...decision, canonicalUnitId: 'gate-b', relation: 'exact' as const, status: 'confirmed' as const }
+      : decision) };
+    expect(approvalIssuesForShot(mismatched, temporalShot.id)).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'INVALID_EXACT_TEXT_MAPPING' })]));
   });
 
   it('unknown_information_rule_returns_review_issue', async (): Promise<void> => {
@@ -178,6 +214,22 @@ describe('정보 공개 시점 안전장치 결함 재현', (): void => {
     expect(movedLink.temporalAnchor).toEqual({ kind: 'unresolved', basis: 'audio-change', status: 'review-required' });
   });
 
+  it('measured_audio_move_invalidates_every_gate_related_shot', async (): Promise<void> => {
+    const project: Project = await productionOutline();
+    const cue: AudioCue = project.audioCues.find((candidate: AudioCue): boolean => candidate.unitId === 'UNIT-062') as AudioCue;
+    const frame: StoryboardFrame = project.frames.find((candidate: StoryboardFrame): boolean => candidate.shotId === segmentShot(project, 'SEG-024').id) as StoryboardFrame;
+    const audioAsset: Asset = { id: 'gate-audio-asset', kind: 'audio', subjectId: cue.id, path: 'assets/gate.wav', mimeType: 'audio/wav', sha256: '5'.repeat(64), description: 'Gate 음성', durationMs: cue.endMs - cue.startMs, version: 1 };
+    const imageAsset: Asset = { id: 'gate-image-asset', kind: 'image', subjectId: frame.id, path: 'assets/gate.png', mimeType: 'image/png', sha256: '6'.repeat(64), description: '검토 그림', durationMs: null, version: 1 };
+    const prepared: Project = { ...project, assets: [audioAsset, imageAsset],
+      audioCues: project.audioCues.map((candidate: AudioCue): AudioCue => candidate.id === cue.id ? { ...candidate, timingStatus: 'measured', assetId: audioAsset.id } : candidate),
+      shots: project.shots.map((shot: Shot): Shot => shot.segmentId === 'SEG-024' ? { ...shot, approvalStatus: 'approved' } : shot),
+      frames: project.frames.map((candidate: StoryboardFrame): StoryboardFrame => candidate.id === frame.id ? { ...candidate, imageAssetId: imageAsset.id, visualReview: 'accepted' } : candidate),
+    };
+    const moved: Project = updateAudioCueTiming(prepared, cue.id, { startMs: cue.startMs + 100, endMs: cue.endMs + 100 });
+    expect(segmentShot(moved, 'SEG-024').approvalStatus).toBe('proposed');
+    expect(moved.frames.find((candidate: StoryboardFrame): boolean => candidate.id === frame.id)?.visualReview).toBe('pending');
+  });
+
   it('explicit_native_exact_time_is_not_overwritten', async (): Promise<void> => {
     const payload = await nativePackage();
     const data: NativeDataset = nativeData(payload);
@@ -187,7 +239,7 @@ describe('정보 공개 시점 안전장치 결함 재현', (): void => {
     });
     const project: Project = createSourceOutline(importPackage(withNativeData(payload, changed)), { proposedTextHoldMs: 2000 });
     expect(project.dataset.informationRules[0]?.baseNotBeforeMs).toBe(7000);
-    expect(effectiveInformationGate(project, 'info:exact').effectiveNotBeforeMs).toBeGreaterThanOrEqual(7000);
+    expect(effectiveInformationGate(project, 'info:exact')).toEqual(expect.objectContaining({ effectiveNotBeforeMs: 7000, evidenceType: 'base-exact', evidenceId: 'info:exact' }));
   });
 
   it('mapping_change_recomputes_effective_gate', async (): Promise<void> => {
@@ -259,6 +311,25 @@ describe('정보 공개 시점 안전장치 결함 재현', (): void => {
     expect(() => buildFrameImageContext(changed, frame.id)).toThrowError(expect.objectContaining({ code: 'FRAME_GENERATION_BLOCKED', issues: expect.arrayContaining([expect.objectContaining({ code: 'INFORMATION_WITHOUT_SOURCE_LINK' })]) }));
   });
 
+  it('frame_context_excludes_future_text_mappings', async (): Promise<void> => {
+    const original: Project = await productionOutline();
+    const confirmed: Project = original.textMappingDecisions.reduce((current: Project, decision: TextMappingDecision): Project => {
+      const placement = current.dataset.textPlacements.find((candidate) => candidate.id === decision.placementId);
+      if (placement?.segmentId !== 'SEG-024' || decision.status === 'confirmed') return current;
+      return updateTextMappingDecision(current, decision.id, { canonicalUnitId: decision.canonicalUnitId, relation: decision.relation,
+        status: 'confirmed', renderCanonicalSeparately: decision.renderCanonicalSeparately, canonicalStartMs: decision.canonicalStartMs,
+        canonicalEndMs: decision.canonicalEndMs, note: '검증 확정' });
+    }, original);
+    const shot: Shot = segmentShot(confirmed, 'SEG-024');
+    const frame: StoryboardFrame = { id: 'mapping-boundary-frame', shotId: shot.id, offsetMs: 8000, role: 'key', description: '첫 공개 프레임', imageAssetId: null, visualReview: 'pending' };
+    const link: ShotSourceLink = { unitId: 'UNIT-060', usage: 'primary-visual', status: 'confirmed', temporalAnchor: { kind: 'frame', frameId: frame.id, basis: 'manual', status: 'confirmed' } };
+    const changed: Project = { ...confirmed, shots: confirmed.shots.map((candidate: Shot): Shot => candidate.id === shot.id ? { ...candidate, sourceLinks: [link], informationIds: [] } : candidate), frames: [...confirmed.frames, frame] };
+    const context = buildFrameImageContext(changed, frame.id);
+    expect(context.textMappings.map((mapping) => mapping.placementId)).toContain('source-11:18');
+    expect(context.textMappings.map((mapping) => mapping.placementId)).not.toContain('source-11:19');
+    expect(context.textMappings.map((mapping) => mapping.placementId)).not.toContain('source-11:20');
+  });
+
   it('source_anchor_survives_split_merge_reorder', async (): Promise<void> => {
     const project: Project = await nativeOutline();
     const split: Project = splitShot(project, 'shot-2', 8000, 'anchor-split', 'anchor-split-frame');
@@ -267,6 +338,29 @@ describe('정보 공개 시점 안전장치 결함 재현', (): void => {
     const link: ShotSourceLink = merged.shots.find((shot: Shot): boolean => shot.id === 'anchor-split')?.sourceLinks.find((candidate: ShotSourceLink): boolean => candidate.unitId === '동작') as ShotSourceLink;
     expect(link.status).toBe('confirmed');
     expect(link.temporalAnchor.kind).toBe('shot-offset');
+  });
+
+  it('frame_offset_change_invalidates_linked_source_anchor', async (): Promise<void> => {
+    const project: Project = await nativeOutline();
+    const withFrame: Project = addStoryboardFrame(project, 'shot-2', 'linked-key-frame', { offsetMs: 3000, role: 'key', description: '연결 프레임' });
+    const shot: Shot = segmentShot(withFrame, 'demonstration');
+    const links: ShotSourceLink[] = shot.sourceLinks.map((link: ShotSourceLink): ShotSourceLink => link.unitId === '동작'
+      ? { ...link, status: 'confirmed', temporalAnchor: { kind: 'frame', frameId: 'linked-key-frame', basis: 'manual', status: 'confirmed' } }
+      : link);
+    const anchored: Project = updateShotSourceLinks(withFrame, shot.id, { links });
+    const moved: Project = updateStoryboardFrame(anchored, 'linked-key-frame', { offsetMs: 4000, role: 'key', description: '연결 프레임' });
+    expect(segmentShot(moved, 'demonstration').sourceLinks.find((link: ShotSourceLink): boolean => link.unitId === '동작')).toEqual(expect.objectContaining({
+      status: 'mapping-required', temporalAnchor: { kind: 'unresolved', basis: 'frame-change', status: 'review-required' },
+    }));
+  });
+
+  it('source_anchor_end_is_exclusive_for_frame_generation', async (): Promise<void> => {
+    const project: Project = await nativeOutline();
+    const shot: Shot = segmentShot(project, 'demonstration');
+    const frame: StoryboardFrame = { id: 'anchor-end-frame', shotId: shot.id, offsetMs: 1000, role: 'key', description: 'Anchor 종료 프레임', imageAssetId: null, visualReview: 'pending' };
+    const link: ShotSourceLink = { unitId: '동작', usage: 'primary-visual', status: 'confirmed', temporalAnchor: { kind: 'shot-offset', startOffsetMs: 0, endOffsetMs: 1000, basis: 'manual', status: 'confirmed' } };
+    const changed: Project = { ...project, shots: project.shots.map((candidate: Shot): Shot => candidate.id === shot.id ? { ...candidate, sourceLinks: [link] } : candidate), frames: [...project.frames, frame] };
+    expect(() => buildFrameImageContext(changed, frame.id)).toThrowError(expect.objectContaining({ code: 'FRAME_GENERATION_BLOCKED', issues: expect.arrayContaining([expect.objectContaining({ code: 'FRAME_VISUAL_SOURCE_REQUIRED' })]) }));
   });
 
   it('source_move_rebases_or_invalidates_anchor', async (): Promise<void> => {
@@ -281,13 +375,15 @@ describe('정보 공개 시점 안전장치 결함 재현', (): void => {
 
   it('migration_1_2_to_1_3_is_conservative', async (): Promise<void> => {
     const project: Project = await nativeOutline();
-    const legacy = JSON.parse(JSON.stringify(project)) as { schemaVersion: string; shots: Array<{ approvalStatus: string; sourceLinks: Array<Record<string, unknown>> }> };
+    const legacy = JSON.parse(JSON.stringify(project)) as { schemaVersion: string; shots: Array<{ approvalStatus: string; sourceLinks: Array<Record<string, unknown>> }>; textMappingDecisions: Array<Record<string, unknown>> };
     legacy.schemaVersion = '1.2.0';
     legacy.shots[0]!.approvalStatus = 'approved';
     for (const shot of legacy.shots) for (const link of shot.sourceLinks) delete link.temporalAnchor;
+    legacy.textMappingDecisions[0] = { ...(legacy.textMappingDecisions[0] as Record<string, unknown>), canonicalUnitId: null, relation: 'separate-element', status: 'confirmed', renderCanonicalSeparately: true, canonicalStartMs: 100, canonicalEndMs: 200 };
     const migrated: Project = parseProject(legacy);
     expect(migrated.schemaVersion).toBe('1.3.0');
     expect(migrated.shots.every((shot: Shot): boolean => shot.approvalStatus === 'proposed' && shot.sourceLinks.every((link: ShotSourceLink): boolean => link.status === 'mapping-required' && link.temporalAnchor.kind === 'unresolved' && link.temporalAnchor.basis === 'migration'))).toBe(true);
+    expect(migrated.textMappingDecisions[0]).toEqual(expect.objectContaining({ canonicalUnitId: null, relation: 'standalone-placement', status: 'unresolved', renderCanonicalSeparately: false, canonicalStartMs: null, canonicalEndMs: null }));
   });
 
   it('migration_preserves_original_content', async (): Promise<void> => {
@@ -302,5 +398,10 @@ describe('정보 공개 시점 안전장치 결함 재현', (): void => {
     expect(migrated.assets).toEqual(enriched.assets);
     expect(migrated.generationRecords).toEqual(enriched.generationRecords);
     expect(migrated.shots.map((shot: Shot): string => shot.action)).toEqual(enriched.shots.map((shot: Shot): string => shot.action));
+    expect(migrated.dataset.units).toEqual(enriched.dataset.units);
+    expect(migrated.dataset.segments).toEqual(enriched.dataset.segments);
+    expect(migrated.frames).toEqual(enriched.frames);
+    expect(migrated.audioCues).toEqual(enriched.audioCues);
+    expect(migrated.textCues).toEqual(enriched.textCues);
   });
 });

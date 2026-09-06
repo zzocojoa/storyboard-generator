@@ -64,7 +64,7 @@ function sourceProjectFromStoredInput(input: JsonObject): Project {
 
 function migratedTextMapping(decision: unknown): unknown {
   if (!isJsonObject(decision)) return decision;
-  if (decision.canonicalUnitId === null) return { ...decision, relation: 'standalone-placement', renderCanonicalSeparately: false, canonicalStartMs: null, canonicalEndMs: null };
+  if (decision.canonicalUnitId === null) return { ...decision, relation: 'standalone-placement', status: 'unresolved', renderCanonicalSeparately: false, canonicalStartMs: null, canonicalEndMs: null };
   if (decision.relation === 'exact') return { ...decision, renderCanonicalSeparately: false, canonicalStartMs: null, canonicalEndMs: null };
   const hasRange: boolean = typeof decision.canonicalStartMs === 'number' && typeof decision.canonicalEndMs === 'number' && decision.canonicalEndMs > decision.canonicalStartMs;
   if (decision.relation === 'separate-element' && !hasRange) return { ...decision, relation: 'abbreviation', status: 'unresolved', renderCanonicalSeparately: false, canonicalStartMs: null, canonicalEndMs: null };

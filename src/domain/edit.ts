@@ -76,12 +76,17 @@ function linkEvidence(project: Project, shot: Shot, link: ShotSourceLink): Timed
     .map((cue: AudioCue): TimedEvidence => ({ startMs: cue.startMs, endMs: cue.endMs, kind: 'audio', basis: 'audio-cue' }));
   const directText: TimedEvidence[] = project.textCues.filter((cue: TextCue): boolean => cue.unitId === link.unitId && cue.timingStatus === 'confirmed')
     .map((cue: TextCue): TimedEvidence => ({ startMs: cue.startMs, endMs: cue.endMs, kind: 'text', basis: 'text-cue' }));
-  const mappedPlacementIds: string[] = project.textMappingDecisions.filter((decision: TextMappingDecision): boolean => decision.canonicalUnitId === link.unitId && decision.status === 'confirmed').map((decision: TextMappingDecision): string => decision.placementId);
-  const mappedText: TimedEvidence[] = project.dataset.textPlacements.filter((placement: TextPlacement): boolean => mappedPlacementIds.includes(placement.id))
-    .map((placement: TextPlacement): TimedEvidence => {
-      const cue: TextCue | undefined = project.textCues.find((value: TextCue): boolean => value.placementId === placement.id);
-      return { startMs: placement.startMs, endMs: placement.endMs ?? cue?.endMs ?? placement.startMs + 1, kind: 'text', basis: 'text-cue' };
-    });
+  const mappedText: TimedEvidence[] = project.textMappingDecisions.flatMap((decision: TextMappingDecision): TimedEvidence[] => {
+    if (decision.canonicalUnitId !== link.unitId || decision.status !== 'confirmed' || decision.relation === 'standalone-placement') return [];
+    if (decision.relation === 'separate-element') {
+      if (decision.canonicalStartMs === null || decision.canonicalEndMs === null) return [];
+      return [{ startMs: decision.canonicalStartMs, endMs: decision.canonicalEndMs, kind: 'text', basis: 'text-cue' }];
+    }
+    const placement: TextPlacement | undefined = project.dataset.textPlacements.find((value: TextPlacement): boolean => value.id === decision.placementId);
+    if (placement === undefined) return [];
+    const cue: TextCue | undefined = project.textCues.find((value: TextCue): boolean => value.placementId === placement.id);
+    return [{ startMs: placement.startMs, endMs: placement.endMs ?? cue?.endMs ?? placement.startMs + 1, kind: 'text', basis: 'text-cue' }];
+  });
   const values: TimedEvidence[] = [...anchored, ...audio, ...directText, ...mappedText];
   const keys: Set<string> = new Set<string>();
   return values.filter((value: TimedEvidence): boolean => {

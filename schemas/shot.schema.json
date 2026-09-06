@@ -112,7 +112,8 @@
                       "migration",
                       "mapping-change",
                       "source-move",
-                      "audio-change"
+                      "audio-change",
+                      "frame-change"
                     ]
                   },
                   "status": {

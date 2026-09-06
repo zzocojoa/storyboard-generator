@@ -145,7 +145,7 @@ export const TransitionSchema = z.strictObject({
   note: z.string(),
 });
 export const LockedFieldSchema = z.enum(['timing', 'sources', 'action', 'camera', 'location', 'presence', 'continuity', 'transition', 'frames']);
-export const SourceAnchorBasisSchema = z.enum(['manual', 'text-cue', 'audio-cue', 'proposal', 'native-exact', 'estimated', 'migration', 'mapping-change', 'source-move', 'audio-change']);
+export const SourceAnchorBasisSchema = z.enum(['manual', 'text-cue', 'audio-cue', 'proposal', 'native-exact', 'estimated', 'migration', 'mapping-change', 'source-move', 'audio-change', 'frame-change']);
 export const SourceTemporalAnchorSchema = z.discriminatedUnion('kind', [
   z.strictObject({
     kind: z.literal('shot-offset'), startOffsetMs: MillisecondsSchema, endOffsetMs: MillisecondsSchema,
@@ -155,7 +155,7 @@ export const SourceTemporalAnchorSchema = z.discriminatedUnion('kind', [
     kind: z.literal('frame'), frameId: IdSchema, basis: z.enum(['manual', 'proposal']), status: z.literal('confirmed'),
   }),
   z.strictObject({
-    kind: z.literal('unresolved'), basis: z.enum(['estimated', 'migration', 'mapping-change', 'source-move', 'audio-change']), status: z.literal('review-required'),
+    kind: z.literal('unresolved'), basis: z.enum(['estimated', 'migration', 'mapping-change', 'source-move', 'audio-change', 'frame-change']), status: z.literal('review-required'),
   }),
 ]);
 export const ShotSourceLinkSchema = z.strictObject({
