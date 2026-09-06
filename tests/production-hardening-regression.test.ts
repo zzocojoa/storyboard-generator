@@ -1,0 +1,689 @@
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, unlink, writeFile } from 'node:fs/promises';
+import { hostname, tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import type { FastifyInstance } from 'fastify';
+import { afterEach, describe, expect, it } from 'vitest';
+import { CodexRequestStore } from '../src/codex/requests.js';
+import { attachAudioAsset } from '../src/domain/audio-asset.js';
+import { WorkerAudioNormalizer } from '../src/domain/audio-normalizer.js';
+import type { AudioNormalizer } from '../src/domain/audio-normalizer.js';
+import { inspectAudioBytes, inspectAudioFileBytes } from '../src/domain/media-inspection.js';
+import type { Asset, AudioCue, Project } from '../src/domain/schema.js';
+import { ProjectSchema } from '../src/domain/schema.js';
+import { exportProjectJson } from '../src/exporters/json.js';
+import { importPackage } from '../src/importers/import-package.js';
+import { sha256Bytes, sha256Text } from '../src/importers/integrity.js';
+import { parseProject } from '../src/io/project.js';
+import { createSourceOutline } from '../src/proposal/outline.js';
+import { createApp } from '../src/server/app.js';
+import type { AppConfig } from '../src/server/config.js';
+import { ProjectStore } from '../src/server/store.js';
+import { BrowserAudioController } from '../web/src/audio-lifecycle.js';
+import type { AudioElementPort, AudioLifecycleCue, AudioScheduler } from '../web/src/audio-lifecycle.js';
+import { nativePackage, pcmWav, png, testAudioNormalizer, TEST_AUDIO_NORMALIZATION_OPTIONS } from './helpers.js';
+
+const roots: string[] = [];
+
+type LegacyFixture = {
+  root: string;
+  dataRoot: string;
+  store: ProjectStore;
+  project: Project;
+  cue: AudioCue;
+  asset: Asset;
+  bytes: Buffer;
+  assetPath: string;
+};
+
+type TransactionJournal = {
+  version: 2;
+  operation: 'update';
+  transactionId: string;
+  projectId: string;
+  owner: { host: string; pid: number; transactionId: string };
+  expectedRevision: number;
+  nextRevision: number;
+  previousProjectSha256: string;
+  nextProjectSha256: string;
+  versionFile: { relativePath: string; sha256: string };
+  assets: Array<{ assetId: string; relativePath: string; sha256: string; stagedFileName: string }>;
+};
+
+type JournalAsset = { asset: Asset; bytes: Buffer };
+
+type CreateJournal = {
+  version: 2;
+  operation: 'create';
+  transactionId: string;
+  projectId: string;
+  owner: { host: string; pid: number; transactionId: string };
+  projectDirectoryName: string;
+  currentFile: { relativePath: 'project.json'; sha256: string };
+  versionFile: { relativePath: 'versions/000000.json'; sha256: string };
+};
+
+const DEAD_PROCESS_ID: number = 2_147_483_647;
+
+async function outline(): Promise<Project> {
+  return createSourceOutline(importPackage(await nativePackage()), { proposedTextHoldMs: 2000 });
+}
+
+function sfxCue(project: Project): AudioCue {
+  const cue: AudioCue | undefined = project.audioCues.find((candidate: AudioCue): boolean => candidate.kind === 'sfx');
+  if (cue === undefined) throw new Error('SFX 검증 Cue가 없습니다.');
+  return cue;
+}
+
+async function temporaryRoot(prefix: string): Promise<string> {
+  const root: string = await mkdtemp(join(tmpdir(), prefix));
+  roots.push(root);
+  return root;
+}
+
+async function createLegacyFixture(sampleRate: number, channels: 1 | 2, bitsPerSample: 16 | 24,
+  actualDurationMs: number, metadataDurationMs: number, cueDurationMs: number,
+  metadataSampleRate: number, metadataChannels: number, metadataCodec: string, bytesOverride: Buffer | null): Promise<LegacyFixture> {
+  const base: Project = await outline();
+  const cue: AudioCue = sfxCue(base);
+  const bytes: Buffer = bytesOverride ?? pcmWav(actualDurationMs, sampleRate, channels, bitsPerSample);
+  const asset: Asset = {
+    id: 'legacy-audio', kind: 'audio', subjectId: cue.id, path: 'assets/legacy-audio.wav', mimeType: 'audio/wav',
+    sha256: sha256Bytes(bytes), description: '이전 버전 WAV', durationMs: metadataDurationMs, version: 1,
+    audioMetadata: { sampleRate: metadataSampleRate, channels: metadataChannels, codec: metadataCodec },
+  };
+  const measuredCue: AudioCue = { ...cue, endMs: cue.startMs + cueDurationMs, timingStatus: 'measured', assetId: asset.id };
+  const project: Project = parseProject({ ...base, assets: [...base.assets, asset],
+    audioCues: base.audioCues.map((candidate: AudioCue): AudioCue => candidate.id === cue.id ? measuredCue : candidate) });
+  const root: string = await temporaryRoot('storyboard-hardening-');
+  const dataRoot: string = join(root, 'data');
+  const store: ProjectStore = new ProjectStore(dataRoot);
+  await store.create(base);
+  const directory: string = projectDirectory(dataRoot, project.projectId);
+  const content: string = exportProjectJson(project);
+  await writeFile(join(directory, 'project.json'), content);
+  await writeFile(join(directory, 'versions', '000000.json'), content);
+  const assetPath: string = await store.assetPath(project.projectId, asset.id);
+  await mkdir(dirname(assetPath), { recursive: true });
+  await writeFile(assetPath, bytes);
+  return { root, dataRoot, store, project, cue: measuredCue, asset, bytes, assetPath };
+}
+
+async function appForFixture(fixture: LegacyFixture): Promise<FastifyInstance> {
+  const webRoot: string = join(fixture.root, 'web');
+  await mkdir(webRoot);
+  await writeFile(join(webRoot, 'index.html'), '<!doctype html><div id="root"></div>', 'utf8');
+  const config: AppConfig = { host: '127.0.0.1', port: 4317, dataRoot: fixture.dataRoot, webRoot,
+    pdfFontPath: resolve('assets/fonts/NanumGothic-Regular.ttf'), audioNormalization: TEST_AUDIO_NORMALIZATION_OPTIONS,
+    codex: { requestRoot: join(fixture.root, 'requests'), speechVoice: 'Yuna' } };
+  return createApp(config, fixture.store, new CodexRequestStore(config.codex.requestRoot));
+}
+
+function projectDirectory(dataRoot: string, projectId: string): string {
+  return join(dataRoot, sha256Text(projectId));
+}
+
+async function exists(path: string): Promise<boolean> {
+  try { await stat(path); return true; }
+  catch (error: unknown) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+function transactionJournal(previous: Project, next: Project, transactionId: string, assets: readonly JournalAsset[]): TransactionJournal {
+  const previousContent: string = exportProjectJson(previous);
+  const nextContent: string = exportProjectJson(next);
+  return {
+    version: 2, operation: 'update', transactionId, projectId: previous.projectId,
+    owner: { host: hostname(), pid: DEAD_PROCESS_ID, transactionId }, expectedRevision: previous.revision,
+    nextRevision: next.revision, previousProjectSha256: sha256Text(previousContent), nextProjectSha256: sha256Text(nextContent),
+    versionFile: { relativePath: `versions/${String(next.revision).padStart(6, '0')}.json`, sha256: sha256Text(nextContent) },
+    assets: assets.map((item: JournalAsset, index: number) => ({ assetId: item.asset.id, relativePath: item.asset.path,
+      sha256: sha256Bytes(item.bytes), stagedFileName: `asset-${index}.bin` })),
+  };
+}
+
+async function stageTransaction(dataRoot: string, previous: Project, next: Project, transactionId: string,
+  assets: readonly JournalAsset[]): Promise<string> {
+  const directory: string = projectDirectory(dataRoot, previous.projectId);
+  const transactionPath: string = join(directory, '.transactions', transactionId);
+  await mkdir(transactionPath, { recursive: true });
+  await writeFile(join(transactionPath, 'project.previous.json'), exportProjectJson(previous));
+  await writeFile(join(transactionPath, 'project.next.json'), exportProjectJson(next));
+  await writeFile(join(transactionPath, 'version.next.json'), exportProjectJson(next));
+  await Promise.all(assets.map((item: JournalAsset, index: number): Promise<void> => writeFile(join(transactionPath, `asset-${index}.bin`), item.bytes)));
+  await writeFile(join(transactionPath, 'journal.json'), JSON.stringify(transactionJournal(previous, next, transactionId, assets)));
+  return transactionPath;
+}
+
+async function publishStagedFile(stagedPath: string, finalPath: string, content: string | Buffer): Promise<void> {
+  await writeFile(finalPath, content);
+  await unlink(stagedPath);
+}
+
+async function publishVersionAndCurrent(dataRoot: string, next: Project, transactionId: string): Promise<string> {
+  const directory: string = projectDirectory(dataRoot, next.projectId);
+  const transactionPath: string = join(directory, '.transactions', transactionId);
+  const content: string = exportProjectJson(next);
+  const versionPath: string = join(directory, 'versions', `${String(next.revision).padStart(6, '0')}.json`);
+  await publishStagedFile(join(transactionPath, 'version.next.json'), versionPath, content);
+  await publishStagedFile(join(transactionPath, 'project.next.json'), join(directory, 'project.json'), content);
+  return versionPath;
+}
+
+function createJournal(project: Project, transactionId: string): CreateJournal {
+  const content: string = exportProjectJson(project);
+  const sha256: string = sha256Text(content);
+  return {
+    version: 2, operation: 'create', transactionId, projectId: project.projectId,
+    owner: { host: hostname(), pid: DEAD_PROCESS_ID, transactionId }, projectDirectoryName: sha256Text(project.projectId),
+    currentFile: { relativePath: 'project.json', sha256 }, versionFile: { relativePath: 'versions/000000.json', sha256 },
+  };
+}
+
+function imageAsset(id: string, relativePath: string, bytes: Buffer): Asset {
+  return { id, kind: 'image', subjectId: null, path: relativePath, mimeType: 'image/png', sha256: sha256Bytes(bytes),
+    description: 'Transaction 복구 검증 자산', durationMs: null, version: 1 };
+}
+
+function wavWithExcessiveChunks(): Buffer {
+  const base: Buffer = pcmWav(1, 48000, 1, 16);
+  const junk: Buffer = Buffer.alloc(8 * 4_096);
+  for (let offset: number = 0; offset < junk.length; offset += 8) junk.write('JUNK', offset);
+  const bytes: Buffer = Buffer.concat([base.subarray(0, 36), junk, base.subarray(36)]);
+  bytes.writeUInt32LE(bytes.length - 8, 4);
+  return bytes;
+}
+
+type FakeAudio = AudioElementPort & { pauseCount: number; playCount: number };
+
+function fakeAudio(playResult: Promise<void>): FakeAudio {
+  const audio: FakeAudio = {
+    currentTime: 0, pauseCount: 0, playCount: 0,
+    pause(): void { audio.pauseCount += 1; },
+    play(): Promise<void> { audio.playCount += 1; return playResult; },
+  };
+  return audio;
+}
+
+function manualScheduler(): AudioScheduler & { callbacks: Map<number, () => void> } {
+  const callbacks: Map<number, () => void> = new Map<number, () => void>();
+  let nextId: number = 1;
+  return {
+    callbacks,
+    schedule(callback: () => void, _delayMs: number): number { const id: number = nextId; nextId += 1; callbacks.set(id, callback); return id; },
+    cancel(timerId: number): void { callbacks.delete(timerId); },
+  };
+}
+
+afterEach(async (): Promise<void> => {
+  const pending: string[] = roots.splice(0, roots.length);
+  await Promise.all(pending.map((root: string): Promise<void> => rm(root, { recursive: true, force: true })));
+});
+
+describe('오디오 자원 한계', (): void => {
+  it('비정상적으로 낮은 sample rate를 정규화 전에 거부한다', async (): Promise<void> => {
+    const project: Project = await outline();
+    await expect(inspectAudioBytes(project, pcmWav(1000, 1, 1, 16), 'audio/wav', testAudioNormalizer())).rejects.toThrowError(expect.objectContaining({ code: 'AUDIO_SAMPLE_RATE_UNSUPPORTED' }));
+  });
+
+  it('정규화 예상 출력이 한도를 넘으면 Buffer 할당 전에 거부한다', async (): Promise<void> => {
+    const base: Project = await outline();
+    const project: Project = parseProject({ ...base, handoff: { ...base.handoff,
+      timebase: { ...base.handoff.timebase, sampleRate: 96000 } } });
+    let workerCalled: boolean = false;
+    const normalizer: AudioNormalizer = { normalize: async (): Promise<Buffer> => {
+      workerCalled = true;
+      throw new Error('사전 검사 전에 Worker를 호출했습니다.');
+    } };
+    await expect(inspectAudioBytes(project, pcmWav(140000, 8000, 2, 16), 'audio/wav', normalizer)).rejects.toThrowError(expect.objectContaining({ code: 'AUDIO_NORMALIZED_SIZE_LIMIT' }));
+    expect(workerCalled).toBe(false);
+  });
+
+  it('빈 data 청크를 오디오로 허용하지 않는다', async (): Promise<void> => {
+    const project: Project = await outline();
+    await expect(inspectAudioBytes(project, pcmWav(0, 48000, 1, 16), 'audio/wav', testAudioNormalizer())).rejects.toThrowError(expect.objectContaining({ code: 'ASSET_CONTENT_CORRUPT' }));
+  });
+
+  it('과도한 WAV 청크 순회를 제한한다', async (): Promise<void> => {
+    const project: Project = await outline();
+    await expect(inspectAudioBytes(project, wavWithExcessiveChunks(), 'audio/wav', testAudioNormalizer())).rejects.toThrowError(expect.objectContaining({ code: 'AUDIO_WAV_CHUNK_LIMIT' }));
+  });
+
+  it('큰 PCM24 정규화 중에도 메인 이벤트 루프가 응답한다', async (): Promise<void> => {
+    const project: Project = await outline(); let completed: boolean = false;
+    const normalization: Promise<void> = inspectAudioBytes(project, pcmWav(20_000, 48_000, 2, 24), 'audio/wav', testAudioNormalizer())
+      .then((): void => { completed = true; });
+    await new Promise<void>((resolveTick: () => void): void => { setImmediate(resolveTick); });
+    expect(completed).toBe(false);
+    await normalization;
+  });
+
+  it('Worker 시간 초과는 Project revision과 Asset 디렉터리를 바꾸지 않는다', async (): Promise<void> => {
+    const root: string = await temporaryRoot('storyboard-audio-timeout-'); const dataRoot: string = join(root, 'data');
+    const store: ProjectStore = new ProjectStore(dataRoot); const project: Project = await store.create(await outline());
+    const cue: AudioCue = sfxCue(project);
+    const normalizer: WorkerAudioNormalizer = new WorkerAudioNormalizer({ ...TEST_AUDIO_NORMALIZATION_OPTIONS, executionTimeoutMs: 1 });
+    await expect(attachAudioAsset(project, cue.id, 'timeout-audio', {
+      originalFileName: 'timeout.wav', declaredMimeType: 'audio/wav', bytes: pcmWav(20_000, 48_000, 2, 24),
+    }, normalizer)).rejects.toMatchObject({ code: 'AUDIO_NORMALIZATION_TIMEOUT' });
+    expect((await store.read(project.projectId)).revision).toBe(0);
+    expect(await readdir(join(projectDirectory(dataRoot, project.projectId), 'assets'))).toEqual([]);
+  });
+});
+
+describe('실제 WAV metadata와 타임라인 결속', (): void => {
+  it('실제 sample rate와 Asset metadata 불일치를 차단한다', async (): Promise<void> => {
+    const fixture: LegacyFixture = await createLegacyFixture(24000, 1, 16, 500, 500, 500, 48000, 1, 'pcm_s16le', null);
+    await expect(fixture.store.asset(fixture.project.projectId, fixture.asset.id)).rejects.toMatchObject({ code: 'STORED_AUDIO_METADATA_MISMATCH' });
+  });
+
+  it('실제 duration과 Asset metadata 불일치를 차단한다', async (): Promise<void> => {
+    const fixture: LegacyFixture = await createLegacyFixture(48000, 1, 16, 500, 600, 600, 48000, 1, 'pcm_s16le', null);
+    await expect(fixture.store.asset(fixture.project.projectId, fixture.asset.id)).rejects.toMatchObject({ code: 'STORED_AUDIO_DURATION_MISMATCH' });
+  });
+
+  it('실제 channel 수와 Asset metadata 불일치를 차단한다', async (): Promise<void> => {
+    const fixture: LegacyFixture = await createLegacyFixture(48000, 1, 16, 500, 500, 500, 48000, 2, 'pcm_s16le', null);
+    await expect(fixture.store.asset(fixture.project.projectId, fixture.asset.id)).rejects.toMatchObject({ code: 'STORED_AUDIO_METADATA_MISMATCH' });
+  });
+
+  it('실제 codec과 Asset metadata 불일치를 차단한다', async (): Promise<void> => {
+    const fixture: LegacyFixture = await createLegacyFixture(48000, 1, 16, 500, 500, 500, 48000, 1, 'pcm_s24le', null);
+    await expect(fixture.store.asset(fixture.project.projectId, fixture.asset.id)).rejects.toMatchObject({ code: 'STORED_AUDIO_METADATA_MISMATCH' });
+  });
+
+  it('Asset 길이와 Cue 타임라인이 다른 Project를 저장 계약에서 거부한다', async (): Promise<void> => {
+    const base: Project = await outline(); const cue: AudioCue = sfxCue(base); const bytes: Buffer = pcmWav(500, 48000, 1, 16);
+    const asset: Asset = { id: 'timeline-audio', kind: 'audio', subjectId: cue.id, path: 'assets/timeline.wav', mimeType: 'audio/wav',
+      sha256: sha256Bytes(bytes), description: '타임라인 검증', durationMs: 500, version: 1,
+      audioMetadata: { sampleRate: 48000, channels: 1, codec: 'pcm_s16le' } };
+    expect((): void => { parseProject({ ...base, assets: [...base.assets, asset], audioCues: base.audioCues.map((candidate: AudioCue): AudioCue =>
+      candidate.id === cue.id ? { ...candidate, endMs: candidate.startMs + 600, timingStatus: 'measured', assetId: asset.id } : candidate) }); })
+      .toThrowError(expect.objectContaining({ code: 'INVALID_PROJECT' }));
+  });
+});
+
+describe('이전 WAV의 명시적 정규화 복구', (): void => {
+  it('24kHz PCM WAV를 손상이 아닌 정규화 필요 상태로 식별한다', async (): Promise<void> => {
+    const fixture: LegacyFixture = await createLegacyFixture(24000, 1, 16, 500, 500, 500, 24000, 1, 'pcm_s16le', null);
+    await expect(fixture.store.asset(fixture.project.projectId, fixture.asset.id)).rejects.toMatchObject({ code: 'STORED_AUDIO_METADATA_MISMATCH' });
+    expect((await fixture.store.list())[0]?.audioRepairRequired).toBe(1);
+  });
+
+  it('복구 API가 새 Asset 버전을 생성하고 Cue를 교체한다', async (): Promise<void> => {
+    const fixture: LegacyFixture = await createLegacyFixture(24000, 1, 16, 500, 500, 500, 24000, 1, 'pcm_s16le', null);
+    const app: FastifyInstance = await appForFixture(fixture);
+    const response = await app.inject({ method: 'POST', url: `/api/projects/${fixture.project.projectId}/audio/${fixture.cue.id}/normalize`, payload: { expectedRevision: 0 } });
+    expect(response.statusCode).toBe(201);
+    const project: Project = ProjectSchema.parse(response.json().project);
+    const cue: AudioCue | undefined = project.audioCues.find((candidate: AudioCue): boolean => candidate.id === fixture.cue.id);
+    const asset: Asset | undefined = project.assets.find((candidate: Asset): boolean => candidate.id === cue?.assetId);
+    expect(cue?.assetId).not.toBe(fixture.asset.id);
+    expect(asset).toEqual(expect.objectContaining({ version: 2, audioMetadata: { sampleRate: 48000, channels: 1, codec: 'pcm_s16le' } }));
+    await app.close();
+  });
+
+  it('복구 후 이전 Asset과 원본 파일을 보존한다', async (): Promise<void> => {
+    const fixture: LegacyFixture = await createLegacyFixture(24000, 1, 16, 500, 500, 500, 24000, 1, 'pcm_s16le', null);
+    const app: FastifyInstance = await appForFixture(fixture);
+    const response = await app.inject({ method: 'POST', url: `/api/projects/${fixture.project.projectId}/audio/${fixture.cue.id}/normalize`, payload: { expectedRevision: 0 } });
+    const project: Project = ProjectSchema.parse(response.json().project);
+    expect(project.assets.some((asset: Asset): boolean => asset.id === fixture.asset.id)).toBe(true);
+    expect((await readFile(fixture.assetPath)).equals(fixture.bytes)).toBe(true);
+    await app.close();
+  });
+
+  it('복구된 파일은 프로젝트 sample rate의 PCM16이고 안전 재생할 수 있다', async (): Promise<void> => {
+    const fixture: LegacyFixture = await createLegacyFixture(24000, 1, 16, 500, 500, 500, 24000, 1, 'pcm_s16le', null);
+    const app: FastifyInstance = await appForFixture(fixture);
+    const response = await app.inject({ method: 'POST', url: `/api/projects/${fixture.project.projectId}/audio/${fixture.cue.id}/normalize`, payload: { expectedRevision: 0 } });
+    const project: Project = ProjectSchema.parse(response.json().project);
+    const stored = await fixture.store.safeAudio(project.projectId, fixture.cue.id);
+    expect(inspectAudioFileBytes(stored.content, stored.mimeType)).toEqual(expect.objectContaining({ durationMs: 500, sampleRate: 48000, channels: 1, codec: 'pcm_s16le' }));
+    await app.close();
+  });
+
+  it('복구 입력이 손상되면 revision과 파일을 바꾸지 않는다', async (): Promise<void> => {
+    const corrupt: Buffer = Buffer.from('RIFF-corrupt');
+    const fixture: LegacyFixture = await createLegacyFixture(24000, 1, 16, 500, 500, 500, 24000, 1, 'pcm_s16le', corrupt);
+    const app: FastifyInstance = await appForFixture(fixture);
+    const response = await app.inject({ method: 'POST', url: `/api/projects/${fixture.project.projectId}/audio/${fixture.cue.id}/normalize`, payload: { expectedRevision: 0 } });
+    expect(response.statusCode).toBe(400);
+    expect((await fixture.store.read(fixture.project.projectId)).revision).toBe(0);
+    expect((await readFile(fixture.assetPath)).equals(corrupt)).toBe(true);
+    await app.close();
+  });
+});
+
+describe('저장 Transaction journal 복구', (): void => {
+  it('v2 journal의 inode 증명 없는 Asset과 version을 보존하고 변경을 차단한다', async (): Promise<void> => {
+    const root: string = await temporaryRoot('storyboard-transaction-'); const dataRoot: string = join(root, 'data');
+    const store: ProjectStore = new ProjectStore(dataRoot); const previous: Project = await store.create(await outline());
+    const assetBytes: Buffer = Buffer.from('transaction-owned-asset');
+    const asset: Asset = imageAsset('orphan-image', 'assets/orphan.png', assetBytes);
+    const next: Project = parseProject({ ...previous, revision: 1, assets: [...previous.assets, asset] });
+    const transactionId: string = '00000000-0000-4000-8000-000000000001';
+    const transactionPath: string = await stageTransaction(dataRoot, previous, next, transactionId, [{ asset, bytes: assetBytes }]);
+    const directory: string = projectDirectory(dataRoot, previous.projectId); const assetPath: string = join(directory, asset.path);
+    const versionPath: string = join(directory, 'versions', '000001.json');
+    await publishStagedFile(join(transactionPath, 'asset-0.bin'), assetPath, assetBytes);
+    await publishStagedFile(join(transactionPath, 'version.next.json'), versionPath, exportProjectJson(next));
+    const recovered: ProjectStore = new ProjectStore(dataRoot);
+    expect((await recovered.read(previous.projectId)).revision).toBe(0);
+    expect(await exists(assetPath)).toBe(true); expect(await exists(versionPath)).toBe(true); expect(await exists(transactionPath)).toBe(true);
+    expect(recovered.recoveryBlocks()).toHaveLength(1);
+    await expect(recovered.assertMutable(previous.projectId)).rejects.toMatchObject({ code: 'STORE_RECOVERY_BLOCKED' });
+  });
+
+  it('완전히 게시된 유효 Transaction은 commit으로 확정한다', async (): Promise<void> => {
+    const root: string = await temporaryRoot('storyboard-transaction-'); const dataRoot: string = join(root, 'data');
+    const store: ProjectStore = new ProjectStore(dataRoot); const previous: Project = await store.create(await outline());
+    const next: Project = parseProject({ ...previous, revision: 1 }); const transactionId: string = '00000000-0000-4000-8000-000000000002';
+    const transactionPath: string = await stageTransaction(dataRoot, previous, next, transactionId, []);
+    const versionPath: string = await publishVersionAndCurrent(dataRoot, next, transactionId);
+    const recovered: ProjectStore = new ProjectStore(dataRoot);
+    expect((await recovered.read(previous.projectId)).revision).toBe(1);
+    expect(await exists(versionPath)).toBe(true); expect(await exists(transactionPath)).toBe(false);
+    expect(recovered.recoveryEvents()).toContainEqual({ projectId: previous.projectId, transactionId, outcome: 'committed' });
+  });
+
+  it('게시된 v2 Project의 소유권 증명이 없으면 현재 상태를 보존하고 변경을 차단한다', async (): Promise<void> => {
+    const root: string = await temporaryRoot('storyboard-transaction-'); const dataRoot: string = join(root, 'data');
+    const store: ProjectStore = new ProjectStore(dataRoot); const previous: Project = await store.create(await outline());
+    const missing: Asset = { id: 'missing-image', kind: 'image', subjectId: null, path: 'assets/missing.png', mimeType: 'image/png',
+      sha256: sha256Bytes(Buffer.from('missing')), description: '게시 실패 검증', durationMs: null, version: 1 };
+    const next: Project = parseProject({ ...previous, revision: 1, assets: [...previous.assets, missing] });
+    const transactionId: string = '00000000-0000-4000-8000-000000000003';
+    const transactionPath: string = await stageTransaction(dataRoot, previous, next, transactionId, [{ asset: missing, bytes: Buffer.from('missing') }]);
+    await unlink(join(transactionPath, 'asset-0.bin'));
+    const versionPath: string = await publishVersionAndCurrent(dataRoot, next, transactionId);
+    const recovered: ProjectStore = new ProjectStore(dataRoot);
+    const project: Project = await recovered.read(previous.projectId);
+    expect(project.revision).toBe(0); expect(project.assets.some((asset: Asset): boolean => asset.id === missing.id)).toBe(false);
+    expect(await exists(versionPath)).toBe(true); expect(await exists(transactionPath)).toBe(true);
+    await expect(recovered.assertMutable(previous.projectId)).rejects.toMatchObject({ code: 'STORE_RECOVERY_BLOCKED' });
+  });
+
+  it('v2 내구성 임시 파일이 있어도 증명 없는 게시 파일을 삭제하지 않는다', async (): Promise<void> => {
+    const root: string = await temporaryRoot('storyboard-transaction-'); const dataRoot: string = join(root, 'data');
+    const store: ProjectStore = new ProjectStore(dataRoot); const previous: Project = await store.create(await outline());
+    const missing: Asset = { id: 'missing-retry-image', kind: 'image', subjectId: null, path: 'assets/missing-retry.png', mimeType: 'image/png',
+      sha256: sha256Bytes(Buffer.from('missing-retry')), description: '복구 재시도 검증', durationMs: null, version: 1 };
+    const next: Project = parseProject({ ...previous, revision: 1, assets: [...previous.assets, missing] });
+    const transactionId: string = '00000000-0000-4000-8000-000000000007';
+    const transactionPath: string = await stageTransaction(dataRoot, previous, next, transactionId, [{ asset: missing, bytes: Buffer.from('missing-retry') }]);
+    await unlink(join(transactionPath, 'asset-0.bin'));
+    const directory: string = projectDirectory(dataRoot, previous.projectId);
+    await publishVersionAndCurrent(dataRoot, next, transactionId);
+    await writeFile(join(directory, `project.json.${transactionId}.recovery`), exportProjectJson(previous));
+    const recovered: ProjectStore = new ProjectStore(dataRoot);
+    expect((await recovered.read(previous.projectId)).revision).toBe(0);
+    expect(await exists(join(directory, `project.json.${transactionId}.recovery`))).toBe(true);
+    expect(recovered.recoveryBlocks()).toHaveLength(1);
+  });
+
+  it('journal이 없는 staging 디렉터리는 자동 삭제하지 않는다', async (): Promise<void> => {
+    const root: string = await temporaryRoot('storyboard-transaction-'); const dataRoot: string = join(root, 'data');
+    const store: ProjectStore = new ProjectStore(dataRoot); const project: Project = await store.create(await outline());
+    const transactionId: string = '00000000-0000-4000-8000-000000000004';
+    const transactionPath: string = join(projectDirectory(dataRoot, project.projectId), '.transactions', transactionId);
+    await mkdir(transactionPath); await writeFile(join(transactionPath, 'asset-0.bin'), 'partial');
+    const blocked: ProjectStore = new ProjectStore(dataRoot); await blocked.initialize();
+    await expect(blocked.assertMutable(project.projectId)).rejects.toMatchObject({ code: 'STORE_RECOVERY_BLOCKED' });
+    expect(await exists(transactionPath)).toBe(true);
+  });
+
+  it('같은 Transaction lock이 있어도 journal 없는 파일은 삭제하지 않는다', async (): Promise<void> => {
+    const root: string = await temporaryRoot('storyboard-transaction-'); const dataRoot: string = join(root, 'data');
+    const store: ProjectStore = new ProjectStore(dataRoot); const project: Project = await store.create(await outline());
+    const transactionId: string = '00000000-0000-4000-8000-000000000017';
+    const directory: string = projectDirectory(dataRoot, project.projectId);
+    const transactionPath: string = join(directory, '.transactions', transactionId);
+    const lockPath: string = join(directory, 'write.lock');
+    await mkdir(transactionPath); await writeFile(join(transactionPath, 'asset-0.bin'), 'unproven');
+    await writeFile(lockPath, JSON.stringify({ version: 2, projectId: project.projectId, host: hostname(), pid: DEAD_PROCESS_ID,
+      transactionId, createdAt: '2026-09-06T00:00:00.000Z' }));
+    const blocked: ProjectStore = new ProjectStore(dataRoot); await blocked.initialize();
+    await expect(blocked.assertMutable(project.projectId)).rejects.toMatchObject({ code: 'STORE_RECOVERY_BLOCKED' });
+    expect(await exists(transactionPath)).toBe(true); expect(await exists(lockPath)).toBe(true);
+  });
+
+  it('손상된 journal을 조용히 무시하지 않는다', async (): Promise<void> => {
+    const root: string = await temporaryRoot('storyboard-transaction-'); const dataRoot: string = join(root, 'data');
+    const store: ProjectStore = new ProjectStore(dataRoot); const project: Project = await store.create(await outline());
+    const transactionPath: string = join(projectDirectory(dataRoot, project.projectId), '.transactions', '00000000-0000-4000-8000-000000000005');
+    await mkdir(transactionPath); await writeFile(join(transactionPath, 'journal.json'), '{broken');
+    const blocked: ProjectStore = new ProjectStore(dataRoot); await blocked.initialize();
+    await expect(blocked.assertMutable(project.projectId)).rejects.toMatchObject({ code: 'STORE_RECOVERY_BLOCKED' });
+    expect(await exists(transactionPath)).toBe(true);
+  });
+
+  it('journal의 assets 상위 경로 탈출을 거부하고 현재 Project를 보존한다', async (): Promise<void> => {
+    const root: string = await temporaryRoot('storyboard-transaction-'); const dataRoot: string = join(root, 'data');
+    const store: ProjectStore = new ProjectStore(dataRoot); const project: Project = await store.create(await outline());
+    const next: Project = parseProject({ ...project, revision: 1 }); const transactionId: string = '00000000-0000-4000-8000-000000000006';
+    const transactionPath: string = await stageTransaction(dataRoot, project, next, transactionId, []);
+    const unsafeJournal: TransactionJournal = { ...transactionJournal(project, next, transactionId, []),
+      assets: [{ assetId: 'unsafe', relativePath: 'assets/../project.json', sha256: '0'.repeat(64), stagedFileName: 'asset-0.bin' }] };
+    await writeFile(join(transactionPath, 'journal.json'), JSON.stringify(unsafeJournal));
+    const blocked: ProjectStore = new ProjectStore(dataRoot); await blocked.initialize();
+    await expect(blocked.assertMutable(project.projectId)).rejects.toMatchObject({ code: 'STORE_RECOVERY_BLOCKED' });
+    expect((await store.read(project.projectId)).revision).toBe(0);
+  });
+
+  it('종료된 process의 write lock을 제거하고 복구 사실을 남긴다', async (): Promise<void> => {
+    const root: string = await temporaryRoot('storyboard-transaction-'); const dataRoot: string = join(root, 'data');
+    const store: ProjectStore = new ProjectStore(dataRoot); const project: Project = await store.create(await outline());
+    const transactionId: string = '00000000-0000-4000-8000-000000000008';
+    const lockPath: string = join(projectDirectory(dataRoot, project.projectId), 'write.lock');
+    await writeFile(lockPath, JSON.stringify({ version: 2, projectId: project.projectId, host: hostname(), pid: DEAD_PROCESS_ID,
+      transactionId, createdAt: '2026-09-06T00:00:00.000Z' }));
+    const recovered: ProjectStore = new ProjectStore(dataRoot); await recovered.initialize();
+    expect(await exists(lockPath)).toBe(false);
+    expect(recovered.recoveryEvents()).toContainEqual({ projectId: project.projectId, transactionId, outcome: 'stale-lock-removed' });
+  });
+
+  it('살아 있는 process의 write lock을 임의로 제거하지 않는다', async (): Promise<void> => {
+    const root: string = await temporaryRoot('storyboard-transaction-'); const dataRoot: string = join(root, 'data');
+    const store: ProjectStore = new ProjectStore(dataRoot); const project: Project = await store.create(await outline());
+    const transactionId: string = '00000000-0000-4000-8000-000000000009';
+    const lockPath: string = join(projectDirectory(dataRoot, project.projectId), 'write.lock');
+    await writeFile(lockPath, JSON.stringify({ version: 2, projectId: project.projectId, host: hostname(), pid: process.pid,
+      transactionId, createdAt: '2026-09-06T00:00:00.000Z' }));
+    const observer: ProjectStore = new ProjectStore(dataRoot); await observer.initialize();
+    expect(observer.activeUpdates()).toContainEqual(expect.objectContaining({ projectId: project.projectId, transactionId }));
+    await expect(observer.assertMutable(project.projectId)).rejects.toMatchObject({ code: 'PROJECT_BUSY' });
+    expect(await exists(lockPath)).toBe(true); await unlink(lockPath);
+  });
+
+  it('다른 Host의 lock을 자동 삭제하지 않는다', async (): Promise<void> => {
+    const root: string = await temporaryRoot('storyboard-transaction-'); const dataRoot: string = join(root, 'data');
+    const store: ProjectStore = new ProjectStore(dataRoot); const project: Project = await store.create(await outline());
+    const lockPath: string = join(projectDirectory(dataRoot, project.projectId), 'write.lock');
+    await writeFile(lockPath, JSON.stringify({ version: 2, projectId: project.projectId, host: 'other-host', pid: DEAD_PROCESS_ID,
+      transactionId: '00000000-0000-4000-8000-000000000010', createdAt: '2026-09-06T00:00:00.000Z' }));
+    const blocked: ProjectStore = new ProjectStore(dataRoot); await blocked.initialize();
+    await expect(blocked.assertMutable(project.projectId)).rejects.toMatchObject({ code: 'STORE_RECOVERY_BLOCKED' });
+    expect(await exists(lockPath)).toBe(true);
+  });
+
+  it('해석할 수 없는 lock을 자동 삭제하지 않는다', async (): Promise<void> => {
+    const root: string = await temporaryRoot('storyboard-transaction-'); const dataRoot: string = join(root, 'data');
+    const store: ProjectStore = new ProjectStore(dataRoot); const project: Project = await store.create(await outline());
+    const lockPath: string = join(projectDirectory(dataRoot, project.projectId), 'write.lock');
+    await writeFile(lockPath, '{broken');
+    const blocked: ProjectStore = new ProjectStore(dataRoot); await blocked.initialize();
+    await expect(blocked.assertMutable(project.projectId)).rejects.toMatchObject({ code: 'STORE_RECOVERY_BLOCKED' });
+    expect(await exists(lockPath)).toBe(true);
+  });
+
+  it('journal 해시와 다른 기존 Asset을 삭제하지 않는다', async (): Promise<void> => {
+    const root: string = await temporaryRoot('storyboard-transaction-'); const dataRoot: string = join(root, 'data');
+    const store: ProjectStore = new ProjectStore(dataRoot); const previous: Project = await store.create(await outline());
+    const expectedBytes: Buffer = Buffer.from('expected-asset'); const existingBytes: Buffer = Buffer.from('existing-asset');
+    const asset: Asset = imageAsset('hash-conflict', 'assets/hash-conflict.png', expectedBytes);
+    const next: Project = parseProject({ ...previous, revision: 1, assets: [...previous.assets, asset] });
+    const transactionId: string = '00000000-0000-4000-8000-000000000011';
+    const transactionPath: string = await stageTransaction(dataRoot, previous, next, transactionId, [{ asset, bytes: expectedBytes }]);
+    const assetPath: string = join(projectDirectory(dataRoot, previous.projectId), asset.path);
+    await writeFile(assetPath, existingBytes); await unlink(join(transactionPath, 'asset-0.bin'));
+    await publishStagedFile(join(transactionPath, 'version.next.json'), join(projectDirectory(dataRoot, previous.projectId), 'versions', '000001.json'), exportProjectJson(next));
+    const blocked: ProjectStore = new ProjectStore(dataRoot); await blocked.initialize();
+    await expect(blocked.assertMutable(previous.projectId)).rejects.toMatchObject({ code: 'STORE_RECOVERY_BLOCKED' });
+    expect((await readFile(assetPath)).equals(existingBytes)).toBe(true);
+    expect((await store.read(previous.projectId)).revision).toBe(0);
+    expect(await exists(transactionPath)).toBe(true);
+  });
+
+  it('journal 해시와 다른 기존 revision snapshot을 삭제하지 않는다', async (): Promise<void> => {
+    const root: string = await temporaryRoot('storyboard-transaction-'); const dataRoot: string = join(root, 'data');
+    const store: ProjectStore = new ProjectStore(dataRoot); const previous: Project = await store.create(await outline());
+    const next: Project = parseProject({ ...previous, revision: 1 });
+    const transactionId: string = '00000000-0000-4000-8000-000000000012';
+    const transactionPath: string = await stageTransaction(dataRoot, previous, next, transactionId, []);
+    const versionPath: string = join(projectDirectory(dataRoot, previous.projectId), 'versions', '000001.json');
+    const existingContent: string = `${exportProjectJson(next)}\n`;
+    await writeFile(versionPath, existingContent); await unlink(join(transactionPath, 'version.next.json'));
+    const blocked: ProjectStore = new ProjectStore(dataRoot); await blocked.initialize();
+    await expect(blocked.assertMutable(previous.projectId)).rejects.toMatchObject({ code: 'STORE_RECOVERY_BLOCKED' });
+    expect(await readFile(versionPath, 'utf8')).toBe(existingContent);
+    expect((await store.read(previous.projectId)).revision).toBe(0);
+  });
+
+  it('현재 Project가 참조하는 Asset을 rollback으로 삭제하지 않는다', async (): Promise<void> => {
+    const root: string = await temporaryRoot('storyboard-transaction-'); const dataRoot: string = join(root, 'data');
+    const assetBytes: Buffer = await png(2, 2); const asset: Asset = imageAsset('preserved', 'assets/preserved.png', assetBytes);
+    const store: ProjectStore = new ProjectStore(dataRoot); const initial: Project = await store.create(await outline());
+    const previous: Project = await store.update(initial.projectId, initial.revision, (current: Project): Project => ({ ...current,
+      assets: [...current.assets, asset] }), [{ relativePath: asset.path, content: assetBytes }]);
+    const assetPath: string = join(projectDirectory(dataRoot, previous.projectId), asset.path);
+    const next: Project = parseProject({ ...previous, revision: 2 }); const transactionId: string = '00000000-0000-4000-8000-000000000013';
+    const transactionPath: string = await stageTransaction(dataRoot, previous, next, transactionId, [{ asset, bytes: assetBytes }]);
+    await unlink(join(transactionPath, 'asset-0.bin'));
+    const blocked: ProjectStore = new ProjectStore(dataRoot); await blocked.initialize();
+    await expect(blocked.assertMutable(previous.projectId)).rejects.toMatchObject({ code: 'STORE_RECOVERY_BLOCKED' });
+    expect((await readFile(assetPath)).equals(assetBytes)).toBe(true);
+    expect((await store.read(previous.projectId)).revision).toBe(1);
+  });
+
+  it('복구를 다시 실행해도 이미 복구된 저장 상태가 바뀌지 않는다', async (): Promise<void> => {
+    const root: string = await temporaryRoot('storyboard-transaction-'); const dataRoot: string = join(root, 'data');
+    const store: ProjectStore = new ProjectStore(dataRoot); const previous: Project = await store.create(await outline());
+    const next: Project = parseProject({ ...previous, revision: 1 }); const transactionId: string = '00000000-0000-4000-8000-000000000014';
+    await stageTransaction(dataRoot, previous, next, transactionId, []);
+    const first: ProjectStore = new ProjectStore(dataRoot); await first.initialize();
+    const second: ProjectStore = new ProjectStore(dataRoot); await second.initialize();
+    expect((await second.read(previous.projectId)).revision).toBe(0);
+    expect(second.recoveryEvents()).toEqual([]);
+  });
+
+  it('정상 update는 journal과 lock을 남기지 않는다', async (): Promise<void> => {
+    const root: string = await temporaryRoot('storyboard-transaction-'); const dataRoot: string = join(root, 'data');
+    const store: ProjectStore = new ProjectStore(dataRoot); const project: Project = await store.create(await outline());
+    const updated: Project = await store.update(project.projectId, 0, (current: Project): Project => ({ ...current, title: '저장 완료' }), []);
+    const directory: string = projectDirectory(dataRoot, project.projectId);
+    expect(updated.revision).toBe(1); expect(await exists(join(directory, 'write.lock'))).toBe(false);
+    expect(await readdir(join(directory, '.transactions'))).toEqual([]);
+  });
+});
+
+describe('Initial Project 생성 복구', (): void => {
+  it('게시 전 중단된 부분 staging만 제거한다', async (): Promise<void> => {
+    const root: string = await temporaryRoot('storyboard-create-'); const dataRoot: string = join(root, 'data');
+    await new ProjectStore(dataRoot).initialize();
+    const project: Project = await outline(); const transactionId: string = '00000000-0000-4000-8000-000000000015';
+    const transactionPath: string = join(dataRoot, '.create-transactions', transactionId);
+    const stagedPath: string = join(transactionPath, 'project');
+    await mkdir(join(stagedPath, 'versions'), { recursive: true }); await mkdir(join(stagedPath, 'assets'));
+    await mkdir(join(stagedPath, '.transactions')); await writeFile(join(transactionPath, 'journal.json'), JSON.stringify(createJournal(project, transactionId)));
+    await writeFile(join(stagedPath, 'versions', '000000.json'), exportProjectJson(project));
+    const recovered: ProjectStore = new ProjectStore(dataRoot); await recovered.initialize();
+    expect(await exists(projectDirectory(dataRoot, project.projectId))).toBe(false);
+    expect(await exists(transactionPath)).toBe(false);
+    expect(recovered.recoveryEvents()).toContainEqual({ projectId: project.projectId, transactionId, outcome: 'create-rolled-back' });
+  });
+
+  it('완전히 게시된 Initial Project를 보존하고 journal만 정리한다', async (): Promise<void> => {
+    const root: string = await temporaryRoot('storyboard-create-'); const dataRoot: string = join(root, 'data');
+    const store: ProjectStore = new ProjectStore(dataRoot); const project: Project = await store.create(await outline());
+    const transactionId: string = '00000000-0000-4000-8000-000000000016';
+    const transactionPath: string = join(dataRoot, '.create-transactions', transactionId);
+    await mkdir(transactionPath); await writeFile(join(transactionPath, 'journal.json'), JSON.stringify(createJournal(project, transactionId)));
+    const recovered: ProjectStore = new ProjectStore(dataRoot); await recovered.initialize();
+    expect((await recovered.read(project.projectId)).revision).toBe(0);
+    expect(await exists(transactionPath)).toBe(false);
+    expect(recovered.recoveryEvents()).toContainEqual({ projectId: project.projectId, transactionId, outcome: 'create-committed' });
+  });
+});
+
+describe('브라우저 Audio 수명주기', (): void => {
+  const cue: AudioLifecycleCue = { id: 'audio-cue', startMs: 1000, endMs: 3000 };
+
+  it('Cue 종료 timer가 Audio를 정지한다', (): void => {
+    const scheduler = manualScheduler(); const audio: FakeAudio = fakeAudio(Promise.resolve());
+    const controller = new BrowserAudioController((_url: string): FakeAudio => audio, scheduler);
+    controller.start('project-a', cue, 1500, '/audio.wav', (): void => {});
+    const callback: (() => void) | undefined = [...scheduler.callbacks.values()][0];
+    if (callback === undefined) throw new Error('Cue 종료 timer가 등록되지 않았습니다.');
+    callback(); expect(audio.pauseCount).toBe(1); expect(controller.activeCount()).toBe(0);
+  });
+
+  it('playhead가 Cue 끝을 지나면 Audio를 정지한다', (): void => {
+    const scheduler = manualScheduler(); const audio: FakeAudio = fakeAudio(Promise.resolve());
+    const controller = new BrowserAudioController((_url: string): FakeAudio => audio, scheduler);
+    controller.start('project-a', cue, 1500, '/audio.wav', (): void => {}); controller.reconcile('project-a', 3000, true);
+    expect(audio.pauseCount).toBe(1); expect(controller.activeCount()).toBe(0);
+  });
+
+  it('일시정지는 Audio와 재생 이력을 초기화한다', (): void => {
+    const scheduler = manualScheduler(); const audios: FakeAudio[] = [];
+    const controller = new BrowserAudioController((_url: string): FakeAudio => { const audio: FakeAudio = fakeAudio(Promise.resolve()); audios.push(audio); return audio; }, scheduler);
+    controller.start('project-a', cue, 1500, '/audio.wav', (): void => {}); controller.reconcile('project-a', 1500, false);
+    controller.start('project-a', cue, 1500, '/audio.wav', (): void => {});
+    expect(audios).toHaveLength(2); expect(audios[0]?.pauseCount).toBe(1);
+  });
+
+  it('Project가 바뀌면 이전 Audio를 정지하고 같은 Cue ID도 새로 재생한다', (): void => {
+    const scheduler = manualScheduler(); const audios: FakeAudio[] = [];
+    const controller = new BrowserAudioController((_url: string): FakeAudio => { const audio: FakeAudio = fakeAudio(Promise.resolve()); audios.push(audio); return audio; }, scheduler);
+    controller.start('project-a', cue, 1500, '/a.wav', (): void => {}); controller.reconcile('project-b', 1500, true);
+    controller.start('project-b', cue, 1500, '/b.wav', (): void => {});
+    expect(audios).toHaveLength(2); expect(audios[0]?.pauseCount).toBe(1);
+  });
+
+  it('reset 뒤 늦게 끝난 play Promise가 이전 Audio를 다시 남기지 않는다', async (): Promise<void> => {
+    const resolver: { current: (() => void) | null } = { current: null };
+    const pending: Promise<void> = new Promise<void>((resolvePlayPromise): void => { resolver.current = resolvePlayPromise; });
+    const scheduler = manualScheduler(); const audio: FakeAudio = fakeAudio(pending);
+    const controller = new BrowserAudioController((_url: string): FakeAudio => audio, scheduler);
+    controller.start('project-a', cue, 1500, '/audio.wav', (): void => {}); controller.reset();
+    const resolvePlay: (() => void) | null = resolver.current;
+    if (resolvePlay === null) throw new Error('Audio play Promise resolver가 없습니다.');
+    resolvePlay(); await pending; await Promise.resolve();
+    expect(audio.pauseCount).toBeGreaterThanOrEqual(2); expect(controller.activeCount()).toBe(0);
+  });
+
+  it('이전 play 실패가 reset 뒤 시작한 같은 Cue의 새 Audio를 멈추지 않는다', async (): Promise<void> => {
+    const rejecter: { current: ((error: Error) => void) | null } = { current: null };
+    const pending: Promise<void> = new Promise<void>((_resolve, reject): void => { rejecter.current = reject; });
+    const scheduler = manualScheduler(); const first: FakeAudio = fakeAudio(pending); const second: FakeAudio = fakeAudio(Promise.resolve());
+    const audios: FakeAudio[] = [first, second];
+    const controller = new BrowserAudioController((_url: string): FakeAudio => {
+      const audio: FakeAudio | undefined = audios.shift(); if (audio === undefined) throw new Error('검증 Audio가 부족합니다.'); return audio;
+    }, scheduler);
+    controller.start('project-a', cue, 1500, '/first.wav', (): void => {}); controller.reset();
+    controller.start('project-a', cue, 1500, '/second.wav', (): void => {});
+    const rejectPlay: ((error: Error) => void) | null = rejecter.current;
+    if (rejectPlay === null) throw new Error('Audio play Promise rejecter가 없습니다.');
+    rejectPlay(new Error('이전 Audio 실패')); await pending.catch((): void => {}); await Promise.resolve();
+    expect(second.pauseCount).toBe(0); expect(controller.activeCount()).toBe(1);
+  });
+
+  it('Cue 중간에서 재생하면 Audio offset을 정확히 설정한다', (): void => {
+    const scheduler = manualScheduler(); const audio: FakeAudio = fakeAudio(Promise.resolve());
+    const controller = new BrowserAudioController((_url: string): FakeAudio => audio, scheduler);
+    controller.start('project-a', cue, 2250, '/audio.wav', (): void => {});
+    expect(audio.currentTime).toBe(1.25);
+  });
+});

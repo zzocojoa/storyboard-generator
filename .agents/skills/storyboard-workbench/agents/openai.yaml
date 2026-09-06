@@ -1,0 +1,5 @@
+interface:
+  display_name: "콘티 제작"
+  short_description: "Codex App에서 CUTROOM 생성 요청 처리"
+  default_prompt: "$storyboard-workbench 대기 중인 콘티 생성 요청을 처리해 주세요."
+  brand_color: "#E65A2F"

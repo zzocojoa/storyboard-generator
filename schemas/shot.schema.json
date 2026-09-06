@@ -1,0 +1,372 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "segmentId": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "startMs": {
+      "$ref": "#/$defs/__schema1"
+    },
+    "endMs": {
+      "$ref": "#/$defs/__schema1"
+    },
+    "sourceLinks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "unitId": {
+            "$ref": "#/$defs/__schema0"
+          },
+          "usage": {
+            "type": "string",
+            "enum": [
+              "primary-visual",
+              "continued-visual",
+              "audio-only",
+              "context-only"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "mapping-required"
+            ]
+          },
+          "temporalAnchor": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "$ref": "#/$defs/__schema2"
+                  },
+                  "startOffsetMs": {
+                    "$ref": "#/$defs/__schema1"
+                  },
+                  "endOffsetMs": {
+                    "$ref": "#/$defs/__schema1"
+                  },
+                  "basis": {
+                    "$ref": "#/$defs/__schema3"
+                  },
+                  "status": {
+                    "$ref": "#/$defs/__schema4"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "startOffsetMs",
+                  "endOffsetMs",
+                  "basis",
+                  "status"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "frame"
+                  },
+                  "frameId": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "basis": {
+                    "type": "string",
+                    "enum": [
+                      "manual",
+                      "proposal"
+                    ]
+                  },
+                  "status": {
+                    "type": "string",
+                    "const": "confirmed"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "frameId",
+                  "basis",
+                  "status"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "unresolved"
+                  },
+                  "basis": {
+                    "type": "string",
+                    "enum": [
+                      "estimated",
+                      "migration",
+                      "mapping-change",
+                      "source-move",
+                      "audio-change",
+                      "frame-change",
+                      "source-update"
+                    ]
+                  },
+                  "status": {
+                    "type": "string",
+                    "const": "review-required"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "basis",
+                  "status"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "required": [
+          "unitId",
+          "usage",
+          "status",
+          "temporalAnchor"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "visualLocationId": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/__schema0"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "action": {
+      "type": "string"
+    },
+    "camera": {
+      "type": "object",
+      "properties": {
+        "size": {
+          "type": "string"
+        },
+        "angle": {
+          "type": "string"
+        },
+        "move": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "size",
+        "angle",
+        "move"
+      ],
+      "additionalProperties": false
+    },
+    "presence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "personId": {
+            "$ref": "#/$defs/__schema0"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "VISIBLE",
+              "HAND_ONLY",
+              "SILHOUETTE",
+              "OFFSCREEN_VOICE",
+              "VOICE_OVER",
+              "IMPLIED",
+              "ARCHIVE_IMAGE"
+            ]
+          }
+        },
+        "required": [
+          "personId",
+          "mode"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "propIds": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema0"
+      }
+    },
+    "continuityBefore": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema5"
+      }
+    },
+    "continuityAfter": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema5"
+      }
+    },
+    "cameraAxis": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "screenDirection": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "informationIds": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema0"
+      }
+    },
+    "transitionOut": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "cut",
+            "dissolve",
+            "fade",
+            "wipe",
+            "match-cut",
+            "custom"
+          ]
+        },
+        "durationMs": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "durationMs",
+        "note"
+      ],
+      "additionalProperties": false
+    },
+    "proposalOrigin": {
+      "type": "string",
+      "enum": [
+        "manual",
+        "source-outline",
+        "model"
+      ]
+    },
+    "approvalStatus": {
+      "type": "string",
+      "enum": [
+        "proposed",
+        "approved"
+      ]
+    },
+    "lockedFields": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "timing",
+          "sources",
+          "action",
+          "camera",
+          "location",
+          "presence",
+          "continuity",
+          "transition",
+          "frames"
+        ]
+      }
+    }
+  },
+  "required": [
+    "id",
+    "segmentId",
+    "startMs",
+    "endMs",
+    "sourceLinks",
+    "visualLocationId",
+    "action",
+    "camera",
+    "presence",
+    "propIds",
+    "continuityBefore",
+    "continuityAfter",
+    "cameraAxis",
+    "screenDirection",
+    "informationIds",
+    "transitionOut",
+    "proposalOrigin",
+    "approvalStatus",
+    "lockedFields"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "__schema0": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[^\\u0000-\\u001f]+$"
+    },
+    "__schema1": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema2": {
+      "type": "string",
+      "const": "shot-offset"
+    },
+    "__schema3": {
+      "type": "string",
+      "enum": [
+        "manual",
+        "text-cue",
+        "audio-cue",
+        "proposal",
+        "native-exact"
+      ]
+    },
+    "__schema4": {
+      "type": "string",
+      "const": "confirmed"
+    },
+    "__schema5": {
+      "type": "object",
+      "properties": {
+        "assetId": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "state": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "assetId",
+        "state"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

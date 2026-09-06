@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "1.0.0",
+  "projectId": "plant-care-demo",
+  "title": "화분 관리 안내 — 합성 검증 자료",
+  "people": [
+    { "id": "CHAR-01", "name": "안내자", "role": "화분 관리 설명", "kind": "narrator", "visualDescription": null }
+  ],
+  "locations": [
+    { "id": "workbench", "name": "작업대", "description": "밝은 작업대 위 화분" }
+  ],
+  "scenes": [
+    { "id": "SCN-01", "title": "흙 상태 확인", "storyLocationId": "workbench", "declaredCastIds": [] },
+    { "id": "마무리", "title": "관리 요약", "storyLocationId": null, "declaredCastIds": [] }
+  ],
+  "segments": [
+    { "id": "SEG-001", "sceneId": "SCN-01", "mode": "TITLE_CARD", "startMs": 0, "endMs": 5000, "timingStatus": "fixed", "reactionId": null },
+    { "id": "demonstration", "sceneId": "SCN-01", "mode": "DEMONSTRATION", "startMs": 5000, "endMs": 13500, "timingStatus": "fixed", "reactionId": null },
+    { "id": "끝:카드", "sceneId": "마무리", "mode": "TITLE_CARD", "startMs": 13500, "endMs": 17500, "timingStatus": "fixed", "reactionId": null }
+  ],
+  "units": [
+    { "id": "UNIT-001", "segmentId": "SEG-001", "order": 1, "kind": "ACTION", "text": "화분과 흙 표면을 보여준다.", "speakerId": null, "informationIds": [] },
+    { "id": "제목", "segmentId": "SEG-001", "order": 2, "kind": "SCREEN_TEXT", "text": "흙부터 확인하세요", "speakerId": null, "informationIds": [] },
+    { "id": "안내-1", "segmentId": "demonstration", "order": 1, "kind": "NARRATION", "text": "물을 주기 전에 흙이 말랐는지 확인하세요.", "speakerId": "CHAR-01", "informationIds": [] },
+    { "id": "동작", "segmentId": "demonstration", "order": 2, "kind": "ACTION", "text": "작은 물뿌리개로 화분 가장자리에 물을 준다.", "speakerId": null, "informationIds": [] },
+    { "id": "효과음", "segmentId": "demonstration", "order": 3, "kind": "SOUND", "text": "물이 흙에 닿는 소리", "speakerId": null, "informationIds": [] },
+    { "id": "요약", "segmentId": "끝:카드", "order": 1, "kind": "SCREEN_TEXT", "text": "흙이 마르면 물을 주세요.", "speakerId": null, "informationIds": [] }
+  ],
+  "informationRules": [],
+  "instructions": [
+    { "id": "detail-view", "segmentId": "demonstration", "kind": "shooting", "text": "흙 표면과 물의 흐름을 가까이 보여준다." }
+  ],
+  "textPlacements": [
+    { "id": "title-placement", "segmentId": "SEG-001", "startMs": 0, "endMs": 4000, "text": "흙부터 확인하세요", "unitId": "제목" },
+    { "id": "closing-placement", "segmentId": "끝:카드", "startMs": 13500, "endMs": 17500, "text": "흙이 마르면 물을 주세요.", "unitId": "요약" }
+  ]
+}

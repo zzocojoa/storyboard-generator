@@ -1,0 +1,47 @@
+{
+  "$schema": "../../../STANDARD/schemas/panel_cast.schema.json",
+  "schema_family": "panel-cast",
+  "schema_version": "2.0.0",
+  "project_id": "PRJ-007",
+  "panelists": [
+    {
+      "panelist_id": "PANEL-01",
+      "display_name": "한가람",
+      "persona": "LOGIC_ANALYST",
+      "voice_style": "관찰된 사실을 짧게 분리하고 모순이 생긴 지점을 차분히 짚는다.",
+      "allowed_functions": [
+        "ANOMALY_DETECTION",
+        "HYPOTHESIS_GENERATION",
+        "HYPOTHESIS_REVISION",
+        "CONTRADICTION_DETECTION"
+      ],
+      "knowledge_scope": "REVEALED_INFORMATION_ONLY"
+    },
+    {
+      "panelist_id": "PANEL-02",
+      "display_name": "최은별",
+      "persona": "EMOTIONAL_PROXY",
+      "voice_style": "피해자의 선택 제약과 안전 문제를 구체적으로 느끼되 단정은 피한다.",
+      "allowed_functions": [
+        "EMOTIONAL_REACTION",
+        "MORAL_REACTION",
+        "TENSION_RELEASE",
+        "VICTIM_CONTEXTUALIZATION"
+      ],
+      "knowledge_scope": "REVEALED_INFORMATION_ONLY"
+    },
+    {
+      "panelist_id": "PANEL-03",
+      "display_name": "서민호",
+      "persona": "SKEPTIC",
+      "voice_style": "성급한 결론을 보류하고 다른 설명이 남는지 확인한 뒤 믿음을 수정한다.",
+      "allowed_functions": [
+        "SUSPECT_DISCUSSION",
+        "BELIEF_CORRECTION",
+        "RISK_SIGNAL_RECOGNITION",
+        "EXPECTATION_BUILDING"
+      ],
+      "knowledge_scope": "REVEALED_INFORMATION_ONLY"
+    }
+  ]
+}

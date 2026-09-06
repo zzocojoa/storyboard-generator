@@ -1,0 +1,21 @@
+{
+  "host": "127.0.0.1",
+  "port": 4317,
+  "dataRoot": ".local/data",
+  "webRoot": "dist/web",
+  "pdfFontPath": "assets/fonts/NanumGothic-Regular.ttf",
+  "audioNormalization": {
+    "maxWorkers": 2,
+    "maxQueuedJobs": 4,
+    "maxQueuedInputBytes": 104857600,
+    "queueTimeoutMs": 30000,
+    "executionTimeoutMs": 30000,
+    "maxOldGenerationSizeMb": 96,
+    "maxYoungGenerationSizeMb": 16,
+    "stackSizeMb": 4
+  },
+  "codex": {
+    "requestRoot": ".local/codex-requests",
+    "speechVoice": "Yuna"
+  }
+}
