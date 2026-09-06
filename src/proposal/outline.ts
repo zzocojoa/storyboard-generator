@@ -1,6 +1,7 @@
 import { assertNoErrors, contractError } from '../domain/errors.js';
+import { reconcileTextCues } from '../domain/mapping.js';
 import { ProjectSchema } from '../domain/schema.js';
-import type { AudioCue, Project, Segment, Shot, SourceUnit, StoryboardFrame, TextCue, TextPlacement } from '../domain/schema.js';
+import type { AudioCue, Project, Segment, Shot, ShotSourceLink, SourceUnit, StoryboardFrame } from '../domain/schema.js';
 import { validateProject } from '../domain/validation.js';
 
 export type OutlineSettings = { proposedTextHoldMs: number };
@@ -32,26 +33,8 @@ function outlineAudio(project: Project, segment: Segment): AudioCue[] {
   });
 }
 
-function placementCue(placement: TextPlacement, index: number, project: Project, holdMs: number): TextCue {
-  const segment: Segment | undefined = project.dataset.segments.find((value): boolean => value.id === placement.segmentId);
-  if (segment === undefined) throw contractError('UNKNOWN_PLACEMENT_SEGMENT', `${placement.id}: 구간이 없습니다.`, []);
-  const mapped: SourceUnit | undefined = project.dataset.units.find((unit): boolean => unit.id === placement.unitId);
-  const unitId: string | null = mapped?.text === placement.text ? placement.unitId : null;
-  return {
-    id: `text-placement-${index + 1}`, segmentId: placement.segmentId, unitId, placementId: placement.id,
-    text: placement.text, startMs: placement.startMs, endMs: placement.endMs ?? Math.min(segment.endMs, placement.startMs + holdMs),
-    kind: 'overlay', timingStatus: placement.endMs === null ? 'proposed' : 'confirmed',
-  };
-}
-
-function unmappedTextCues(project: Project, placements: readonly TextCue[], holdMs: number): TextCue[] {
-  return project.dataset.units.filter((unit): boolean => ['SCREEN_TEXT', 'CHAT', 'NOTE'].includes(unit.kind) && !placements.some((cue): boolean => cue.unitId === unit.id))
-    .map((unit: SourceUnit): TextCue => {
-      const segment: Segment | undefined = project.dataset.segments.find((value): boolean => value.id === unit.segmentId);
-      if (segment === undefined) throw contractError('UNKNOWN_TEXT_SEGMENT', `${unit.id}: 구간이 없습니다.`, []);
-      return { id: `text-unit-${project.dataset.units.indexOf(unit) + 1}`, segmentId: unit.segmentId, unitId: unit.id, placementId: null, text: unit.text,
-        startMs: segment.startMs, endMs: Math.min(segment.endMs, segment.startMs + holdMs), kind: unit.kind === 'SCREEN_TEXT' ? 'overlay' : 'prop-text', timingStatus: 'proposed' };
-    });
+function initialSourceLink(unit: SourceUnit): ShotSourceLink {
+  return { unitId: unit.id, usage: ['ACTION', 'SCREEN_TEXT', 'CHAT', 'NOTE'].includes(unit.kind) ? 'primary-visual' : 'audio-only', status: 'confirmed' };
 }
 
 /** 구간별 수동 편집 뼈대다. 음성 길이는 원문 글자 수로 배분한 미확정 자리이며 낭독 측정값이 아니다. */
@@ -62,19 +45,18 @@ export function createSourceOutline(project: Project, settings: OutlineSettings)
     const units: SourceUnit[] = project.dataset.units.filter((unit): boolean => unit.segmentId === segment.id);
     return {
       id: `shot-${index + 1}`, segmentId: segment.id, startMs: segment.startMs, endMs: segment.endMs,
-      sourceUnitIds: units.map((unit): string => unit.id), visualLocationId: null,
+      sourceLinks: units.map((unit: SourceUnit): ShotSourceLink => initialSourceLink(unit)), visualLocationId: null,
       action: units.filter((unit): boolean => unit.kind === 'ACTION').map((unit): string => unit.text).join('\n'),
       camera: { size: '', angle: '', move: '' }, presence: [], propIds: [], continuityBefore: [], continuityAfter: [], cameraAxis: null, screenDirection: null,
-      informationIds: [...new Set(units.flatMap((unit): string[] => unit.informationIds))], transitionOut: { kind: 'cut', durationMs: 0, note: '' },
+      informationIds: [...new Set(units.flatMap((unit): string[] => unit.informationIds))].filter((id: string): boolean => project.dataset.informationRules.find((rule): boolean => rule.id === id)?.notBeforeMs === segment.startMs), transitionOut: { kind: 'cut', durationMs: 0, note: '' },
       proposalOrigin: 'source-outline', approvalStatus: 'proposed', lockedFields: [],
     };
   });
   const frames: StoryboardFrame[] = shots.map((shot: Shot, index: number): StoryboardFrame => ({ id: `frame-${index + 1}`, shotId: shot.id, offsetMs: 0, role: 'start', description: shot.action, imageAssetId: null, visualReview: 'pending' }));
-  const placements: TextCue[] = project.dataset.textPlacements.map((placement: TextPlacement, index: number): TextCue => placementCue(placement, index, project, settings.proposedTextHoldMs));
-  const result: Project = ProjectSchema.parse({ ...project, shots, frames,
+  const base: Project = { ...project, shots, frames,
     audioCues: project.dataset.segments.flatMap((segment: Segment): AudioCue[] => outlineAudio(project, segment)),
-    textCues: [...placements, ...unmappedTextCues(project, placements, settings.proposedTextHoldMs)],
-  });
+  };
+  const result: Project = ProjectSchema.parse({ ...base, textCues: reconcileTextCues(base, project.textMappingDecisions, settings.proposedTextHoldMs) });
   assertNoErrors(validateProject(result, project.dataset), 'INVALID_OUTLINE');
   return result;
 }

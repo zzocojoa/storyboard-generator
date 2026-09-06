@@ -1,5 +1,5 @@
 import { issue } from './errors.js';
-import type { Dataset, Issue, Project, Segment, Snapshot, SourceRef, SourceUnit } from './schema.js';
+import type { Dataset, InformationRule, Issue, Project, Segment, Shot, ShotSourceLink, Snapshot, SourceRef, SourceUnit, TextMappingDecision, TextPlacement } from './schema.js';
 
 function duplicateIssues(ids: readonly string[], entity: string): Issue[] {
   return [...new Set(ids.filter((id: string, index: number): boolean => ids.indexOf(id) !== index))]
@@ -59,8 +59,20 @@ export function validateDataset(dataset: Dataset, snapshots: readonly Snapshot[]
       ...unit.informationIds.flatMap((id: string): Issue[] => {
         const rule = dataset.informationRules.find((candidate): boolean => candidate.id === id);
         if (rule === undefined) return [issue('UNRESOLVED_INFORMATION_RULE', 'warning', unit.id, 'informationIds', '공개 시점 정의가 없는 정보 참조입니다. 공개 범위 검토가 필요합니다.', null, id, unit.sourceRefs)];
-        return segment !== undefined && segment.startMs < rule.notBeforeMs ? [issue('SOURCE_REVEAL_CONFLICT', 'conflict', unit.id, 'informationIds', '원문의 정보 참조가 선언된 공개 시점보다 앞섭니다.', String(rule.notBeforeMs), String(segment.startMs), [...unit.sourceRefs, ...rule.sourceRefs])] : [];
+        const gateSegment: Segment | undefined = dataset.segments.find((candidate: Segment): boolean => candidate.id === rule.segmentId);
+        return segment !== undefined && gateSegment !== undefined && segment.endMs <= gateSegment.startMs ? [issue('SOURCE_REVEAL_CONFLICT', 'conflict', unit.id, 'informationIds', '원문의 정보 참조가 선언된 공개 구간보다 앞섭니다.', rule.segmentId, unit.segmentId, [...unit.sourceRefs, ...rule.sourceRefs])] : [];
       }),
+    ];
+  });
+  const informationIssues: Issue[] = dataset.informationRules.flatMap((rule: InformationRule): Issue[] => {
+    const segment: Segment | undefined = dataset.segments.find((value: Segment): boolean => value.id === rule.segmentId);
+    const unit: SourceUnit | undefined = rule.notBeforeUnitId === null ? undefined : dataset.units.find((value: SourceUnit): boolean => value.id === rule.notBeforeUnitId);
+    return [
+      ...referenceIssue(segment !== undefined, rule.id, 'segmentId', rule.segmentId, rule.sourceRefs),
+      ...(segment !== undefined && (rule.notBeforeMs < segment.startMs || rule.notBeforeMs >= segment.endMs) ? [issue('IMPOSSIBLE_INFORMATION_GATE', 'error', rule.id, 'notBeforeMs', '정보 공개 시각이 지정 구간 밖입니다.', `${segment.startMs}..${segment.endMs}`, String(rule.notBeforeMs), rule.sourceRefs)] : []),
+      ...(rule.notBeforeUnitId === null ? [] : referenceIssue(unit !== undefined && unit.segmentId === rule.segmentId, rule.id, 'notBeforeUnitId', rule.notBeforeUnitId, rule.sourceRefs)),
+      ...(unit !== undefined && rule.notBeforeUnitOrder !== unit.order ? [issue('INFORMATION_GATE_UNIT_ORDER', 'error', rule.id, 'notBeforeUnitOrder', '정보 공개 Unit 순서가 원문과 다릅니다.', String(unit.order), String(rule.notBeforeUnitOrder), [...rule.sourceRefs, ...unit.sourceRefs])] : []),
+      ...(rule.precision === 'unit-order' && (rule.notBeforeUnitId === null || rule.notBeforeUnitOrder === null) ? [issue('INCOMPLETE_INFORMATION_GATE', 'error', rule.id, 'precision', 'unit-order Gate에는 원문 Unit과 순서가 필요합니다.', 'unit/order', null, rule.sourceRefs)] : []),
     ];
   });
   const instructionIssues: Issue[] = dataset.instructions.flatMap((instruction): Issue[] => referenceIssue(dataset.segments.some((segment): boolean => segment.id === instruction.segmentId), instruction.id, 'segmentId', instruction.segmentId, instruction.sourceRefs));
@@ -74,7 +86,29 @@ export function validateDataset(dataset: Dataset, snapshots: readonly Snapshot[]
       ...(unit !== null && unit !== undefined && unit.text !== placement.text ? [issue('SCREEN_TEXT_CONFLICT', 'conflict', placement.id, 'text', '원문 문구와 연결된 자막 문구가 다릅니다.', unit.text, placement.text, [...unit.sourceRefs, ...placement.sourceRefs])] : []),
     ];
   });
-  return [...groups.flatMap((group): Issue[] => duplicateIssues(group.ids, group.name)), ...sourceIssues, ...sceneIssues, ...segmentIssues, ...validateSegmentOrder(dataset.segments), ...unitIssues, ...instructionIssues, ...placementIssues];
+  return [...groups.flatMap((group): Issue[] => duplicateIssues(group.ids, group.name)), ...sourceIssues, ...sceneIssues, ...segmentIssues, ...validateSegmentOrder(dataset.segments), ...unitIssues, ...informationIssues, ...instructionIssues, ...placementIssues];
+}
+
+function sourceOrderIssues(project: Project): Issue[] {
+  return project.dataset.segments.flatMap((segment: Segment): Issue[] => {
+    const shots: Shot[] = project.shots.filter((shot: Shot): boolean => shot.segmentId === segment.id);
+    let latestPrimaryOrder: number = 0;
+    const occurrences: Map<string, ShotSourceLink[]> = new Map<string, ShotSourceLink[]>();
+    const issues: Issue[] = [];
+    for (const shot of shots) {
+      for (const link of shot.sourceLinks) {
+        occurrences.set(link.unitId, [...(occurrences.get(link.unitId) ?? []), link]);
+        if (link.status !== 'confirmed' || link.usage !== 'primary-visual') continue;
+        const unit: SourceUnit | undefined = project.dataset.units.find((value: SourceUnit): boolean => value.id === link.unitId);
+        if (unit !== undefined && unit.order < latestPrimaryOrder) issues.push(issue('SOURCE_UNIT_ORDER_REVERSED', 'error', shot.id, 'sourceLinks', '컷 순서에 따라 primary-visual 원문 순서가 증가해야 합니다.', `>=${latestPrimaryOrder}`, String(unit.order), unit.sourceRefs));
+        if (unit !== undefined) latestPrimaryOrder = Math.max(latestPrimaryOrder, unit.order);
+      }
+    }
+    for (const [unitId, links] of occurrences) {
+      if (links.length > 1 && links.filter((link: ShotSourceLink): boolean => link.usage === 'primary-visual').length > 1) issues.push(issue('DUPLICATE_PRIMARY_SOURCE_LINK', 'error', segment.id, 'sourceLinks', `${unitId}를 여러 컷에 반복하려면 continued-visual 또는 context-only 용도를 사용하세요.`, 'one primary-visual', String(links.length), []));
+    }
+    return issues;
+  });
 }
 
 export function validateProject(project: Project, expectedDataset: Dataset): Issue[] {
@@ -84,6 +118,7 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
   const projectIssues: Issue[] = project.projectId === dataset.projectId && project.projectId === project.handoff.projectId ? [] : [issue('PROJECT_MISMATCH', 'error', project.projectId, 'projectId', '프로젝트와 입력 패키지의 ID가 다릅니다.', dataset.projectId, project.projectId, [])];
   const groups = [
     { name: 'shots', ids: project.shots.map((value): string => value.id) },
+    { name: 'textMappingDecisions', ids: project.textMappingDecisions.map((value): string => value.id) },
     { name: 'frames', ids: project.frames.map((value): string => value.id) },
     { name: 'audioCues', ids: project.audioCues.map((value): string => value.id) },
     { name: 'textCues', ids: project.textCues.map((value): string => value.id) },
@@ -94,14 +129,14 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
     const segment = dataset.segments.find((value): boolean => value.id === shot.segmentId);
     return [
       ...referenceIssue(segment !== undefined, shot.id, 'segmentId', shot.segmentId, []),
-      ...duplicateIssues(shot.sourceUnitIds, `${shot.id}.sourceUnitIds`),
+      ...duplicateIssues(shot.sourceLinks.map((link: ShotSourceLink): string => link.unitId), `${shot.id}.sourceLinks`),
       ...duplicateIssues(shot.propIds, `${shot.id}.propIds`),
       ...duplicateIssues(shot.informationIds, `${shot.id}.informationIds`),
       ...duplicateIssues(shot.lockedFields, `${shot.id}.lockedFields`),
       ...duplicateIssues(shot.continuityBefore.map((state): string => state.assetId), `${shot.id}.continuityBefore`),
       ...duplicateIssues(shot.continuityAfter.map((state): string => state.assetId), `${shot.id}.continuityAfter`),
       ...(segment === undefined ? [] : intervalIssues(shot.id, shot.startMs, shot.endMs, segment.startMs, segment.endMs)),
-      ...shot.sourceUnitIds.flatMap((id: string): Issue[] => referenceIssue(dataset.units.some((unit): boolean => unit.id === id && unit.segmentId === shot.segmentId), shot.id, 'sourceUnitIds', id, [])),
+      ...shot.sourceLinks.flatMap((link: ShotSourceLink): Issue[] => referenceIssue(dataset.units.some((unit): boolean => unit.id === link.unitId && unit.segmentId === shot.segmentId), shot.id, 'sourceLinks', link.unitId, [])),
       ...(shot.visualLocationId === null ? [] : referenceIssue(dataset.locations.some((location): boolean => location.id === shot.visualLocationId), shot.id, 'visualLocationId', shot.visualLocationId, [])),
       ...shot.presence.flatMap((presence): Issue[] => referenceIssue(dataset.people.some((person): boolean => person.id === presence.personId), shot.id, 'presence', presence.personId, [])),
       ...shot.propIds.flatMap((id: string): Issue[] => referenceIssue(project.assets.some((asset): boolean => asset.id === id && asset.kind === 'prop'), shot.id, 'propIds', id, [])),
@@ -112,7 +147,7 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
       ...shot.informationIds.flatMap((id: string): Issue[] => {
         const rule = dataset.informationRules.find((value): boolean => value.id === id);
         if (rule === undefined) return [issue('UNKNOWN_SHOT_INFORMATION', 'error', shot.id, 'informationIds', '정의되지 않은 정보를 컷에 추가할 수 없습니다.', null, id, [])];
-        return shot.startMs >= rule.notBeforeMs ? [] : [issue('FORBIDDEN_REVEAL', 'error', shot.id, 'informationIds', '컷이 정보를 허용 시점보다 먼저 공개합니다.', String(rule.notBeforeMs), String(shot.startMs), rule.sourceRefs)];
+        return [];
       }),
     ];
   });
@@ -128,15 +163,15 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
     ];
   });
   const unitCoverage: Issue[] = dataset.units.flatMap((unit): Issue[] => {
-    const referenced: boolean = project.shots.some((shot): boolean => shot.sourceUnitIds.includes(unit.id));
+    const referenced: boolean = project.shots.some((shot): boolean => shot.sourceLinks.some((link: ShotSourceLink): boolean => link.unitId === unit.id));
     const audio = project.audioCues.filter((cue): boolean => cue.unitId === unit.id);
     const spoken: boolean = ['DIALOGUE', 'NARRATION', 'PANEL'].includes(unit.kind);
     const screenText: boolean = ['SCREEN_TEXT', 'CHAT', 'NOTE'].includes(unit.kind);
     return [
-      ...(referenced ? [] : [issue('UNCOVERED_SOURCE_UNIT', 'error', unit.id, 'shots', '원문 단위가 컷에 연결되지 않았습니다.', null, null, unit.sourceRefs)]),
+      ...(referenced || (spoken && audio.length === 1) || (screenText && (project.textCues.some((cue): boolean => cue.unitId === unit.id) || project.textMappingDecisions.some((decision: TextMappingDecision): boolean => decision.canonicalUnitId === unit.id))) ? [] : [issue('UNCOVERED_SOURCE_UNIT', 'error', unit.id, 'shots', '원문 단위가 컷 또는 독립 트랙에 연결되지 않았습니다.', null, null, unit.sourceRefs)]),
       ...(spoken && audio.length !== 1 ? [issue('SPOKEN_UNIT_COVERAGE', 'error', unit.id, 'audioCues', '발화는 오디오 이벤트 하나에 연결돼야 합니다.', '1', String(audio.length), unit.sourceRefs)] : []),
       ...(!spoken && !['SOUND', 'MUSIC'].includes(unit.kind) && audio.length > 0 ? [issue('NON_SPOKEN_UNIT_AUDIO', 'error', unit.id, 'audioCues', '채팅·메모·화면 문구·지문은 자동 발화로 바꿀 수 없습니다.', '0', String(audio.length), unit.sourceRefs)] : []),
-      ...(screenText && !project.textCues.some((cue): boolean => cue.unitId === unit.id && cue.text === unit.text) ? [issue('UNCOVERED_SCREEN_TEXT', 'error', unit.id, 'textCues', '화면 문구 원문이 글자 트랙에 연결되지 않았습니다.', unit.text, null, unit.sourceRefs)] : []),
+      ...(screenText && !project.textCues.some((cue): boolean => cue.unitId === unit.id && cue.text === unit.text) && !project.textMappingDecisions.some((decision: TextMappingDecision): boolean => decision.canonicalUnitId === unit.id) ? [issue('UNCOVERED_SCREEN_TEXT', 'error', unit.id, 'textCues', '화면 문구 원문이 글자 트랙 또는 자막 Mapping에 연결되지 않았습니다.', unit.text, null, unit.sourceRefs)] : []),
     ];
   });
   const frameIssues: Issue[] = project.frames.flatMap((frame): Issue[] => {
@@ -181,7 +216,7 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
       ...intervalIssues(cue.id, cue.startMs, cue.endMs, dataset.segments.find((segment): boolean => segment.id === cue.segmentId)?.startMs ?? 0, dataset.segments.find((segment): boolean => segment.id === cue.segmentId)?.endMs ?? totalEnd),
       ...(cue.unitId === null ? [] : referenceIssue(unit !== undefined && unit !== null && unit.segmentId === cue.segmentId, cue.id, 'unitId', cue.unitId, [])),
       ...(cue.placementId === null ? [] : referenceIssue(placement !== undefined && placement !== null && placement.segmentId === cue.segmentId, cue.id, 'placementId', cue.placementId, [])),
-      ...(unit !== undefined && unit !== null && cue.text !== unit.text ? [issue('SOURCE_TEXT_MODIFIED', 'error', cue.id, 'text', '원문 문구를 변경할 수 없습니다.', unit.text, cue.text, unit.sourceRefs)] : []),
+      ...(unit !== undefined && unit !== null && placement === null && cue.text !== unit.text ? [issue('SOURCE_TEXT_MODIFIED', 'error', cue.id, 'text', '원문 문구를 변경할 수 없습니다.', unit.text, cue.text, unit.sourceRefs)] : []),
       ...(placement !== undefined && placement !== null && (cue.startMs !== placement.startMs || cue.text !== placement.text) ? [issue('PLACEMENT_MODIFIED', 'error', cue.id, 'placementId', '확정 자막 시작점 또는 문구가 변경되었습니다.', `${placement.startMs}: ${placement.text}`, `${cue.startMs}: ${cue.text}`, placement.sourceRefs)] : []),
       ...(placement !== undefined && placement !== null && placement.endMs !== null && cue.endMs !== placement.endMs ? [issue('PLACEMENT_END_MODIFIED', 'error', cue.id, 'endMs', '확정 자막 종료점이 변경되었습니다.', String(placement.endMs), String(cue.endMs), placement.sourceRefs)] : []),
     ];
@@ -189,6 +224,21 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
   const placementCoverage: Issue[] = dataset.textPlacements.flatMap((placement): Issue[] => {
     const count: number = project.textCues.filter((cue): boolean => cue.placementId === placement.id).length;
     return count === 1 ? [] : [issue('PLACEMENT_COVERAGE', 'error', placement.id, 'textCues', '원본 자막 큐는 글자 트랙 하나에 연결돼야 합니다.', '1', String(count), placement.sourceRefs)];
+  });
+  const mappingIssues: Issue[] = project.textMappingDecisions.flatMap((decision: TextMappingDecision): Issue[] => {
+    const placement: TextPlacement | undefined = dataset.textPlacements.find((value: TextPlacement): boolean => value.id === decision.placementId);
+    const unit: SourceUnit | undefined = decision.canonicalUnitId === null ? undefined : dataset.units.find((value: SourceUnit): boolean => value.id === decision.canonicalUnitId);
+    return [
+      ...referenceIssue(placement !== undefined, decision.id, 'placementId', decision.placementId, []),
+      ...(decision.canonicalUnitId === null ? [] : referenceIssue(unit !== undefined && placement !== undefined && unit.segmentId === placement.segmentId, decision.id, 'canonicalUnitId', decision.canonicalUnitId, placement?.sourceRefs ?? [])),
+      ...(decision.status === 'confirmed' && decision.relation === 'exact' && placement !== undefined && unit !== undefined && placement.text !== unit.text ? [issue('INVALID_EXACT_TEXT_MAPPING', 'error', decision.id, 'relation', 'exact Mapping의 Placement와 Canonical 원문이 다릅니다.', unit.text, placement.text, [...placement.sourceRefs, ...unit.sourceRefs])] : []),
+      ...((decision.canonicalStartMs === null) !== (decision.canonicalEndMs === null) ? [issue('INCOMPLETE_CANONICAL_TEXT_TIME', 'error', decision.id, 'canonicalTiming', 'Canonical 문구 시작·종료 시각을 함께 지정하세요.', 'both or null', null, placement?.sourceRefs ?? [])] : []),
+      ...(placement !== undefined && decision.canonicalStartMs !== null && decision.canonicalEndMs !== null ? intervalIssues(decision.id, decision.canonicalStartMs, decision.canonicalEndMs, dataset.segments.find((segment: Segment): boolean => segment.id === placement.segmentId)?.startMs ?? 0, dataset.segments.find((segment: Segment): boolean => segment.id === placement.segmentId)?.endMs ?? totalEnd) : []),
+    ];
+  });
+  const decisionCoverage: Issue[] = dataset.textPlacements.flatMap((placement: TextPlacement): Issue[] => {
+    const count: number = project.textMappingDecisions.filter((decision: TextMappingDecision): boolean => decision.placementId === placement.id).length;
+    return count === 1 ? [] : [issue('TEXT_MAPPING_DECISION_COVERAGE', 'error', placement.id, 'textMappingDecisions', '자막 Placement마다 Mapping Decision이 정확히 하나 필요합니다.', '1', String(count), placement.sourceRefs)];
   });
   const orderIssues: Issue[] = project.shots.flatMap((shot, index): Issue[] => {
     const previous = project.shots[index - 1];
@@ -213,5 +263,5 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
       : asset.kind === 'location' ? dataset.locations.some((location): boolean => location.id === asset.subjectId) : true;
     return referenceIssue(exists, asset.id, 'subjectId', asset.subjectId, []);
   });
-  return [...sourceIssues, ...projectIssues, ...groups.flatMap((group): Issue[] => duplicateIssues(group.ids, group.name)), ...shotIssues, ...coverageIssues, ...unitCoverage, ...frameIssues, ...frameGroupIssues, ...audioIssues, ...textIssues, ...placementCoverage, ...orderIssues, ...continuityIssues, ...generationIssues, ...assetSubjectIssues];
+  return [...sourceIssues, ...projectIssues, ...groups.flatMap((group): Issue[] => duplicateIssues(group.ids, group.name)), ...shotIssues, ...coverageIssues, ...unitCoverage, ...sourceOrderIssues(project), ...frameIssues, ...frameGroupIssues, ...audioIssues, ...textIssues, ...placementCoverage, ...mappingIssues, ...decisionCoverage, ...orderIssues, ...continuityIssues, ...generationIssues, ...assetSubjectIssues];
 }

@@ -25,6 +25,9 @@ describe('저장과 출력 경계', (): void => {
     expect(csv).toContain('흙부터 확인하세요');
     expect(csv).toContain('"17500"');
     expect(csv).toContain('proposed');
+    expect(csv).toContain('"source_links"');
+    expect(csv).toContain('primary-visual');
+    expect(csv).toContain('confirmed');
     expect(csvCell('=2+2')).toBe('"\'=2+2"');
     expect(csvCell('쉼표, "따옴표"\n두 줄')).toBe('"쉼표, ""따옴표""\n두 줄"');
   });

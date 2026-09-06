@@ -1,6 +1,7 @@
 import { assertNoErrors, contractError } from '../domain/errors.js';
+import { createInitialTextMappingDecisions, refineInformationRules } from '../domain/mapping.js';
 import { DatasetSchema, ProjectSchema } from '../domain/schema.js';
-import type { Dataset, Issue, Project } from '../domain/schema.js';
+import type { Dataset, Issue, Project, TextMappingDecision } from '../domain/schema.js';
 import { validateTimebase } from '../domain/time.js';
 import { validateDataset } from '../domain/validation.js';
 import { validatePackage } from './integrity.js';
@@ -13,14 +14,16 @@ export function importPackage(input: unknown): Project {
   const normalized: { dataset: Dataset; issues: Issue[] } = payload.handoff.adapter === 'native-v1'
     ? { dataset: importNative(payload.handoff, snapshots), issues: [] }
     : importProduction(payload.handoff, snapshots);
-  const dataset: Dataset = DatasetSchema.parse(normalized.dataset);
+  const initialDataset: Dataset = DatasetSchema.parse(normalized.dataset);
+  const textMappingDecisions: TextMappingDecision[] = createInitialTextMappingDecisions(initialDataset);
+  const dataset: Dataset = DatasetSchema.parse({ ...initialDataset, informationRules: refineInformationRules(initialDataset, textMappingDecisions) });
   if (dataset.projectId !== payload.handoff.projectId) throw contractError('PROJECT_MISMATCH', `handoff=${payload.handoff.projectId}, dataset=${dataset.projectId}`, []);
   const issues: Issue[] = [...normalized.issues, ...validateDataset(dataset, snapshots)];
   assertNoErrors(issues, 'INVALID_SOURCE_DATASET');
   return ProjectSchema.parse({
-    schemaVersion: '1.1.0', projectId: dataset.projectId, title: dataset.title, revision: 0, profile: payload.handoff.profile,
+    schemaVersion: '1.2.0', projectId: dataset.projectId, title: dataset.title, revision: 0, profile: payload.handoff.profile,
     handoff: payload.handoff, sources: snapshots, dataset, importIssues: issues,
-    shots: [], frames: [], audioCues: [], textCues: [], assets: [], generationRecords: [],
+    textMappingDecisions, shots: [], frames: [], audioCues: [], textCues: [], assets: [], generationRecords: [],
   });
 }
 

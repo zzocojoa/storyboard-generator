@@ -4,7 +4,7 @@
   "properties": {
     "schemaVersion": {
       "type": "string",
-      "const": "1.1.0"
+      "const": "1.2.0"
     },
     "projectId": {
       "$ref": "#/$defs/__schema0"
@@ -340,8 +340,41 @@
               "id": {
                 "$ref": "#/$defs/__schema0"
               },
+              "segmentId": {
+                "$ref": "#/$defs/__schema0"
+              },
               "notBeforeMs": {
                 "$ref": "#/$defs/__schema12"
+              },
+              "notBeforeUnitId": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "notBeforeUnitOrder": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "precision": {
+                "type": "string",
+                "enum": [
+                  "exact-time",
+                  "unit-order",
+                  "segment-start"
+                ]
               },
               "sourceRefs": {
                 "minItems": 1,
@@ -353,7 +386,11 @@
             },
             "required": [
               "id",
+              "segmentId",
               "notBeforeMs",
+              "notBeforeUnitId",
+              "notBeforeUnitOrder",
+              "precision",
               "sourceRefs"
             ],
             "additionalProperties": false
@@ -533,6 +570,87 @@
         "additionalProperties": false
       }
     },
+    "textMappingDecisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/__schema0"
+          },
+          "placementId": {
+            "$ref": "#/$defs/__schema0"
+          },
+          "canonicalUnitId": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/__schema0"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "relation": {
+            "type": "string",
+            "enum": [
+              "exact",
+              "abbreviation",
+              "separate-element",
+              "replacement"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "unresolved",
+              "confirmed"
+            ]
+          },
+          "renderCanonicalSeparately": {
+            "type": "boolean"
+          },
+          "canonicalStartMs": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/__schema12"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "canonicalEndMs": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/__schema12"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "placementId",
+          "canonicalUnitId",
+          "relation",
+          "status",
+          "renderCanonicalSeparately",
+          "canonicalStartMs",
+          "canonicalEndMs",
+          "note"
+        ],
+        "additionalProperties": false
+      }
+    },
     "shots": {
       "type": "array",
       "items": {
@@ -550,10 +668,37 @@
           "endMs": {
             "$ref": "#/$defs/__schema12"
           },
-          "sourceUnitIds": {
+          "sourceLinks": {
             "type": "array",
             "items": {
-              "$ref": "#/$defs/__schema0"
+              "type": "object",
+              "properties": {
+                "unitId": {
+                  "$ref": "#/$defs/__schema0"
+                },
+                "usage": {
+                  "type": "string",
+                  "enum": [
+                    "primary-visual",
+                    "continued-visual",
+                    "audio-only",
+                    "context-only"
+                  ]
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "confirmed",
+                    "mapping-required"
+                  ]
+                }
+              },
+              "required": [
+                "unitId",
+                "usage",
+                "status"
+              ],
+              "additionalProperties": false
             }
           },
           "visualLocationId": {
@@ -719,7 +864,7 @@
           "segmentId",
           "startMs",
           "endMs",
-          "sourceUnitIds",
+          "sourceLinks",
           "visualLocationId",
           "action",
           "camera",
@@ -1088,6 +1233,7 @@
     "sources",
     "dataset",
     "importIssues",
+    "textMappingDecisions",
     "shots",
     "frames",
     "audioCues",

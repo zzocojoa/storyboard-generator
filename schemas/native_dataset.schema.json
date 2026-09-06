@@ -165,6 +165,39 @@
           },
           "notBeforeMs": {
             "$ref": "#/$defs/__schema3"
+          },
+          "segmentId": {
+            "$ref": "#/$defs/__schema0"
+          },
+          "notBeforeUnitId": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/__schema0"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "notBeforeUnitOrder": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "precision": {
+            "type": "string",
+            "enum": [
+              "exact-time",
+              "unit-order",
+              "segment-start"
+            ]
           }
         },
         "required": [

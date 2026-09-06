@@ -14,10 +14,37 @@
     "endMs": {
       "$ref": "#/$defs/__schema1"
     },
-    "sourceUnitIds": {
+    "sourceLinks": {
       "type": "array",
       "items": {
-        "$ref": "#/$defs/__schema0"
+        "type": "object",
+        "properties": {
+          "unitId": {
+            "$ref": "#/$defs/__schema0"
+          },
+          "usage": {
+            "type": "string",
+            "enum": [
+              "primary-visual",
+              "continued-visual",
+              "audio-only",
+              "context-only"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "mapping-required"
+            ]
+          }
+        },
+        "required": [
+          "unitId",
+          "usage",
+          "status"
+        ],
+        "additionalProperties": false
       }
     },
     "visualLocationId": {
@@ -183,7 +210,7 @@
     "segmentId",
     "startMs",
     "endMs",
-    "sourceUnitIds",
+    "sourceLinks",
     "visualLocationId",
     "action",
     "camera",

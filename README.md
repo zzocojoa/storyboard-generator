@@ -6,6 +6,7 @@
 
 - `native-v1` 또는 `production-v1` 입력 패키지 검증과 프로젝트별 저장
 - 장면·구간 탐색, 원문 및 제작 지시 확인, 컷 분할·병합·재정렬·수정·전환·잠금·확정
+- 축약 자막과 Canonical 원문의 관계 검토, Shot별 역할 기반 Source Mapping, Segment 내부 정보 공개 Gate
 - 화면비·매체·그림 스타일과 인물·장소·소품 기준 이미지 관리
 - Codex App 기반 컷 제안, 기준 이미지를 포함한 프레임 생성, 로컬 가이드 음성 생성
 - 시작·키·끝 프레임 편집, 독립 오디오·글자 트랙 타이밍, 그림·자막·음성의 시간순 재생
@@ -47,6 +48,10 @@ $storyboard-workbench 대기 중인 콘티 생성 요청을 처리해 주세요.
 
 파일 경로는 패키지 루트 안으로 제한한다. `bytes-sha256`은 UTF-8 파일 바이트를 검사하고, `sorted-json-sha256`은 유니코드 코드 포인트 순으로 키를 정렬한 공백 없는 JSON을 검사한다. 필수 파일 누락, 해시 불일치, 끊어진 참조, 미지원 버전은 구체적인 오류로 끝난다. 문구나 선언의 제작상 차이는 원문을 고치지 않고 검토 항목으로 보존한다.
 
+자막 Placement마다 `TextMappingDecision`이 생긴다. 문자열이 정확히 같으면 `exact/confirmed`, 축약 후보나 독립 요소가 감지되면 `unresolved`로 시작한다. `abbreviation`과 `replacement`는 별도 Canonical 렌더링을 끌 수 있고, `separate-element` 또는 별도 렌더링은 Canonical 문구의 시작·종료 시각을 명시해야 한다. 미해결 결정은 초안 저장을 막지 않지만 관련 컷의 확정·이미지 생성·구간 제안 적용을 막는다.
+
+각 컷은 `sourceLinks`를 권한 원본으로 사용한다. Link는 `primary-visual`, `continued-visual`, `audio-only`, `context-only` 용도와 `confirmed`, `mapping-required` 상태를 가진다. 수동 분할에서 시간 근거가 없는 원문은 한쪽 후보에만 배치되고 `mapping-required`로 표시된다. Inspector의 **TEXT MAPPING REVIEW**와 **SOURCE MAPPING**에서 관계·시각·용도·상태를 검토하고 같은 구간의 앞뒤 컷으로 연결을 이동할 수 있다.
+
 ## CLI
 
 브라우저 없이 가져오기·검증·JSON/CSV 출력을 확인할 수 있다.
@@ -60,7 +65,7 @@ npm run cli -- export-csv --project .local/plant-care.project.json --output .loc
 
 `outline`은 구간마다 편집 시작용 컷과 프레임을 만든다. 카메라·화면 위치·출연 인물을 임의로 확정하지 않는다. 음성 슬롯은 글자 수에 비례한 제안 시간이며 생성한 가이드 음성의 WAV 길이를 측정한 뒤 `measured` 상태가 된다. 원본에 화면 글자 종료점이 없으면 `--text-hold-ms` 값이 제안값으로 기록된다. 기존 출력 경로를 덮어쓰지 않는다.
 
-현재 프로젝트 형식은 `1.1.0`이다. `1.0.0` 저장본을 열면 각 컷에 0ms 직접 전환을 명시해 읽으며, 다음 저장부터 `1.1.0`으로 기록한다.
+현재 프로젝트 형식은 `1.2.0`이다. `1.0.0` 저장본은 먼저 0ms 직접 전환을 명시한 `1.1.0` 구조로 변환한 뒤 `1.2.0`으로 올린다. 기존 `sourceUnitIds`는 손실 없이 `context-only/mapping-required` Link로 바꾸고, 자막 결정은 원문과 정확히 일치하는 경우에만 자동 확정한다. 축약·모호한 후보는 `unresolved`로 남으므로 사용자가 Mapping을 확인해야 한다. 원문·컷 시간·자산·기존 검토 상태는 유지된다.
 
 Codex App 생성 브리지의 현재 요청과 적용 명령은 다음과 같이 확인할 수 있다. 일반 사용에서는 저장소 스킬이 이 명령을 실행한다.
 
@@ -78,6 +83,6 @@ CSV에서 같은 오디오 이벤트가 여러 컷 행에 나타나면 하나의
 npm run check
 ```
 
-이 명령은 서버·도메인 타입 검사, 웹 타입 검사, 자동 테스트, 생성 스키마 정합성, 운영 웹 빌드를 순서대로 실행한다. 테스트는 구성과 길이가 다른 두 프로젝트, 겹치는 원본 ID의 분리, 실제 제작 자료 전체, 원문·시간·정보 공개·잠금·원본 갱신·자산·저장·Codex 요청·결과 적용·API·JSON/CSV/PDF를 검사한다. PRJ-007 `SEG-008`에서는 Codex App으로 5개 컷을 제안하고, 첫 프레임을 재생성·승인했으며, 한 발화의 실제 WAV 길이를 측정해 반영했다. 다른 대표 예외와 전체 분량의 그림 연속성·연출·낭독 품질은 별도 제작 검토 대상이다.
+이 명령은 서버·도메인 타입 검사, 웹 타입 검사, 자동 테스트, 생성 스키마 정합성, 운영 웹 빌드를 순서대로 실행한다. 테스트는 구성과 길이가 다른 두 프로젝트, 겹치는 원본 ID의 분리, 실제 제작 자료 전체, 원문·시간·정보 공개·잠금·원본 갱신·자산·저장·Codex 요청·결과 적용·API·JSON/CSV/PDF를 검사한다. PRJ-007 Golden 검사는 12개 Scene, 32개 Segment, 79개 screenplay Source Unit, 16개 Panel Turn, 1,500,000ms 전체 시간과 원문 불변을 확인한다. `SEG-024`에서는 1,088,000ms, 1,108,000ms, 1,148,000ms의 순차 공개와 Canonical 원문 조기 렌더링·후반 정보 조기 전달이 없음을 검사한다. `SEG-008`에서는 Codex App으로 5개 컷을 제안하고, 첫 프레임을 재생성·승인했으며, 한 발화의 실제 WAV 길이를 측정해 반영했다. 전체 분량의 그림 연속성·연출·낭독 품질은 별도 제작 검토 대상이다.
 
 스키마의 기준은 `src/domain/schema.ts`다. 타입 변경 후 `npm run schemas:write`로 JSON Schema를 갱신하고 `npm run schemas:check`로 일치 여부를 확인한다. 제품 범위와 구현 원칙은 [`AGENTS.md`](AGENTS.md), 데이터 흐름과 API 설계는 [Design](docs/02-design/features/storyboard-generator.design.md)을 따른다.

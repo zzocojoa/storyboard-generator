@@ -1,6 +1,7 @@
 import { assertNoErrors, contractError } from './errors.js';
+import { approvalIssuesForShot, effectiveInformationGate } from './mapping.js';
 import { ProjectSchema, ShotContentSchema } from './schema.js';
-import type { LockedField, Project, Shot, ShotContent, StoryboardFrame } from './schema.js';
+import type { AudioCue, Issue, LockedField, Project, Shot, ShotContent, ShotSourceLink, SourceUnit, StoryboardFrame, TextCue, TextMappingDecision, TextPlacement } from './schema.js';
 import { validateProject } from './validation.js';
 
 export function shotContent(shot: Shot): ShotContent {
@@ -55,8 +56,66 @@ export function setShotLocks(project: Project, shotId: string, fields: readonly 
 
 export function approveShot(project: Project, shotId: string): Project {
   requireShot(project, shotId);
+  const reviewIssues: Issue[] = approvalIssuesForShot(project, shotId);
+  if (reviewIssues.length > 0) throw contractError('SHOT_APPROVAL_BLOCKED', reviewIssues.map((value: Issue): string => `${value.code}: ${value.message}`).join('\n'), reviewIssues);
   const fields: LockedField[] = ['timing', 'sources', 'action', 'camera', 'location', 'presence', 'continuity', 'transition', 'frames'];
   return finishEdit(project, { ...project, shots: project.shots.map((shot: Shot): Shot => shot.id === shotId ? { ...shot, lockedFields: fields, approvalStatus: 'approved' } : shot) });
+}
+
+type TimedEvidence = { startMs: number; endMs: number; kind: 'audio' | 'text' };
+
+function linkEvidence(project: Project, link: ShotSourceLink): TimedEvidence[] {
+  const audio: TimedEvidence[] = project.audioCues.filter((cue: AudioCue): boolean => cue.unitId === link.unitId)
+    .map((cue: AudioCue): TimedEvidence => ({ startMs: cue.startMs, endMs: cue.endMs, kind: 'audio' }));
+  const directText: TimedEvidence[] = project.textCues.filter((cue: TextCue): boolean => cue.unitId === link.unitId)
+    .map((cue: TextCue): TimedEvidence => ({ startMs: cue.startMs, endMs: cue.endMs, kind: 'text' }));
+  const mappedPlacementIds: string[] = project.textMappingDecisions.filter((decision: TextMappingDecision): boolean => decision.canonicalUnitId === link.unitId).map((decision: TextMappingDecision): string => decision.placementId);
+  const mappedText: TimedEvidence[] = project.dataset.textPlacements.filter((placement: TextPlacement): boolean => mappedPlacementIds.includes(placement.id))
+    .map((placement: TextPlacement): TimedEvidence => {
+      const cue: TextCue | undefined = project.textCues.find((value: TextCue): boolean => value.placementId === placement.id);
+      return { startMs: placement.startMs, endMs: placement.endMs ?? cue?.endMs ?? placement.startMs + 1, kind: 'text' };
+    });
+  return [...audio, ...directText, ...mappedText];
+}
+
+function crossingLinks(link: ShotSourceLink, kind: TimedEvidence['kind']): { first: ShotSourceLink; second: ShotSourceLink } {
+  const usage: ShotSourceLink['usage'] = kind === 'text' || ['primary-visual', 'continued-visual'].includes(link.usage) ? 'continued-visual' : 'audio-only';
+  return { first: { ...link, usage }, second: { ...link, usage } };
+}
+
+function estimatedSide(project: Project, shot: Shot, link: ShotSourceLink, atMs: number): 'first' | 'second' {
+  const links: { link: ShotSourceLink; unit: SourceUnit }[] = shot.sourceLinks.flatMap((value: ShotSourceLink) => {
+    const unit: SourceUnit | undefined = project.dataset.units.find((candidate: SourceUnit): boolean => candidate.id === value.unitId);
+    return unit === undefined ? [] : [{ link: value, unit }];
+  }).sort((left, right): number => left.unit.order - right.unit.order);
+  const index: number = links.findIndex((entry): boolean => entry.link.unitId === link.unitId);
+  const estimate: number = shot.startMs + Math.floor((shot.endMs - shot.startMs) * (index + 0.5) / Math.max(1, links.length));
+  return estimate < atMs ? 'first' : 'second';
+}
+
+function allocateSplitLinks(project: Project, shot: Shot, atMs: number): { first: ShotSourceLink[]; second: ShotSourceLink[] } {
+  return shot.sourceLinks.reduce((result: { first: ShotSourceLink[]; second: ShotSourceLink[] }, link: ShotSourceLink) => {
+    const evidence: TimedEvidence[] = linkEvidence(project, link);
+    const crosses: TimedEvidence | undefined = evidence.find((value: TimedEvidence): boolean => value.startMs < atMs && value.endMs > atMs);
+    if (crosses !== undefined) {
+      const split = crossingLinks(link, crosses.kind);
+      return { first: [...result.first, split.first], second: [...result.second, split.second] };
+    }
+    if (evidence.length > 0 && evidence.every((value: TimedEvidence): boolean => value.endMs <= atMs)) return { ...result, first: [...result.first, link] };
+    if (evidence.length > 0 && evidence.every((value: TimedEvidence): boolean => value.startMs >= atMs)) return { ...result, second: [...result.second, link] };
+    if (evidence.length > 0) {
+      const split = crossingLinks(link, evidence.some((value: TimedEvidence): boolean => value.kind === 'text') ? 'text' : 'audio');
+      return { first: [...result.first, split.first], second: [...result.second, split.second] };
+    }
+    const uncertain: ShotSourceLink = { ...link, status: 'mapping-required' };
+    return estimatedSide(project, shot, link, atMs) === 'first' ? { ...result, first: [...result.first, uncertain] } : { ...result, second: [...result.second, uncertain] };
+  }, { first: [], second: [] });
+}
+
+function splitInformationIds(project: Project, links: readonly ShotSourceLink[], startMs: number, ids: readonly string[]): string[] {
+  const unitIds: Set<string> = new Set(links.map((link: ShotSourceLink): string => link.unitId));
+  return ids.filter((id: string): boolean => project.dataset.units.some((unit: SourceUnit): boolean => unitIds.has(unit.id) && unit.informationIds.includes(id))
+    && effectiveInformationGate(project, id).notBeforeMs <= startMs);
 }
 
 export function splitShot(project: Project, shotId: string, atMs: number, newShotId: string, newFrameId: string): Project {
@@ -65,8 +124,9 @@ export function splitShot(project: Project, shotId: string, atMs: number, newSho
   if (atMs <= original.startMs || atMs >= original.endMs || !Number.isSafeInteger(atMs)) throw contractError('INVALID_SPLIT_TIME', `${shotId}: 컷 안의 정수 밀리초로 분할 위치를 지정하세요.`, []);
   if (project.shots.some((shot: Shot): boolean => shot.id === newShotId) || project.frames.some((frame: StoryboardFrame): boolean => frame.id === newFrameId)) throw contractError('DUPLICATE_EDIT_ID', '새 컷과 프레임 ID가 이미 존재합니다.', []);
   const offset: number = atMs - original.startMs;
-  const first: Shot = { ...original, endMs: atMs, transitionOut: { kind: 'cut', durationMs: 0, note: '' }, proposalOrigin: 'manual', approvalStatus: 'proposed' };
-  const second: Shot = { ...original, id: newShotId, startMs: atMs, proposalOrigin: 'manual', approvalStatus: 'proposed' };
+  const links = allocateSplitLinks(project, original, atMs);
+  const first: Shot = { ...original, endMs: atMs, sourceLinks: links.first, informationIds: splitInformationIds(project, links.first, original.startMs, original.informationIds), transitionOut: { kind: 'cut', durationMs: 0, note: '' }, proposalOrigin: 'manual', approvalStatus: 'proposed' };
+  const second: Shot = { ...original, id: newShotId, startMs: atMs, sourceLinks: links.second, informationIds: splitInformationIds(project, links.second, atMs, original.informationIds), proposalOrigin: 'manual', approvalStatus: 'proposed' };
   const movedFrames: StoryboardFrame[] = project.frames.map((frame: StoryboardFrame): StoryboardFrame => {
     if (frame.shotId !== shotId) return frame;
     if (frame.offsetMs < offset) return { ...frame, visualReview: 'pending' };
@@ -75,6 +135,16 @@ export function splitShot(project: Project, shotId: string, atMs: number, newSho
   const secondStart: StoryboardFrame = { id: newFrameId, shotId: newShotId, offsetMs: 0, role: 'start', description: original.action, imageAssetId: null, visualReview: 'pending' };
   return finishEdit(project, { ...project, shots: project.shots.flatMap((shot: Shot): Shot[] => shot.id === shotId ? [first, second] : [shot]),
     frames: movedFrames.some((frame: StoryboardFrame): boolean => frame.shotId === newShotId && frame.offsetMs === 0) ? movedFrames : [...movedFrames, secondStart],
+  });
+}
+
+function mergeSourceLinks(first: readonly ShotSourceLink[], second: readonly ShotSourceLink[]): ShotSourceLink[] {
+  const unitIds: string[] = [...new Set([...first, ...second].map((link: ShotSourceLink): string => link.unitId))];
+  return unitIds.map((unitId: string): ShotSourceLink => {
+    const links: ShotSourceLink[] = [...first, ...second].filter((link: ShotSourceLink): boolean => link.unitId === unitId);
+    const primary: ShotSourceLink | undefined = links.find((link: ShotSourceLink): boolean => link.usage === 'primary-visual');
+    const selected: ShotSourceLink = primary ?? links[0] as ShotSourceLink;
+    return { ...selected, status: links.some((link: ShotSourceLink): boolean => link.status === 'mapping-required') ? 'mapping-required' : 'confirmed' };
   });
 }
 
@@ -89,7 +159,7 @@ export function mergeShots(project: Project, firstId: string, secondId: string):
   }
   const offset: number = first.endMs - first.startMs;
   const merged: Shot = { ...first, endMs: second.endMs, action: [...new Set([first.action, second.action])].filter(Boolean).join('\n'),
-    sourceUnitIds: project.dataset.units.filter((unit): boolean => first.sourceUnitIds.includes(unit.id) || second.sourceUnitIds.includes(unit.id)).map((unit): string => unit.id),
+    sourceLinks: mergeSourceLinks(first.sourceLinks, second.sourceLinks),
     propIds: [...new Set([...first.propIds, ...second.propIds])], informationIds: [...new Set([...first.informationIds, ...second.informationIds])],
     continuityAfter: second.continuityAfter, transitionOut: second.transitionOut, proposalOrigin: 'manual', approvalStatus: 'proposed', lockedFields: [...new Set([...first.lockedFields, ...second.lockedFields])],
   };

@@ -15,7 +15,7 @@ async function pageItems(project: Project, loadAsset: AssetLoader): Promise<Fram
     .sort((left: StoryboardFrame, right: StoryboardFrame): number => left.offsetMs - right.offsetMs));
   return Promise.all(orderedFrames.map(async (frame: StoryboardFrame): Promise<FramePageItem> => {
     const shot: Shot = project.shots.find((candidate: Shot): boolean => candidate.id === frame.shotId) as Shot;
-    const sourceText: string = shot.sourceUnitIds.map((id: string): string => project.dataset.units.find((unit): boolean => unit.id === id)?.text ?? id).join(' / ');
+    const sourceText: string = shot.sourceLinks.map((link): string => `[${link.usage}/${link.status}] ${project.dataset.units.find((unit): boolean => unit.id === link.unitId)?.text ?? link.unitId}`).join(' / ');
     return { frame, shot, image: frame.imageAssetId === null ? null : await loadAsset(frame.imageAssetId), sourceText };
   }));
 }

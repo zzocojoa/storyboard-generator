@@ -1,5 +1,6 @@
 import { assertNoErrors, contractError } from './errors.js';
-import type { AudioCue, Project, Segment, Shot, StoryboardFrame, TextCue } from './schema.js';
+import { reconcileTextCues } from './mapping.js';
+import type { AudioCue, Project, Segment, Shot, SourceUnit, StoryboardFrame, TextCue, TextMappingDecision, TextPlacement } from './schema.js';
 import { ProjectSchema } from './schema.js';
 import { validateProject } from './validation.js';
 
@@ -44,10 +45,17 @@ export function sourceImpact(current: Project, incoming: Project): SourceImpactR
   const locationIds: string[] = changedIds(current.dataset.locations, incoming.dataset.locations);
   const instructionIds: string[] = changedIds(current.dataset.instructions, incoming.dataset.instructions);
   const placementIds: string[] = changedIds(current.dataset.textPlacements, incoming.dataset.textPlacements);
+  const informationIds: string[] = changedIds(current.dataset.informationRules, incoming.dataset.informationRules);
   const impacted: Set<string> = new Set<string>(segmentIds);
   addUnitSegments(current, unitIds, impacted); addUnitSegments(incoming, unitIds, impacted);
   addInstructionSegments(current, instructionIds, impacted); addInstructionSegments(incoming, instructionIds, impacted);
   addPlacementSegments(current, placementIds, impacted); addPlacementSegments(incoming, placementIds, impacted);
+  for (const id of informationIds) {
+    const currentRule = current.dataset.informationRules.find((rule): boolean => rule.id === id);
+    const incomingRule = incoming.dataset.informationRules.find((rule): boolean => rule.id === id);
+    if (currentRule !== undefined) impacted.add(currentRule.segmentId);
+    if (incomingRule !== undefined) impacted.add(incomingRule.segmentId);
+  }
   for (const sceneId of sceneIds) {
     for (const segment of [...current.dataset.segments, ...incoming.dataset.segments]) if (segment.sceneId === sceneId) impacted.add(segment.id);
   }
@@ -68,13 +76,32 @@ export function sourceImpact(current: Project, incoming: Project): SourceImpactR
     changedEntityIds: [...segmentIds.map((id: string): string => `segment:${id}`), ...unitIds.map((id: string): string => `unit:${id}`),
       ...sceneIds.map((id: string): string => `scene:${id}`), ...personIds.map((id: string): string => `person:${id}`),
       ...locationIds.map((id: string): string => `location:${id}`), ...instructionIds.map((id: string): string => `instruction:${id}`),
-      ...placementIds.map((id: string): string => `text-placement:${id}`)],
+      ...placementIds.map((id: string): string => `text-placement:${id}`), ...informationIds.map((id: string): string => `information-rule:${id}`)],
     impactedSegmentIds, impactedShotIds, lockedShotIds, canApply: lockedShotIds.length === 0,
   };
 }
 
 function remapFrames(frames: readonly StoryboardFrame[], shotIds: ReadonlyMap<string, string>, prefix: string): StoryboardFrame[] {
   return frames.map((frame: StoryboardFrame, index: number): StoryboardFrame => ({ ...frame, id: `${prefix}:frame:${index + 1}`, shotId: shotIds.get(frame.shotId) ?? frame.shotId }));
+}
+
+function decisionStillValid(current: Project, incoming: Project, decision: TextMappingDecision): boolean {
+  const currentPlacement: TextPlacement | undefined = current.dataset.textPlacements.find((placement: TextPlacement): boolean => placement.id === decision.placementId);
+  const incomingPlacement: TextPlacement | undefined = incoming.dataset.textPlacements.find((placement: TextPlacement): boolean => placement.id === decision.placementId);
+  if (JSON.stringify(currentPlacement) !== JSON.stringify(incomingPlacement)) return false;
+  if (decision.canonicalUnitId === null) return true;
+  const currentUnit: SourceUnit | undefined = current.dataset.units.find((unit: SourceUnit): boolean => unit.id === decision.canonicalUnitId);
+  const incomingUnit: SourceUnit | undefined = incoming.dataset.units.find((unit: SourceUnit): boolean => unit.id === decision.canonicalUnitId);
+  return JSON.stringify(currentUnit) === JSON.stringify(incomingUnit);
+}
+
+function mergeTextMappingDecisions(current: Project, incoming: Project): TextMappingDecision[] {
+  return incoming.textMappingDecisions.map((next: TextMappingDecision): TextMappingDecision => {
+    const prior: TextMappingDecision | undefined = current.textMappingDecisions.find((decision: TextMappingDecision): boolean => decision.placementId === next.placementId);
+    if (prior === undefined) return next;
+    if (decisionStillValid(current, incoming, prior)) return prior;
+    return { ...next, status: 'unresolved', note: '원본 또는 Placement 변경으로 다시 확인해야 합니다.' };
+  });
 }
 
 /** 새 원본이 직접 영향을 주는 구간만 새 뼈대로 교체하고 나머지 사용자 편집은 보존한다. */
@@ -96,9 +123,13 @@ export function applySourceUpdate(current: Project, incoming: Project, prefix: s
   const replacementAudio: AudioCue[] = incoming.audioCues.filter((cue: AudioCue): boolean => impacted.has(incoming.dataset.units.find((unit): boolean => unit.id === cue.unitId)?.segmentId ?? '')).map((cue: AudioCue, index: number): AudioCue => ({ ...cue, id: `${prefix}:audio:${index + 1}` }));
   const preservedText: TextCue[] = current.textCues.filter((cue: TextCue): boolean => !impacted.has(cue.segmentId) && incoming.dataset.segments.some((segment: Segment): boolean => segment.id === cue.segmentId));
   const replacementText: TextCue[] = incoming.textCues.filter((cue: TextCue): boolean => impacted.has(cue.segmentId)).map((cue: TextCue, index: number): TextCue => ({ ...cue, id: `${prefix}:text:${index + 1}` }));
-  const next: Project = ProjectSchema.parse({ ...incoming, revision: current.revision, profile: current.profile,
+  const textMappingDecisions: TextMappingDecision[] = mergeTextMappingDecisions(current, incoming);
+  const combinedText: TextCue[] = [...preservedText, ...replacementText];
+  const holdMs: number = Math.max(1, ...combinedText.map((cue: TextCue): number => cue.endMs - cue.startMs));
+  const base: Project = { ...incoming, revision: current.revision, profile: current.profile,
     shots, frames: [...preservedFrames, ...replacementFrames], audioCues: [...preservedAudio, ...replacementAudio], textCues: [...preservedText, ...replacementText],
-    assets: current.assets, generationRecords: current.generationRecords });
+    textMappingDecisions, assets: current.assets, generationRecords: current.generationRecords };
+  const next: Project = ProjectSchema.parse({ ...base, textCues: reconcileTextCues(base, textMappingDecisions, holdMs) });
   assertNoErrors(validateProject(next, incoming.dataset), 'INVALID_SOURCE_UPDATE');
   return next;
 }

@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, FormEvent, ReactElement } from 'react';
 import { activeStoryboardFrame } from '../../src/domain/playback.js';
 import type { StoryboardFrameInput } from '../../src/domain/frame.js';
-import type { Asset, AudioCue, LockedField, Profile, Project, Segment, Shot, ShotContent, StoryboardFrame, TextCue } from '../../src/domain/schema.js';
+import { approvalIssuesForShot } from '../../src/domain/mapping.js';
+import type { ShotSourceLinksInput, TextMappingDecisionInput } from '../../src/domain/mapping.js';
+import type { Asset, AudioCue, Issue, LockedField, Profile, Project, Segment, Shot, ShotContent, ShotSourceLink, SourceUnit, StoryboardFrame, TextCue, TextMappingDecision, TextPlacement } from '../../src/domain/schema.js';
 import type { AudioCueTimingInput, TextCueTimingInput } from '../../src/domain/tracks.js';
 import { fetchProject, fetchStatus, importProject, listProjects, mutateProject, previewSourceUpdate, queueCodexRequest, updateProjectSource } from './api.js';
 import type { AppStatus, CodexRequest, ProjectSummary, SourceImpact } from './api.js';
@@ -138,7 +140,7 @@ function ShotBoard(props: { project: Project; shot: Shot; selected: boolean; onS
     </div>
     <div className="shot-meta"><div><span>{props.shot.camera.size || 'SIZE TBD'}</span><span>{props.shot.camera.angle || 'ANGLE TBD'}</span></div><time>{((props.shot.endMs - props.shot.startMs) / 1000).toFixed(1)}s</time></div>
     <h3>{props.shot.action || '동작을 입력하세요'}</h3>
-    <footer><span>{props.shot.sourceUnitIds.length} SOURCES</span><span>{props.shot.approvalStatus === 'approved' ? 'LOCKED' : props.shot.proposalOrigin.toUpperCase()}</span></footer>
+    <footer><span>{props.shot.sourceLinks.length} SOURCES</span><span>{props.shot.approvalStatus === 'approved' ? 'LOCKED' : props.shot.proposalOrigin.toUpperCase()}</span></footer>
   </article>;
 }
 
@@ -209,6 +211,47 @@ function TextCueEditor(props: { cue: TextCue; working: boolean; placementEndMs: 
   </article>;
 }
 
+function mappingInput(decision: TextMappingDecision): TextMappingDecisionInput {
+  return {
+    canonicalUnitId: decision.canonicalUnitId, relation: decision.relation, status: decision.status,
+    renderCanonicalSeparately: decision.renderCanonicalSeparately, canonicalStartMs: decision.canonicalStartMs,
+    canonicalEndMs: decision.canonicalEndMs, note: decision.note,
+  };
+}
+
+function optionalMilliseconds(value: string): number | null {
+  return value.trim() === '' ? null : Number(value);
+}
+
+function TextMappingEditor(props: { decision: TextMappingDecision; placement: TextPlacement; units: SourceUnit[]; working: boolean;
+  onSave: (decisionId: string, input: TextMappingDecisionInput) => Promise<void>; }): ReactElement {
+  const [draft, setDraft] = useState<TextMappingDecisionInput>(mappingInput(props.decision));
+  useEffect((): void => { setDraft(mappingInput(props.decision)); }, [props.decision]);
+  const canonical: SourceUnit | undefined = props.units.find((unit: SourceUnit): boolean => unit.id === draft.canonicalUnitId);
+  const refs: string = [...props.placement.sourceRefs, ...(canonical?.sourceRefs ?? [])].map((ref): string => `${ref.fileId}:${ref.locator}`).join(' · ');
+  return <article className={draft.status === 'unresolved' ? 'mapping-editor unresolved' : 'mapping-editor'}>
+    <header><b>{draft.status.toUpperCase()}</b><span>{props.placement.startMs}ms</span></header>
+    <label className="field">PLACEMENT<textarea readOnly value={props.placement.text} /></label>
+    <label className="field">CANONICAL UNIT<select value={draft.canonicalUnitId ?? ''} onChange={(event): void => { setDraft({ ...draft, canonicalUnitId: event.target.value || null, status: 'unresolved' }); }}><option value="">미지정</option>{props.units.map((unit: SourceUnit): ReactElement => <option key={unit.id} value={unit.id}>{unit.order}. {unit.id} · {unit.kind}</option>)}</select></label>
+    <p className="canonical-text">{canonical?.text ?? '연결할 Canonical 원문을 선택하세요.'}</p>
+    <div className="pair"><label className="field">RELATION<select value={draft.relation} onChange={(event): void => { const relation = event.target.value as TextMappingDecision['relation']; setDraft({ ...draft, relation, renderCanonicalSeparately: relation === 'separate-element' ? true : draft.renderCanonicalSeparately, status: 'unresolved' }); }}><option value="exact">exact</option><option value="abbreviation">abbreviation</option><option value="replacement">replacement</option><option value="separate-element">separate-element</option></select></label><label className="field">STATUS<select value={draft.status} onChange={(event): void => { setDraft({ ...draft, status: event.target.value as TextMappingDecision['status'] }); }}><option value="unresolved">unresolved</option><option value="confirmed">confirmed</option></select></label></div>
+    <label className="check-row"><input type="checkbox" checked={draft.renderCanonicalSeparately} onChange={(event): void => { setDraft({ ...draft, renderCanonicalSeparately: event.target.checked, status: 'unresolved' }); }} />Canonical 원문 별도 렌더링</label>
+    {draft.renderCanonicalSeparately && <div className="pair"><label className="field">CANONICAL START<input type="number" min="0" value={draft.canonicalStartMs ?? ''} onChange={(event): void => { setDraft({ ...draft, canonicalStartMs: optionalMilliseconds(event.target.value), status: 'unresolved' }); }} /></label><label className="field">CANONICAL END<input type="number" min="0" value={draft.canonicalEndMs ?? ''} onChange={(event): void => { setDraft({ ...draft, canonicalEndMs: optionalMilliseconds(event.target.value), status: 'unresolved' }); }} /></label></div>}
+    <label className="field">NOTE<input value={draft.note ?? ''} onChange={(event): void => { setDraft({ ...draft, note: event.target.value || null }); }} /></label>
+    <small className="source-ref">{refs}</small><button disabled={props.working} onClick={(): void => { void props.onSave(props.decision.id, draft); }}>Mapping 저장</button>
+  </article>;
+}
+
+function SourceMappingEditor(props: { link: ShotSourceLink; unit: SourceUnit; working: boolean; previousShotId: string | null; nextShotId: string | null;
+  onChange: (link: ShotSourceLink) => Promise<void>; onMove: (unitId: string, targetShotId: string, usage: ShotSourceLink['usage']) => Promise<void>; }): ReactElement {
+  return <article className={props.link.status === 'mapping-required' ? 'mapping-editor unresolved' : 'mapping-editor'}>
+    <header><b>{props.link.status.toUpperCase()}</b><span>{props.unit.order} · {props.unit.kind}</span></header><strong>{props.unit.id}</strong><p>{props.unit.text}</p>
+    <div className="pair"><label className="field">USAGE<select value={props.link.usage} onChange={(event): void => { void props.onChange({ ...props.link, usage: event.target.value as ShotSourceLink['usage'] }); }}><option value="primary-visual">primary-visual</option><option value="continued-visual">continued-visual</option><option value="audio-only">audio-only</option><option value="context-only">context-only</option></select></label><label className="field">STATUS<select value={props.link.status} onChange={(event): void => { void props.onChange({ ...props.link, status: event.target.value as ShotSourceLink['status'] }); }}><option value="confirmed">confirmed</option><option value="mapping-required">mapping-required</option></select></label></div>
+    <small className="source-ref">{props.unit.sourceRefs.map((ref): string => `${ref.fileId}:${ref.locator}`).join(' · ')}</small>
+    <div className="mapping-actions">{props.previousShotId !== null && <button disabled={props.working} onClick={(): void => { void props.onMove(props.unit.id, props.previousShotId as string, props.link.usage); }}>← 앞 컷으로 이동</button>}{props.nextShotId !== null && <button disabled={props.working} onClick={(): void => { void props.onMove(props.unit.id, props.nextShotId as string, props.link.usage); }}>뒤 컷으로 이동 →</button>}</div>
+  </article>;
+}
+
 function Inspector(props: { project: Project; segment: Segment; shot: Shot | null; draft: ShotContent | null; working: boolean; status: AppStatus | null;
   onDraft: (draft: ShotContent) => void; onSave: () => Promise<void>; onSplit: () => Promise<void>; onMerge: () => Promise<void>;
   onMove: (direction: -1 | 1) => Promise<void>; onLocks: (fields: LockedField[]) => Promise<void>; onApprove: () => Promise<void>;
@@ -216,6 +259,9 @@ function Inspector(props: { project: Project; segment: Segment; shot: Shot | nul
   onFrameEdit: (frameId: string, input: StoryboardFrameInput) => Promise<void>; onFrameAdd: (shotId: string, input: StoryboardFrameInput) => Promise<void>;
   onFrameGenerate: (frameId: string) => Promise<void>; onFrameReview: (frameId: string, review: StoryboardFrame['visualReview']) => Promise<void>;
   onAudioTiming: (cueId: string, input: AudioCueTimingInput) => Promise<void>; onTextTiming: (cueId: string, input: TextCueTimingInput) => Promise<void>;
+  onTextMapping: (decisionId: string, input: TextMappingDecisionInput) => Promise<void>;
+  onSourceLinks: (input: ShotSourceLinksInput) => Promise<void>;
+  onSourceMove: (unitId: string, targetShotId: string, usage: ShotSourceLink['usage']) => Promise<void>;
   onProfile: (profile: Profile) => Promise<void>; sourceImpact: SourceImpact | null;
   onSourcePreview: (path: string, holdMs: number) => Promise<void>; onSourceApply: (path: string, holdMs: number) => Promise<void>; }): ReactElement {
   const [reference, setReference] = useState<ReferenceDraft>({ kind: 'character', subjectId: '', description: '', file: null });
@@ -223,13 +269,20 @@ function Inspector(props: { project: Project; segment: Segment; shot: Shot | nul
   const [sourcePath, setSourcePath] = useState<string>('');
   const [sourceHold, setSourceHold] = useState<string>('2000');
   const shot: Shot | null = props.shot;
-  const sourceUnits = shot === null ? [] : props.project.dataset.units.filter((unit): boolean => shot.sourceUnitIds.includes(unit.id));
+  const sourceMappings: { link: ShotSourceLink; unit: SourceUnit }[] = shot === null ? [] : shot.sourceLinks.flatMap((link: ShotSourceLink) => {
+    const unit: SourceUnit | undefined = props.project.dataset.units.find((candidate: SourceUnit): boolean => candidate.id === link.unitId);
+    return unit === undefined ? [] : [{ link, unit }];
+  });
   const frames: StoryboardFrame[] = shot === null ? [] : props.project.frames.filter((candidate: StoryboardFrame): boolean => candidate.shotId === shot.id).sort((left, right): number => left.offsetMs - right.offsetMs);
   const audio: AudioCue[] = props.project.audioCues.filter((cue: AudioCue): boolean => {
     const unit = props.project.dataset.units.find((candidate): boolean => candidate.id === cue.unitId);
     return unit?.segmentId === props.segment.id;
   });
   const text: TextCue[] = props.project.textCues.filter((cue: TextCue): boolean => cue.segmentId === props.segment.id);
+  const textMappings: { decision: TextMappingDecision; placement: TextPlacement }[] = props.project.textMappingDecisions.flatMap((decision: TextMappingDecision) => {
+    const placement: TextPlacement | undefined = props.project.dataset.textPlacements.find((value: TextPlacement): boolean => value.id === decision.placementId && value.segmentId === props.segment.id);
+    return placement === undefined ? [] : [{ decision, placement }];
+  });
   const duration: number = shot === null ? 0 : shot.endMs - shot.startMs;
   const frameOffsets: Set<number> = new Set(frames.map((frame: StoryboardFrame): number => frame.offsetMs));
   const keyOffset: number = Math.floor(duration / 2);
@@ -237,6 +290,9 @@ function Inspector(props: { project: Project; segment: Segment; shot: Shot | nul
   const shotIndex: number = shot === null ? -1 : props.project.shots.findIndex((candidate: Shot): boolean => candidate.id === shot.id);
   const previousShot: Shot | undefined = shotIndex <= 0 ? undefined : props.project.shots[shotIndex - 1];
   const nextShot: Shot | undefined = shotIndex < 0 ? undefined : props.project.shots[shotIndex + 1];
+  const previousSegmentShotId: string | null = previousShot !== undefined && shot !== null && previousShot.segmentId === shot.segmentId ? previousShot.id : null;
+  const nextSegmentShotId: string | null = nextShot !== undefined && shot !== null && nextShot.segmentId === shot.segmentId ? nextShot.id : null;
+  const approvalIssues: Issue[] = shot === null ? [] : approvalIssuesForShot(props.project, shot.id);
   const continuityReview: string[] = props.draft === null ? [] : [
     ...(previousShot === undefined ? [] : continuityNotices(previousShot.continuityAfter, props.draft.continuityBefore, continuityAssets)),
     ...(nextShot === undefined ? [] : continuityNotices(props.draft.continuityAfter, nextShot.continuityBefore, continuityAssets)),
@@ -268,7 +324,10 @@ function Inspector(props: { project: Project; segment: Segment; shot: Shot | nul
       <section className="inspector-section continuity-block"><header>CONTINUITY STATES <span>{continuityReview.length} REVIEW</span></header>{continuityAssets.length === 0 && <p className="empty-note">인물·장소·소품 기준 자산을 등록하면 전후 상태를 기록할 수 있습니다.</p>}{continuityAssets.map((asset: Asset): ReactElement => <article key={asset.id}><b>{asset.description}</b><div className="pair"><label className="field">BEFORE<input value={props.draft?.continuityBefore.find((entry): boolean => entry.assetId === asset.id)?.state ?? ''} onChange={(event): void => { props.onDraft({ ...props.draft as ShotContent, continuityBefore: updateContinuityState((props.draft as ShotContent).continuityBefore, asset.id, event.target.value) }); }} /></label><label className="field">AFTER<input value={props.draft?.continuityAfter.find((entry): boolean => entry.assetId === asset.id)?.state ?? ''} onChange={(event): void => { props.onDraft({ ...props.draft as ShotContent, continuityAfter: updateContinuityState((props.draft as ShotContent).continuityAfter, asset.id, event.target.value) }); }} /></label></div></article>)}{continuityReview.length > 0 && <div className="continuity-review">{continuityReview.map((message: string): ReactElement => <p key={message}>{message}</p>)}</div>}</section>
       <div className="edit-actions"><button className="primary" disabled={props.working} onClick={(): void => { void props.onSave(); }}>컷 저장</button><button disabled={props.working} onClick={(): void => { void props.onSplit(); }}>중간 분할</button><button disabled={props.working} onClick={(): void => { void props.onMerge(); }}>다음 컷과 병합</button><button disabled={props.working} onClick={(): void => { void props.onMove(-1); }}>← 이동</button><button disabled={props.working} onClick={(): void => { void props.onMove(1); }}>이동 →</button></div>
       <div className="approval-actions"><button disabled={props.working} onClick={(): void => { void props.onLocks(shot.lockedFields.length === 0 ? allLockedFields : []); }}>{shot.lockedFields.length === 0 ? '전체 잠금' : '잠금 해제'}</button><button className="approve" disabled={props.working} onClick={(): void => { void props.onApprove(); }}>컷 확정</button></div>
-      <section className="inspector-section source-block"><header>SOURCE ANCHORS <span>{sourceUnits.length}</span></header>{sourceUnits.map((unit): ReactElement => <article key={unit.id}><small>{unit.kind} · {unit.speakerId ?? '—'}</small><p>{unit.text}</p></article>)}</section>
+      {approvalIssues.length > 0 && <section className="approval-review"><b>APPROVAL BLOCKED · {approvalIssues.length}</b>{approvalIssues.map((item: Issue): ReactElement => <p key={`${item.code}:${item.entityId}`}>{item.code} · {item.message}</p>)}</section>}
+      <section className="inspector-section source-block"><header>SOURCE MAPPING <span>{sourceMappings.length}</span></header>{sourceMappings.map((mapping): ReactElement => <SourceMappingEditor key={mapping.unit.id} link={mapping.link} unit={mapping.unit} working={props.working} previousShotId={previousSegmentShotId} nextShotId={nextSegmentShotId}
+        onChange={async (nextLink: ShotSourceLink): Promise<void> => { await props.onSourceLinks({ links: (shot.sourceLinks.map((link: ShotSourceLink): ShotSourceLink => link.unitId === nextLink.unitId ? nextLink : link)) }); }} onMove={props.onSourceMove} />)}</section>
+      <section className="inspector-section text-mapping-block"><header>TEXT MAPPING REVIEW <span>{textMappings.filter((mapping): boolean => mapping.decision.status === 'unresolved').length} REVIEW</span></header>{textMappings.map((mapping): ReactElement => <TextMappingEditor key={mapping.decision.id} decision={mapping.decision} placement={mapping.placement} units={props.project.dataset.units.filter((unit: SourceUnit): boolean => unit.segmentId === props.segment.id)} working={props.working} onSave={props.onTextMapping} />)}</section>
       <section className="inspector-section audio-block"><header>AUDIO TRACK <span>{audio.filter((cue: AudioCue): boolean => cue.assetId !== null).length}/{audio.length}</span></header><p className="disclosure">{props.status?.aiVoiceDisclosure ?? '가이드 음성은 Codex App 작업에서 생성합니다.'}</p>{audio.map((cue: AudioCue): ReactElement => <AudioCueEditor key={cue.id} cue={cue} text={props.project.dataset.units.find((candidate): boolean => candidate.id === cue.unitId)?.text ?? cue.unitId} working={props.working} disclosure={props.status?.aiVoiceDisclosure ?? 'Codex App 가이드 음성'} onTiming={props.onAudioTiming} onSpeech={props.onSpeech} />)}</section>
       <section className="inspector-section text-block"><header>TEXT TRACK <span>{text.length}</span></header>{text.map((cue: TextCue): ReactElement => <TextCueEditor key={cue.id} cue={cue} working={props.working} placementEndMs={props.project.dataset.textPlacements.find((placement): boolean => placement.id === cue.placementId)?.endMs} onTiming={props.onTextTiming} />)}</section>
       <form className="reference-form" onSubmit={upload}><header>VISUAL REFERENCE</header><select value={reference.kind} onChange={(event): void => { const kind = event.target.value as ReferenceDraft['kind']; setReference({ ...reference, kind, subjectId: '' }); }}><option value="character">인물</option><option value="location">장소</option><option value="prop">소품</option></select>
@@ -476,6 +535,9 @@ export default function App(): ReactElement {
           onFrameReview={async (frameId: string, review: StoryboardFrame['visualReview']): Promise<void> => { await mutate(`/frames/${encodeURIComponent(frameId)}/review`, 'POST', { expectedRevision: project.revision, review }); }}
           onAudioTiming={async (cueId: string, timing: AudioCueTimingInput): Promise<void> => { await mutate(`/audio/${encodeURIComponent(cueId)}`, 'PATCH', { expectedRevision: project.revision, timing }); }}
           onTextTiming={async (cueId: string, timing: TextCueTimingInput): Promise<void> => { await mutate(`/text/${encodeURIComponent(cueId)}`, 'PATCH', { expectedRevision: project.revision, timing }); }}
+          onTextMapping={async (decisionId: string, decision: TextMappingDecisionInput): Promise<void> => { await mutate(`/text-mappings/${encodeURIComponent(decisionId)}`, 'PATCH', { expectedRevision: project.revision, decision }); }}
+          onSourceLinks={async (mapping: ShotSourceLinksInput): Promise<void> => { if (shot !== null) await mutate(`/shots/${encodeURIComponent(shot.id)}/source-links`, 'PATCH', { expectedRevision: project.revision, mapping }); }}
+          onSourceMove={async (unitId: string, targetShotId: string, usage: ShotSourceLink['usage']): Promise<void> => { if (shot !== null) await mutate(`/shots/${encodeURIComponent(shot.id)}/source-links/move`, 'POST', { expectedRevision: project.revision, move: { unitId, targetShotId, usage } }); }}
           onProfile={async (profile: Profile): Promise<void> => { await mutate('/profile', 'PATCH', { expectedRevision: project.revision, profile }); }} sourceImpact={sourceImpactReport}
           onSourcePreview={inspectSourceUpdate} onSourceApply={applySource} />}
       </div>

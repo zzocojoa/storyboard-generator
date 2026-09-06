@@ -41,10 +41,20 @@ function importTurns(reactions: ProductionReactions, file: Snapshot, segments: r
   });
 }
 
-function importInformation(presentation: ProductionPresentation, file: Snapshot): InformationRule[] {
+function importInformation(presentation: ProductionPresentation, file: Snapshot, segments: readonly Segment[], units: readonly SourceUnit[]): InformationRule[] {
   const disclosures: InformationRule[] = presentation.segments.flatMap((segment, index): InformationRule[] => {
     const ids: string[] = [...segment.revealed_fact_ids.map((id: string): string => `fact:${id}`), ...segment.revealed_clue_ids.map((id: string): string => `clue:${id}`)];
-    return ids.map((id: string): InformationRule => ({ id, notBeforeMs: secondsToMilliseconds(segment.start_sec), sourceRefs: [sourceRef(file.id, `/segments/${index}`, segment.segment_id)] }));
+    const normalizedSegment: Segment | undefined = segments.find((value: Segment): boolean => value.id === segment.segment_id);
+    if (normalizedSegment === undefined) throw contractError('SEGMENT_NOT_FOUND', `${segment.segment_id}: 정보 공개 구간을 찾을 수 없습니다.`, []);
+    return ids.map((id: string): InformationRule => {
+      const unit: SourceUnit | undefined = units.filter((value: SourceUnit): boolean => value.segmentId === segment.segment_id && value.informationIds.includes(id)).sort((left: SourceUnit, right: SourceUnit): number => left.order - right.order)[0];
+      return {
+        id, segmentId: segment.segment_id, notBeforeMs: normalizedSegment.startMs,
+        notBeforeUnitId: unit?.id ?? null, notBeforeUnitOrder: unit?.order ?? null,
+        precision: unit === undefined ? 'segment-start' : 'unit-order',
+        sourceRefs: [sourceRef(file.id, `/segments/${index}`, segment.segment_id)],
+      };
+    });
   });
   return disclosures.filter((rule: InformationRule, index: number): boolean => disclosures.findIndex((candidate: InformationRule): boolean => candidate.id === rule.id) === index);
 }
@@ -126,7 +136,7 @@ export function importProduction(handoff: Handoff, snapshots: readonly Snapshot[
   });
   return {
     dataset: { projectId: handoff.projectId, title: screenplay.title, scenes, segments, units, people, locations,
-      informationRules: importInformation(presentation, presentationFile), instructions: [...importAmbience(screenplay, screenplayFile), ...shooting.instructions, ...edit.instructions], textPlacements: subtitles.placements },
+      informationRules: importInformation(presentation, presentationFile, segments, units), instructions: [...importAmbience(screenplay, screenplayFile), ...shooting.instructions, ...edit.instructions], textPlacements: subtitles.placements },
     issues: [...shooting.issues, ...edit.issues, ...subtitles.issues, ...castIssues],
   };
 }

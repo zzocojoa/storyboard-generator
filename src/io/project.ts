@@ -2,8 +2,9 @@ import { link, mkdir, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { assertNoErrors, contractError } from '../domain/errors.js';
-import { ProjectSchema } from '../domain/schema.js';
-import type { Project } from '../domain/schema.js';
+import { createInitialTextMappingDecisions, reconcileTextCues, refineInformationRules } from '../domain/mapping.js';
+import { DatasetSchema, ProjectSchema } from '../domain/schema.js';
+import type { Dataset, Project, TextMappingDecision } from '../domain/schema.js';
 import { validateProject } from '../domain/validation.js';
 import { recoverSourceProject } from '../importers/import-package.js';
 import { isSafePackagePath, parseJson } from '../importers/integrity.js';
@@ -15,13 +16,52 @@ function isJsonObject(input: unknown): input is JsonObject {
   return typeof input === 'object' && input !== null && !Array.isArray(input);
 }
 
-/** 1.0 프로젝트에 없던 컷 전환을 명시적 CUT으로 채우고 1.1 형식으로 올린다. */
-export function migrateProjectInput(input: unknown): unknown {
-  if (!isJsonObject(input) || input.schemaVersion !== '1.0.0' || !Array.isArray(input.shots)) return input;
+function migrate10To11(input: JsonObject): JsonObject {
+  if (input.schemaVersion !== '1.0.0' || !Array.isArray(input.shots)) return input;
   return { ...input, schemaVersion: '1.1.0', shots: input.shots.map((shot: unknown): unknown => {
     if (!isJsonObject(shot) || 'transitionOut' in shot) return shot;
     return { ...shot, transitionOut: { kind: 'cut', durationMs: 0, note: '' } };
   }) };
+}
+
+function migratedInformationRules(dataset: JsonObject): unknown[] {
+  if (!Array.isArray(dataset.informationRules) || !Array.isArray(dataset.segments) || !Array.isArray(dataset.units)) return [];
+  const segments: JsonObject[] = dataset.segments.filter(isJsonObject);
+  const units: JsonObject[] = dataset.units.filter(isJsonObject);
+  return dataset.informationRules.map((value: unknown): unknown => {
+    if (!isJsonObject(value) || typeof value.id !== 'string' || typeof value.notBeforeMs !== 'number') return value;
+    if ('segmentId' in value && 'precision' in value) return value;
+    const unit: JsonObject | undefined = units.find((candidate: JsonObject): boolean => Array.isArray(candidate.informationIds) && candidate.informationIds.includes(value.id));
+    const segment: JsonObject | undefined = segments.find((candidate: JsonObject): boolean => typeof candidate.startMs === 'number' && typeof candidate.endMs === 'number' && value.notBeforeMs as number >= candidate.startMs && value.notBeforeMs as number < candidate.endMs)
+      ?? segments.find((candidate: JsonObject): boolean => candidate.id === unit?.segmentId);
+    if (segment === undefined || typeof segment.id !== 'string') return value;
+    return {
+      ...value, segmentId: segment.id, notBeforeUnitId: typeof unit?.id === 'string' ? unit.id : null,
+      notBeforeUnitOrder: typeof unit?.order === 'number' ? unit.order : null,
+      precision: value.notBeforeMs === segment.startMs ? (unit === undefined ? 'segment-start' : 'unit-order') : 'exact-time',
+    };
+  });
+}
+
+function migrate11To12(input: JsonObject): JsonObject {
+  if (input.schemaVersion !== '1.1.0' || !Array.isArray(input.shots) || !isJsonObject(input.dataset)) return input;
+  const migratedDataset: Dataset = DatasetSchema.parse({ ...input.dataset, informationRules: migratedInformationRules(input.dataset) });
+  const textMappingDecisions: TextMappingDecision[] = createInitialTextMappingDecisions(migratedDataset);
+  const dataset: Dataset = DatasetSchema.parse({ ...migratedDataset, informationRules: refineInformationRules(migratedDataset, textMappingDecisions) });
+  const shots: unknown[] = input.shots.map((shot: unknown): unknown => {
+    if (!isJsonObject(shot) || !Array.isArray(shot.sourceUnitIds)) return shot;
+    const { sourceUnitIds, ...rest } = shot;
+    return { ...rest, sourceLinks: sourceUnitIds.map((unitId: unknown): unknown => ({ unitId, usage: 'context-only', status: 'mapping-required' })) };
+  });
+  const provisional = { ...input, schemaVersion: '1.2.0', dataset, textMappingDecisions, shots } as Project;
+  const holdMs: number = Math.max(1, ...Array.isArray(input.textCues) ? input.textCues.filter(isJsonObject).map((cue: JsonObject): number => typeof cue.startMs === 'number' && typeof cue.endMs === 'number' ? cue.endMs - cue.startMs : 1) : [2000]);
+  return { ...provisional, textCues: reconcileTextCues(provisional, textMappingDecisions, holdMs) };
+}
+
+/** 1.0·1.1 저장본을 불확실한 Source Mapping이 드러나는 1.2 형식으로 올린다. */
+export function migrateProjectInput(input: unknown): unknown {
+  if (!isJsonObject(input)) return input;
+  return migrate11To12(migrate10To11(input));
 }
 
 /** 저장된 원본 스냅샷에서 데이터를 다시 계산해 편집 가능한 값과 원문을 구분한다. */

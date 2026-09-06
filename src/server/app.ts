@@ -11,6 +11,7 @@ import { codexRequestBasis } from '../codex/work.js';
 import { approveShot, mergeShots, reorderShots, setShotLocks, splitShot, updateShotContent } from '../domain/edit.js';
 import { contractError } from '../domain/errors.js';
 import { addStoryboardFrame, setFrameReview, StoryboardFrameInputSchema, updateProjectProfile, updateStoryboardFrame } from '../domain/frame.js';
+import { mappingReviewIssues, MoveShotSourceLinkInputSchema, moveShotSourceLink, ShotSourceLinksInputSchema, TextMappingDecisionInputSchema, updateShotSourceLinks, updateTextMappingDecision } from '../domain/mapping.js';
 import { addReferenceAsset } from '../domain/media.js';
 import { IdSchema, LockedFieldSchema, ProfileSchema, ShotContentSchema } from '../domain/schema.js';
 import type { Project } from '../domain/schema.js';
@@ -43,6 +44,9 @@ const CreateFrameBodySchema = z.strictObject({ expectedRevision: z.number().int(
 const FrameReviewBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), review: z.enum(['pending', 'accepted', 'rejected']) });
 const AudioCueBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), timing: AudioCueTimingInputSchema });
 const TextCueBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), timing: TextCueTimingInputSchema });
+const TextMappingBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), decision: TextMappingDecisionInputSchema });
+const SourceLinksBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), mapping: ShotSourceLinksInputSchema });
+const MoveSourceLinkBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), move: MoveShotSourceLinkInputSchema });
 const ReferenceBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), kind: z.enum(['character', 'location', 'prop']),
   subjectId: IdSchema.nullable(), description: z.string().min(1), mimeType: z.enum(['image/png', 'image/jpeg', 'image/webp']), base64: z.string().min(1) });
 
@@ -63,7 +67,7 @@ function statusCode(error: Error): number {
   const code: string = 'code' in error && typeof error.code === 'string' ? error.code : error.name;
   if (code.endsWith('_NOT_FOUND')) return 404;
   if (['REVISION_CONFLICT', 'PROJECT_ALREADY_EXISTS', 'PROJECT_BUSY'].includes(code)) return 409;
-  if (error instanceof ZodError || code.startsWith('INVALID_') || code.startsWith('MISSING_') || code.startsWith('DUPLICATE_') || code.startsWith('UNSAFE_') || code.startsWith('UNKNOWN_') || code.startsWith('FORBIDDEN_') || code.endsWith('_LOCKED') || code.endsWith('_REQUIRED')) return 400;
+  if (error instanceof ZodError || code.startsWith('INVALID_') || code.startsWith('MISSING_') || code.startsWith('DUPLICATE_') || code.startsWith('UNSAFE_') || code.startsWith('UNKNOWN_') || code.startsWith('FORBIDDEN_') || code.endsWith('_LOCKED') || code.endsWith('_REQUIRED') || code.endsWith('_BLOCKED')) return 400;
   return 500;
 }
 
@@ -105,6 +109,11 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
   app.get('/api/projects/:projectId', async (request: FastifyRequest): Promise<object> => {
     const { projectId } = ProjectParamsSchema.parse(request.params);
     return { project: await store.read(projectId) };
+  });
+  app.get('/api/projects/:projectId/mapping-review', async (request: FastifyRequest): Promise<object> => {
+    const { projectId } = ProjectParamsSchema.parse(request.params);
+    const project: Project = await store.read(projectId);
+    return { issues: mappingReviewIssues(project) };
   });
   app.post('/api/projects/import', async (request: FastifyRequest, reply: FastifyReply): Promise<object> => {
     const body = ImportBodySchema.parse(request.body);
@@ -162,6 +171,21 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
     const { projectId, shotId } = ShotParamsSchema.parse(request.params);
     const body = RevisionSchema.parse(request.body);
     return { project: await store.update(projectId, body.expectedRevision, (project: Project): Project => approveShot(project, shotId), []) };
+  });
+  app.patch('/api/projects/:projectId/text-mappings/:decisionId', async (request: FastifyRequest): Promise<object> => {
+    const params = z.strictObject({ projectId: IdSchema, decisionId: IdSchema }).parse(request.params);
+    const body = TextMappingBodySchema.parse(request.body);
+    return { project: await store.update(params.projectId, body.expectedRevision, (project: Project): Project => updateTextMappingDecision(project, params.decisionId, body.decision), []) };
+  });
+  app.patch('/api/projects/:projectId/shots/:shotId/source-links', async (request: FastifyRequest): Promise<object> => {
+    const { projectId, shotId } = ShotParamsSchema.parse(request.params);
+    const body = SourceLinksBodySchema.parse(request.body);
+    return { project: await store.update(projectId, body.expectedRevision, (project: Project): Project => updateShotSourceLinks(project, shotId, body.mapping), []) };
+  });
+  app.post('/api/projects/:projectId/shots/:shotId/source-links/move', async (request: FastifyRequest): Promise<object> => {
+    const { projectId, shotId } = ShotParamsSchema.parse(request.params);
+    const body = MoveSourceLinkBodySchema.parse(request.body);
+    return { project: await store.update(projectId, body.expectedRevision, (project: Project): Project => moveShotSourceLink(project, shotId, body.move), []) };
   });
   app.patch('/api/projects/:projectId/frames/:frameId', async (request: FastifyRequest): Promise<object> => {
     const { projectId, frameId } = FrameParamsSchema.parse(request.params);

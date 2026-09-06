@@ -125,7 +125,7 @@ export function applyGeneratedSpeech(
   const prior: Asset | undefined = cue.assetId === null ? undefined : project.assets.find((asset: Asset): boolean => asset.id === cue.assetId);
   const relativePath: string = `assets/${sha256Text(assetId)}.wav`;
   const asset: Asset = { id: assetId, kind: 'audio', subjectId: cue.id, path: relativePath, mimeType: result.mimeType, sha256: sha256Bytes(result.bytes), description: `가이드 음성: ${unit.text}`, durationMs, version: (prior?.version ?? 0) + 1 };
-  const shotIds: string[] = project.shots.filter((shot): boolean => shot.sourceUnitIds.includes(unit.id)).map((shot): string => shot.id);
+  const shotIds: string[] = project.shots.filter((shot): boolean => shot.sourceLinks.some((link): boolean => link.unitId === unit.id)).map((shot): string => shot.id);
   const record: GenerationRecord = generationRecord(generationId, result, [assetId], shotIds, [], createdAt);
   const next: Project = { ...project, assets: [...project.assets, asset],
     audioCues: project.audioCues.map((candidate: AudioCue): AudioCue => candidate.id === cueId ? { ...candidate, endMs, timingStatus: 'measured', assetId } : candidate),

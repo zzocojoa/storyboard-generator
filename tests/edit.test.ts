@@ -30,7 +30,8 @@ describe('원문 뼈대와 편집', (): void => {
     const split = splitShot(project, 'shot-2', 8000, 'new-shot', 'new-frame');
     expect(split.shots).toHaveLength(4);
     expect(split.audioCues).toEqual(project.audioCues);
-    expect(requireShot(split, 'shot-2').sourceUnitIds).toEqual(requireShot(split, 'new-shot').sourceUnitIds);
+    expect(requireShot(split, 'shot-2').sourceLinks).not.toEqual(requireShot(split, 'new-shot').sourceLinks);
+    expect([...requireShot(split, 'shot-2').sourceLinks, ...requireShot(split, 'new-shot').sourceLinks].some((link): boolean => link.status === 'mapping-required')).toBe(true);
     const reordered = reorderShots(split, 'demonstration', ['new-shot', 'shot-2']);
     expect(requireShot(reordered, 'new-shot').startMs).toBe(5000);
     expect(requireShot(reordered, 'shot-2').endMs).toBe(13500);
@@ -59,18 +60,19 @@ describe('원문 뼈대와 편집', (): void => {
     const audio = project.audioCues[0];
     if (audio === undefined) throw new Error('음성 검증 자료가 없습니다.');
     expect(validateProject({ ...project, audioCues: [...project.audioCues, { ...audio, id: 'duplicate-audio' }] }, project.dataset).some((issue): boolean => issue.code === 'SPOKEN_UNIT_COVERAGE')).toBe(true);
-    expect(validateProject({ ...project, textCues: [] }, project.dataset).some((issue): boolean => issue.code === 'UNCOVERED_SCREEN_TEXT')).toBe(true);
+    expect(validateProject({ ...project, textCues: [], textMappingDecisions: [] }, project.dataset).some((issue): boolean => ['UNCOVERED_SCREEN_TEXT', 'TEXT_MAPPING_DECISION_COVERAGE'].includes(issue.code))).toBe(true);
     expect(validateProject({ ...project, dataset: { ...project.dataset, units: project.dataset.units.map((unit) => ({ ...unit, text: '변경됨' })) } }, project.dataset).some((issue): boolean => issue.code === 'SOURCE_DATASET_MODIFIED')).toBe(true);
     expect(validateProject({ ...project, projectId: '다른 작품' }, project.dataset).some((issue): boolean => issue.code === 'PROJECT_MISMATCH')).toBe(true);
     expect(validateProject({ ...project, audioCues: [...project.audioCues, { ...audio, id: 'text-read', unitId: '제목' }] }, project.dataset).some((issue): boolean => issue.code === 'NON_SPOKEN_UNIT_AUDIO')).toBe(true);
   });
 
-  it('미공개 정보를 초기 컷에 붙이는 변경은 거부한다', async (): Promise<void> => {
+  it('미공개 정보는 초안 편집을 허용하지만 컷 승인을 거부한다', async (): Promise<void> => {
     const project = createSourceOutline(importPackage(await productionPackage()), { proposedTextHoldMs: 3000 });
     const later = project.dataset.informationRules.find((rule): boolean => rule.notBeforeMs > 0);
     if (later === undefined) throw new Error('공개 시점 검증 자료가 없습니다.');
     const shot = requireShot(project, 'shot-1');
-    expect(() => updateShotContent(project, shot.id, { ...shotContent(shot), informationIds: [...shot.informationIds, later.id] })).toThrowError(expect.objectContaining({ code: 'INVALID_EDIT', issues: expect.arrayContaining([expect.objectContaining({ code: 'FORBIDDEN_REVEAL' })]) }));
+    const changed = updateShotContent(project, shot.id, { ...shotContent(shot), informationIds: [...shot.informationIds, later.id] });
+    expect(() => approveShot(changed, shot.id)).toThrowError(expect.objectContaining({ code: 'SHOT_APPROVAL_BLOCKED', issues: expect.arrayContaining([expect.objectContaining({ code: 'EARLY_INFORMATION_REVEAL' })]) }));
   });
 
   it('편집 입력에 시간이나 잠금 필드를 숨겨 넣어 우회할 수 없다', async (): Promise<void> => {

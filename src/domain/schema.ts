@@ -63,7 +63,9 @@ export const UnitSchema = z.strictObject({
   sourceRefs: z.array(SourceRefSchema).min(1),
 });
 export const InformationRuleSchema = z.strictObject({
-  id: IdSchema, notBeforeMs: MillisecondsSchema, sourceRefs: z.array(SourceRefSchema).min(1),
+  id: IdSchema, segmentId: IdSchema, notBeforeMs: MillisecondsSchema,
+  notBeforeUnitId: IdSchema.nullable(), notBeforeUnitOrder: z.number().int().positive().nullable(),
+  precision: z.enum(['exact-time', 'unit-order', 'segment-start']), sourceRefs: z.array(SourceRefSchema).min(1),
 });
 export const InstructionSchema = z.strictObject({
   id: IdSchema, segmentId: IdSchema, kind: z.enum(['shooting', 'edit', 'music', 'ambience']),
@@ -72,6 +74,13 @@ export const InstructionSchema = z.strictObject({
 export const TextPlacementSchema = z.strictObject({
   id: IdSchema, segmentId: IdSchema, startMs: MillisecondsSchema, endMs: MillisecondsSchema.nullable(),
   text: z.string().min(1), unitId: IdSchema.nullable(), sourceRefs: z.array(SourceRefSchema).min(1),
+});
+export const TextMappingDecisionSchema = z.strictObject({
+  id: IdSchema, placementId: IdSchema, canonicalUnitId: IdSchema.nullable(),
+  relation: z.enum(['exact', 'abbreviation', 'separate-element', 'replacement']),
+  status: z.enum(['unresolved', 'confirmed']), renderCanonicalSeparately: z.boolean(),
+  canonicalStartMs: MillisecondsSchema.nullable(), canonicalEndMs: MillisecondsSchema.nullable(),
+  note: z.string().nullable(),
 });
 export const IssueSchema = z.strictObject({
   code: z.string().min(1), severity: z.enum(['error', 'conflict', 'warning']),
@@ -91,7 +100,11 @@ export const NativeDatasetSchema = z.strictObject({
   scenes: z.array(SceneSchema.omit({ sourceRefs: true })).min(1),
   segments: z.array(SegmentSchema.omit({ sourceRefs: true })).min(1),
   units: z.array(UnitSchema.omit({ sourceRefs: true })),
-  informationRules: z.array(InformationRuleSchema.omit({ sourceRefs: true })),
+  informationRules: z.array(z.strictObject({
+    id: IdSchema, notBeforeMs: MillisecondsSchema, segmentId: IdSchema.optional(),
+    notBeforeUnitId: IdSchema.nullable().optional(), notBeforeUnitOrder: z.number().int().positive().nullable().optional(),
+    precision: z.enum(['exact-time', 'unit-order', 'segment-start']).optional(),
+  })),
   instructions: z.array(InstructionSchema.omit({ sourceRefs: true })),
   textPlacements: z.array(TextPlacementSchema.omit({ sourceRefs: true })),
 });
@@ -106,9 +119,14 @@ export const TransitionSchema = z.strictObject({
   note: z.string(),
 });
 export const LockedFieldSchema = z.enum(['timing', 'sources', 'action', 'camera', 'location', 'presence', 'continuity', 'transition', 'frames']);
+export const ShotSourceLinkSchema = z.strictObject({
+  unitId: IdSchema,
+  usage: z.enum(['primary-visual', 'continued-visual', 'audio-only', 'context-only']),
+  status: z.enum(['confirmed', 'mapping-required']),
+});
 export const ShotSchema = z.strictObject({
   id: IdSchema, segmentId: IdSchema, startMs: MillisecondsSchema, endMs: MillisecondsSchema,
-  sourceUnitIds: z.array(IdSchema), visualLocationId: IdSchema.nullable(), action: z.string(),
+  sourceLinks: z.array(ShotSourceLinkSchema), visualLocationId: IdSchema.nullable(), action: z.string(),
   camera: z.strictObject({ size: z.string(), angle: z.string(), move: z.string() }),
   presence: z.array(PresenceSchema), propIds: z.array(IdSchema),
   continuityBefore: z.array(ContinuitySchema), continuityAfter: z.array(ContinuitySchema),
@@ -143,9 +161,10 @@ export const GenerationSchema = z.strictObject({
   referenceHashes: z.array(HashSchema), resultAssetIds: z.array(IdSchema), shotIds: z.array(IdSchema), createdAt: z.iso.datetime(),
 });
 export const ProjectSchema = z.strictObject({
-  schemaVersion: z.literal('1.1.0'), projectId: IdSchema, title: z.string().min(1), revision: z.number().int().nonnegative(),
+  schemaVersion: z.literal('1.2.0'), projectId: IdSchema, title: z.string().min(1), revision: z.number().int().nonnegative(),
   profile: ProfileSchema,
   handoff: HandoffSchema, sources: z.array(SnapshotSchema), dataset: DatasetSchema, importIssues: z.array(IssueSchema),
+  textMappingDecisions: z.array(TextMappingDecisionSchema),
   shots: z.array(ShotSchema), frames: z.array(FrameSchema), audioCues: z.array(AudioCueSchema), textCues: z.array(TextCueSchema),
   assets: z.array(AssetSchema), generationRecords: z.array(GenerationSchema),
 });
@@ -167,11 +186,13 @@ export type SourceUnit = z.infer<typeof UnitSchema>;
 export type InformationRule = z.infer<typeof InformationRuleSchema>;
 export type Instruction = z.infer<typeof InstructionSchema>;
 export type TextPlacement = z.infer<typeof TextPlacementSchema>;
+export type TextMappingDecision = z.infer<typeof TextMappingDecisionSchema>;
 export type Issue = z.infer<typeof IssueSchema>;
 export type Dataset = z.infer<typeof DatasetSchema>;
 export type NativeDataset = z.infer<typeof NativeDatasetSchema>;
 export type Transition = z.infer<typeof TransitionSchema>;
 export type Shot = z.infer<typeof ShotSchema>;
+export type ShotSourceLink = z.infer<typeof ShotSourceLinkSchema>;
 export type ShotContent = z.infer<typeof ShotContentSchema>;
 export type LockedField = z.infer<typeof LockedFieldSchema>;
 export type StoryboardFrame = z.infer<typeof FrameSchema>;

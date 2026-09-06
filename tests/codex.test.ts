@@ -78,7 +78,7 @@ describe('Codex App 생성 브리지', (): void => {
     const proposalRequest: CodexRequest = await requests.create('proposal', project.projectId, segment.id, codexRequestBasis(project, 'proposal', segment.id), '2026-09-06T00:00:00.000Z');
     const proposalPath: string = join(root, 'proposal.json');
     const sourceIds: string[] = project.dataset.units.filter((unit): boolean => unit.segmentId === segment.id).map((unit): string => unit.id);
-    await writeFile(proposalPath, JSON.stringify({ shots: [{ sourceUnitIds: sourceIds, durationWeight: 1, action: '원문에 맞춘 동작', visualLocationId: project.dataset.scenes[0]?.storyLocationId ?? null,
+    await writeFile(proposalPath, JSON.stringify({ shots: [{ sourceLinks: sourceIds.map((unitId: string) => ({ unitId, usage: 'primary-visual' })), durationWeight: 1, action: '원문에 맞춘 동작', visualLocationId: project.dataset.scenes[0]?.storyLocationId ?? null,
       camera: { size: 'MS', angle: 'eye-level', move: 'static' }, presence: [], propIds: [], cameraAxis: null, screenDirection: null,
       informationIds: [], transitionOut: { kind: 'cut', durationMs: 0, note: '' }, frameDescription: '원문에 맞춘 콘티 프레임' }] }), 'utf8');
     const proposed: Project = await applyCodexProposal(proposalRequest.id, proposalPath, store, requests, '2026-09-06T00:00:01.000Z');
