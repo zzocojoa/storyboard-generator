@@ -416,6 +416,19 @@ function sourceMappingReviewIssues(project: Project, shot: Shot): Issue[] {
     const unit: SourceUnit | undefined = project.dataset.units.find((candidate: SourceUnit): boolean => candidate.id === link.unitId);
     const refs: SourceRef[] = unit?.sourceRefs ?? [];
     if (unit === undefined) return [issue('UNKNOWN_SOURCE_UNIT', 'conflict', shot.id, 'sourceLinks', `${link.unitId} 원문 단위를 찾을 수 없습니다.`, 'existing unit', link.unitId, refs)];
+    if (link.temporalAnchor.kind === 'unresolved' && link.temporalAnchor.basis === 'source-update') {
+      const candidateCueIds: string[] = project.textCues
+        .filter((cue: TextCue): boolean => cue.unitId === link.unitId && cue.startMs >= shot.startMs && cue.endMs <= shot.endMs)
+        .map((cue: TextCue): string => cue.id);
+      const mappingDecisionIds: string[] = project.textMappingDecisions
+        .filter((decision: TextMappingDecision): boolean => decision.canonicalUnitId === link.unitId)
+        .map((decision: TextMappingDecision): string => decision.id);
+      const code: string = candidateCueIds.length === 0 ? 'MISSING_TEXT_ANCHOR_SOURCE' : 'AMBIGUOUS_TEXT_ANCHOR_SOURCE';
+      const reason: string = candidateCueIds.length === 0 ? '일치하는 Text Cue가 없습니다.' : '일치하는 Text Cue가 여러 개입니다.';
+      return [issue(code, 'conflict', shot.id, 'sourceLinks.temporalAnchor',
+        `${reason} Text Cue 매핑을 하나로 확정한 뒤 Anchor를 재생성하세요. sourceUnitId=${link.unitId}, candidateCueIds=${candidateCueIds.join(',') || '(none)'}, mappingDecisionIds=${mappingDecisionIds.join(',') || '(none)'}`,
+        'exactly one text cue inside shot', JSON.stringify({ sourceUnitId: link.unitId, candidateCueIds, mappingDecisionIds }), refs)];
+    }
     if (link.status === 'mapping-required') return [issue('SOURCE_MAPPING_REQUIRED', 'conflict', shot.id, 'sourceLinks', `${link.unitId}의 컷 배치와 용도를 확인하세요.`, 'confirmed', link.status, refs)];
     if (directVisualLinks(shot).includes(link) && link.temporalAnchor.status === 'review-required') return [issue('SOURCE_TEMPORAL_ANCHOR_REQUIRED', 'conflict', shot.id, 'sourceLinks.temporalAnchor', `${link.unitId}가 컷 안에서 처음 보이는 시각을 확정하세요.`, 'confirmed temporal anchor', link.temporalAnchor.basis, refs)];
     if (link.temporalAnchor.status === 'confirmed' && sourceAnchorRange(project, shot, link) === null) return [issue('INVALID_SOURCE_TEMPORAL_ANCHOR', 'conflict', shot.id, 'sourceLinks.temporalAnchor', `${link.unitId}의 시간 Anchor가 컷 또는 프레임 범위를 벗어났습니다.`, 'anchor inside shot', JSON.stringify(link.temporalAnchor), refs)];

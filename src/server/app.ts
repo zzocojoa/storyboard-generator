@@ -66,6 +66,7 @@ function requestResponse(request: CodexRequest): { request: CodexRequest } { ret
 
 async function queueRequest(kind: CodexRequestKind, projectId: string, targetId: string, expectedRevision: number,
   store: ProjectStore, requests: CodexRequestStore): Promise<CodexRequest> {
+  await store.assertMutable(projectId);
   const project: Project = await store.read(projectId);
   if (project.revision !== expectedRevision) throw contractError('REVISION_CONFLICT', `${projectId}: expected=${expectedRevision}, actual=${project.revision}`, []);
   return requests.create(kind, projectId, targetId, codexRequestBasis(project, kind, targetId), new Date().toISOString());
@@ -74,7 +75,7 @@ async function queueRequest(kind: CodexRequestKind, projectId: string, targetId:
 function statusCode(error: Error): number {
   const code: string = 'code' in error && typeof error.code === 'string' ? error.code : error.name;
   if (code.endsWith('_NOT_FOUND')) return 404;
-  if (['REVISION_CONFLICT', 'PROJECT_ALREADY_EXISTS', 'PROJECT_BUSY'].includes(code)) return 409;
+  if (['REVISION_CONFLICT', 'PROJECT_ALREADY_EXISTS', 'PROJECT_BUSY', 'PROJECT_VERSION_EXISTS'].includes(code)) return 409;
   if (error instanceof ZodError || code.startsWith('FST_') || code.startsWith('INVALID_') || code.startsWith('MISSING_') || code.startsWith('DUPLICATE_') || code.startsWith('UNSAFE_') || code.startsWith('UNKNOWN_') || code.startsWith('FORBIDDEN_') || code.startsWith('TEXT_') || code.startsWith('AUDIO_') || code.startsWith('ASSET_') || code.startsWith('UNSUPPORTED_') || code.endsWith('_LOCKED') || code.endsWith('_REQUIRED') || code.endsWith('_BLOCKED') || code.endsWith('_DELETED')) return 400;
   return 500;
 }
@@ -117,12 +118,14 @@ async function ensureWebRoot(path: string): Promise<void> {
   }
 }
 
-export async function createApp(config: AppConfig, store: ProjectStore, requests: CodexRequestStore): Promise<FastifyInstance> {
+export async function createApp(config: AppConfig, store: ProjectStore, requests: CodexRequestStore,
+  audioNormalizerOverride?: WorkerAudioNormalizer): Promise<FastifyInstance> {
   await ensureWebRoot(config.webRoot);
   await store.initialize();
   await requests.initialize();
-  const audioNormalizer: WorkerAudioNormalizer = new WorkerAudioNormalizer(config.audioNormalization);
+  const audioNormalizer: WorkerAudioNormalizer = audioNormalizerOverride ?? new WorkerAudioNormalizer(config.audioNormalization);
   const app: FastifyInstance = Fastify({ logger: { level: 'info' }, bodyLimit: MAX_AUDIO_BYTES + 1024 * 1024 });
+  app.addHook('onClose', async (): Promise<void> => audioNormalizer.close());
   await app.register(fastifyMultipart, { limits: { fileSize: MAX_AUDIO_BYTES, files: 1, fields: 1, parts: 2 } });
 
   app.setErrorHandler((error: Error, _request: FastifyRequest, reply: FastifyReply): void => {
@@ -135,7 +138,7 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
     const failed: CodexRequest[] = allRequests.filter((item: CodexRequest): boolean => item.status === 'failed');
     return { provider: 'codex-app', ...metrics,
       recentFailures: failed.slice(-5).reverse().map((item: CodexRequest): object => ({ id: item.id, kind: item.kind, projectId: item.projectId, targetId: item.targetId, error: item.error })),
-      storageRecovery: store.recoveryEvents(),
+      storageRecovery: store.recoveryEvents(), storageRecoveryBlocks: store.recoveryBlocks(),
       generationInstruction: 'Codex 앱에서 $storyboard-workbench 대기 요청 처리를 실행하세요.', aiVoiceDisclosure: `가이드 음성은 macOS ${config.codex.speechVoice} 합성 음성입니다.` };
   });
   app.get('/api/projects', async (): Promise<object> => ({ projects: await store.list() }));
@@ -164,6 +167,7 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
   });
   app.post('/api/projects/:projectId/source-update', async (request: FastifyRequest): Promise<object> => {
     const { projectId } = ProjectParamsSchema.parse(request.params);
+    await store.assertMutable(projectId);
     const body = ImportBodySchema.extend({ expectedRevision: z.number().int().nonnegative() }).parse(request.body);
     const incoming: Project = createSourceOutline(importPackage(await readPackage(body.handoffPath)), { proposedTextHoldMs: body.proposedTextHoldMs });
     const prefix: string = `source-update:${randomUUID()}`;
@@ -246,6 +250,7 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
   });
   app.post('/api/projects/:projectId/references', async (request: FastifyRequest, reply: FastifyReply): Promise<object> => {
     const { projectId } = ProjectParamsSchema.parse(request.params);
+    await store.assertMutable(projectId);
     const body = ReferenceBodySchema.parse(request.body);
     const bytes: Buffer = Buffer.from(body.base64, 'base64');
     const current: Project = await store.read(projectId);
@@ -274,6 +279,7 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
   });
   app.post('/api/projects/:projectId/audio/:cueId/asset', async (request: FastifyRequest, reply: FastifyReply): Promise<object> => {
     const { projectId, cueId } = CueParamsSchema.parse(request.params);
+    await store.assertMutable(projectId);
     const upload: AudioUpload = await readAudioUpload(request);
     const current: Project = await store.read(projectId);
     const mutation = await attachAudioAsset(current, cueId, `${randomUUID()}:audio`, {
@@ -285,6 +291,7 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
   });
   app.post('/api/projects/:projectId/audio/:cueId/normalize', async (request: FastifyRequest, reply: FastifyReply): Promise<object> => {
     const { projectId, cueId } = CueParamsSchema.parse(request.params);
+    await store.assertMutable(projectId);
     const body = RevisionSchema.parse(request.body);
     const current: Project = await store.read(projectId);
     const source = await store.audioRecoverySource(current, cueId);

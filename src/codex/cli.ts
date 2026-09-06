@@ -70,7 +70,11 @@ async function applyImage(args: string[], store: ProjectStore, requests: CodexRe
 async function applySpeech(args: string[], config: AppConfig, store: ProjectStore, requests: CodexRequestStore): Promise<void> {
   const { values } = parseArgs({ args, options: { request: { type: 'string' }, input: { type: 'string' } }, strict: true, allowPositionals: false });
   const normalizer: WorkerAudioNormalizer = new WorkerAudioNormalizer(config.audioNormalization);
-  output({ project: projectResult(await applyCodexSpeech(required(values.request, '--request'), required(values.input, '--input'), config.codex.speechVoice, store, requests, new Date().toISOString(), normalizer)) });
+  try {
+    output({ project: projectResult(await applyCodexSpeech(required(values.request, '--request'), required(values.input, '--input'), config.codex.speechVoice, store, requests, new Date().toISOString(), normalizer)) });
+  } finally {
+    await normalizer.close();
+  }
 }
 
 async function fail(args: string[], requests: CodexRequestStore): Promise<void> {

@@ -8,7 +8,10 @@ import type { AudioNormalizationWorkerOptions } from '../src/domain/audio-normal
 
 export const TEST_AUDIO_NORMALIZATION_OPTIONS: AudioNormalizationWorkerOptions = {
   maxWorkers: 2,
-  timeoutMs: 30_000,
+  maxQueuedJobs: 4,
+  maxQueuedInputBytes: 100 * 1024 * 1024,
+  queueTimeoutMs: 30_000,
+  executionTimeoutMs: 30_000,
   maxOldGenerationSizeMb: 96,
   maxYoungGenerationSizeMb: 16,
   stackSizeMb: 4,

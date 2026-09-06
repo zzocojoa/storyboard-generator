@@ -1,105 +1,121 @@
-# 범용 콘티 도구 — 미디어·저장·재생 운영 경계 보고서
+# 범용 콘티 도구 — 저장 무결성·Worker Queue 보고서
 
-## 1 작업 기준
+## 1. 작업 기준
 
 - Branch: `codex/storyboard-generator`
+- 시작 HEAD: `cc812fe24277f394d7b0a21f32eb5dc8c053101a`
 - Working Tree: `/Users/beatlefeed/Documents/ChatGPT/콘티제작/.worktrees/storyboard-generator`
 - Project Schema: `1.5.0`
-- 생성 환경: Codex App 현재 모델, 내장 `image_gen`, 설정된 macOS 음성이다. `OPENAI_API_KEY`, OpenAI SDK, 외부 AI 생성 fallback은 사용하지 않는다.
-- 범위: 모든 지원 프로젝트에 적용되는 기능이다. PRJ-007은 실제 fixture를 쓰는 회귀 사례에만 한정한다.
+- Storage Journal: version 3, 기존 version 2 읽기 호환
+- Store Lock: version 2
+- 기준 검사: 23개 파일, 321개 테스트
+- 현재 검사: 25개 파일, 413개 테스트
+- 생성 환경: Codex App 현재 모델, 내장 `image_gen`, 설정된 macOS 음성. `OPENAI_API_KEY`, OpenAI SDK, 외부 생성 API fallback은 사용하지 않는다.
 
-## 2 재현한 결함
+## 2. 재현한 결함
 
-| 실패 조건 | 기존 동작 | 수정 결과 |
+| 실패 조건 | 기존 disk 상태와 동작 | 수정 후 상태 |
 |---|---|---|
-| SFX·Music 실제 파일 등록 | 정상 사용자 API가 없었다 | 모든 Audio Cue 종류에 multipart PCM WAV 등록 경로를 제공한다 |
-| 파일 없는 Audio metadata | 선택자만 통과할 수 있었다 | 안전 출력에서 실제 파일·해시·구조를 다시 검사한다 |
-| 잘린 이미지와 저장 파일 변조 | header 또는 metadata만 믿을 수 있었다 | 전체 decode, MIME, SHA-256, 크기와 픽셀 수를 확인한다 |
-| 독립 Placement의 빈 Information ID | 비정보성 확인 없이 출력될 수 있었다 | 명시적 `unresolved` 판정으로 시작해 출력을 차단한다 |
-| TextCue Source Unit 종류와 중복 | ACTION·SOUND·MUSIC 또는 중복 Cue 우회가 가능했다 | 종류별 허용 표현을 고정하고 같은 Source Unit의 중복 Cue를 거부한다 |
-| Ready 수치 | stale Frame과 proposed Audio를 포함할 수 있었다 | ASSET, REVIEWED, OUTPUT SAFE를 별도로 계산한다 |
-| Source Update의 Text Anchor | 과거 자동 후보 Anchor가 남을 수 있었다 | 현재 Mapping으로 다시 만들고 실패하면 `unresolved/source-update`로 둔다 |
-| 유효한 이전 WAV | 프로젝트 sample rate 차이를 손상과 구분하지 못했다 | `AUDIO_ASSET_NORMALIZATION_REQUIRED`로 표시하고 새 Asset 버전으로 복구한다 |
-| 악성 WAV 정규화 | 입력 한도 안에서도 큰 출력 Buffer와 과도한 chunk 순회를 유발할 수 있었다 | sample rate·chunk 수·예상 정규화 크기를 할당 전에 제한한다 |
-| PCM24·sample rate 변환 | 동기 Sample loop가 서버 Event Loop를 점유했다 | 제한된 Worker Thread에서 변환하고 시간·메모리 한도를 적용한다 |
-| 저장 중 process 종료 | Asset·revision·현재본의 일부만 게시될 수 있었다 | 내구성 journal과 시작 복구로 commit 또는 이전 revision을 확정한다 |
-| Rollback 파일 충돌 | journal 경로만으로 기존 Asset·revision을 삭제할 수 있었다 | ID·경로·SHA-256·현재 참조로 Transaction 소유가 증명된 파일만 삭제한다 |
-| 최초 Project 생성 중 종료 | 완성되지 않은 최종 Project 디렉터리가 남을 수 있었다 | create journal 안에서 완성한 디렉터리를 원자적으로 게시하고 시작 시 복구한다 |
-| Source Update의 복수 Text Cue | 같은 Unit의 첫 Cue를 임의로 Anchor에 사용할 수 있었다 | 후보가 정확히 하나일 때만 Anchor를 확정하고 복수 후보는 재검토로 보낸다 |
-| 브라우저 Audio 종료 | Cue 종료·프로젝트 변경 뒤 Audio가 남을 수 있었다 | 종료 timer와 중앙 controller가 활성 Audio와 비동기 완료를 정리한다 |
+| 다음 revision 경로가 이미 존재 | 신규 Asset을 먼저 게시한 뒤 충돌할 수 있었다 | journal과 final Asset을 만들기 전에 `PROJECT_VERSION_EXISTS`로 끝나며 기존 version의 hash와 inode를 유지한다 |
+| 신규 Asset 경로가 이미 존재 | staging 이후에 충돌을 확인할 수 있었다 | metadata·write·hash·parent와 함께 preflight에서 검사하고 journal을 만들지 않는다 |
+| 같은 hash의 다른 파일 | hash만으로 transaction 게시물로 오인할 수 있었다 | staged와 final의 `dev`·`ino`가 다르면 삭제하지 않고 recovery block을 남긴다 |
+| 과거 version 또는 다른 transaction의 Asset 참조 | current만으로 삭제 가능성을 판단했다 | 모든 version과 다른 transaction previous·next까지 검사하고 하나라도 참조하면 삭제를 중단한다 |
+| 불완전한 Initial Create final | current 일부만으로 create journal을 정리할 수 있었다 | current·version 0·전체 version·Asset·관리 디렉터리 완전성을 증명하지 못하면 final과 journal을 보존한다 |
+| Project 하위 symlink | 문자열상 root 안의 경로가 외부를 가리킬 수 있었다 | canonical root, component `lstat`·`realpath`, regular-file 검사와 `O_NOFOLLOW`로 read·write·link·delete를 거부한다 |
+| 복구 실패 뒤 다음 mutation | 초기화가 끝난 instance가 불확실한 상태 위에 revision을 쌓을 수 있었다 | 프로젝트별 marker를 영속하고 모든 mutation을 `STORE_RECOVERY_BLOCKED`로 거부한다 |
+| Audio Worker 대기열 | 대기 job과 Buffer가 제한 없이 쌓일 수 있었다 | job 수·입력 byte·queue timeout을 제한하고 모든 종료 경로에서 예약량을 반환한다 |
+| Source Update 복수 Cue | 첫 후보를 고르지 않아도 원인과 후보가 보이지 않았다 | missing·ambiguous Issue에 Shot, Unit, Cue, Mapping Decision과 해결 방향을 넣는다 |
 
-각 조건은 `tests/media-workflow-regression.test.ts`의 지정된 회귀 이름으로 재현하고 수정 후 통과시켰다.
+## 3. Update Preflight
 
-## 3 Placement Information
+`ProjectStore.update()`는 current revision과 current snapshot을 확인한 뒤 transform 결과를 검증한다. 다음 revision final 경로, 모든 신규 Asset final 경로, Asset ID·경로 중복, AssetWrite와 metadata 1:1, SHA-256, 실제 미디어 구조, final parent가 symlink가 아닌 실제 디렉터리인지 확인한다. recovery marker, lock, 미해결 transaction도 mutation 전에 차단한다.
 
-- Project 편집 Entity `TextPlacementInformationDecision`은 `unresolved`, `non-informational`, `informational`을 구분한다. informational에는 존재하는 Information ID가 한 개 이상 필요하고 Placement당 판정은 최대 하나다.
-- exact·abbreviation·replacement는 Canonical Unit의 정보를 상속하고 독립 판정을 갖지 않는다. separate-element의 Placement와 standalone-placement는 독립 판정이 필수이며 unresolved이면 안전 출력되지 않는다. separate-element의 별도 Canonical Cue는 기존 Canonical 정보를 유지한다.
-- `PATCH /api/projects/:projectId/text-placements/:placementId/information`은 `expectedRevision`으로 판정을 바꾼다. UI는 Placement·Mapping·판정 상태, Information ID별 Base/Effective Gate, 출력 결과와 Issue code를 표시하며 비정보성 확정·ID 선택·미해결 초기화를 제공한다. Placement 시각은 이 화면에서 읽기 전용이다.
-- 판정 변경은 관련 Shot·Frame·text-cue Anchor를 재검토 상태로 돌리고 Codex basis를 바꾼다. Mapping 관계 변경은 판정 생성·제거를 원자적으로 수행한다. Source Update는 완전히 같은 Placement의 기존 판정만 보존한다.
+검사를 모두 통과한 뒤에만 lock, transaction staging과 journal을 만든다. Version 또는 Asset 충돌은 current와 revision을 바꾸지 않고 final Asset, final version, journal을 만들지 않으며 기존 파일을 삭제하지 않는다.
 
-## 4 Audio Asset Workflow
+## 4. Transaction Ownership
 
-- 지원 형식은 mono/stereo 16/24-bit PCM WAV다. AIFF·MP3와 다른 컨테이너·코덱은 명시적으로 거부한다.
-- `POST /api/projects/:projectId/audio/:cueId/asset`은 `multipart/form-data`, 파일 한 개, `expectedRevision`, 50MB 한도를 요구한다. 파일명은 설명에만 쓰며 저장 경로는 새 Asset ID의 hash로 만든다.
-- WAV chunk 구조, MIME, codec, 채널, 실제 duration, sample rate, 1시간 상한을 검사한다. 입력 sample rate는 8,000–384,000Hz, chunk는 최대 4,096개이며 정규화 결과는 50MB 이하여야 한다. 출력 Frame·Byte·Sample 연산량을 먼저 계산한 뒤 프로젝트 `handoff.timebase.sampleRate`의 PCM16 WAV로 정규화하고 결과를 다시 검사한다.
-- 정규화 Sample loop는 서버 Event Loop 밖의 Worker Thread에서 실행한다. `storyboard.config.json`의 `maxWorkers`, `timeoutMs`와 V8 세대·stack 메모리 한도를 적용하며, Worker 시작·실행·응답 실패는 구체적인 오류로 끝난다. 실패 시 ProjectStore update가 시작되지 않아 revision과 Asset 디렉터리가 바뀌지 않는다.
-- 실제 duration으로 `endMs`를 계산하고 `timingStatus=measured`, 신규 `assetId`를 설정한 뒤 Audio Relation과 Information Gate를 다시 검사한다. 교체 시 기존 Asset을 보존하고 신규 version을 올린다.
-- 저장된 Audio는 실제 WAV의 duration·sample rate·channel·codec이 Asset metadata와 맞고 Asset 길이가 Cue 타임라인과 맞아야 안전 출력된다.
-- `POST /api/projects/:projectId/audio/:cueId/normalize`는 hash와 구조가 유효한 이전 WAV를 읽어 프로젝트 PCM 형식의 새 Asset 버전으로 복구한다. 이전 Asset과 파일은 감사용으로 보존한다.
+Journal version 3은 이전·다음 Project, revision과 각 Asset의 staged·final 상대경로, SHA-256과 게시 phase를 기록한다. Asset과 version은 덮어쓰기 없는 hard link로 게시하고 staged 파일은 commit cleanup까지 유지한다. current의 원자 교체가 commit point다. Phase는 복구 진행을 설명하지만 단독 소유권 증거로 사용하지 않는다.
 
-## 5 Media Integrity
+Rollback은 staged와 final이 모두 regular file이고 journal hash가 일치하며 `stat.dev`·`stat.ino`가 같은 경우에만 transaction-owned로 판정한다. 먼저 소유가 증명된 next version을 제거하고, current, version 0을 포함한 모든 `versions/*.json`, 다른 `.transactions`의 previous·next Project를 파싱해 Asset ID와 경로 참조를 모은다. malformed version, Project ID·revision·파일명 불일치, symlink, 다른 inode, 다른 참조가 있으면 final을 보존하고 `STORE_RECOVERY_REQUIRED`로 차단한다.
 
-- `sharp` 0.35.4(Apache-2.0)는 macOS·Linux에서 PNG·JPEG·WebP의 실제 MIME, 전체 decode, width·height와 40MP 상한을 확인한다.
-- `@fastify/multipart` 10.1.1(MIT)은 Node.js에서 오디오 업로드 파일 수·필드 수·50MB 한도를 적용한다. 오디오 import는 시스템 `ffmpeg` 또는 `afconvert`에 의존하지 않는다.
-- ProjectStore의 Raw Asset fetch와 안전 출력은 프로젝트 내부 경로, 파일 존재, 저장 metadata의 SHA-256, MIME, 이미지 decode 또는 WAV parse와 실제 Audio metadata를 매번 확인한다.
-- Program Monitor는 `GET /output/frame/:frameId`와 `GET /output/audio/:cueId`만 사용한다. 두 경로는 현재 출력 판정도 다시 실행하고 `Cache-Control: no-store`를 반환한다.
-- PDF에서 손상된 Frame은 bitmap 대신 Frame ID, Asset ID, Issue code가 있는 placeholder로 바뀐다. CSV는 Asset metadata와 현재 integrity/output 상태, Placement Information 판정을 제공한다.
+Current가 next인데 commit이 불완전하면 current next와 staged previous를 증명하고 current를 previous로 먼저 원자 복원한다. 그 뒤 version과 Asset을 같은 규칙으로 처리한다. version 2 journal은 final 게시물이 없는 rollback 또는 current·version·Asset이 완전한 commit만 자동 처리한다. inode 증명이 없는 v2 rollback 대상은 hash가 같아도 삭제하지 않는다.
 
-## 6 저장과 브라우저 재생
+## 5. Initial Create
 
-- ProjectStore는 이전/다음 Project, 새 revision, 새 Asset을 transaction 디렉터리에 기록하고 각 파일과 디렉터리를 동기화한다. journal version 2를 준비 완료 표식으로 마지막에 저장한 뒤 hard link로 Asset → revision을 게시하고 현재본의 원자 rename을 commit point로 사용한다.
-- journal은 이전·다음 Project, revision, 각 Asset의 SHA-256과 Asset ID·상대경로·staging 이름을 기록한다. 서버 시작 시 현재 revision, 파일 해시와 현재 Project 참조를 모두 대조한다. 게시 전 중단은 증명된 신규 파일만 제거하고, 유효하게 완료된 게시는 유지하며, 현재본만 바뀌고 게시 파일이 없으면 증명된 이전 Project를 복원한다.
-- 기존 Asset·revision이 journal 해시와 다르거나 현재 Project가 참조하면 삭제하지 않는다. journal·lock이 손상됐거나 소유권을 정할 수 없는 상태도 보존하고 `STORE_RECOVERY_REQUIRED`로 차단한다. journal Asset 경로는 해당 Project의 `assets` 디렉터리 안으로 제한한다.
-- lock은 Project ID, Host, PID와 transaction ID를 기록한다. 같은 Host의 종료된 PID와 정확한 소유권만 자동 정리하고, 살아 있는 PID는 `PROJECT_BUSY`, 다른 Host나 해석할 수 없는 lock은 `STORE_RECOVERY_REQUIRED`로 유지한다.
-- 최초 Project는 `.create-transactions`에서 current·revision 파일과 빈 Asset·update transaction 디렉터리를 완성하고 동기화한 뒤 최종 Project 디렉터리로 원자 rename한다. 시작 복구는 게시 전 staging을 rollback하고 해시가 맞는 게시 후 Project를 보존한다. 복구 결과는 구조화 로그와 `/api/status.storageRecovery`에 남는다.
-- Browser Audio controller는 안전 선택자가 허용한 Cue를 현재 offset에서 시작하고 남은 Cue 길이만큼 종료 timer를 둔다. playhead가 Cue 밖으로 이동하거나 재생을 멈추고, 프로젝트·revision이 바뀌거나 Monitor가 닫히면 모든 활성 Audio를 정리한다. 이전 `play()` Promise나 timer는 현재 entry와 같을 때만 새 상태를 바꾼다.
+Create transaction은 전용 staging에서 version 0, current, assets와 update transaction 디렉터리를 만든 뒤 Project 디렉터리를 rename으로 게시한다. 복구는 final 디렉터리 이름, regular current, current revision snapshot, version 0, 모든 version의 이름·revision·Project ID·내용, 참조 Asset의 hash·MIME·구조, 필수 관리 디렉터리와 알 수 없는 항목 부재를 확인한다.
 
-## 7 PRJ-007 UNIT-045
+Final이 없으면 검증한 자기 staging만 제거하고 `create-rolled-back`으로 기록한다. journal hash와 같은 완전한 final은 `create-committed`로 유지한다. hash가 달라도 같은 Project ID의 별도 완전한 create 결과이면 final을 보존하고 자기 staging만 `create-superseded`로 정리한다. 불완전한 final은 삭제하거나 journal을 정리하지 않고 `STORE_CREATE_RECOVERY_REQUIRED` marker를 남긴다. 같은 복구를 반복해도 증명된 파일 외의 상태는 바뀌지 않는다.
 
-- Fixture: `tests/fixtures/media/unit045-intercom-48000.wav`
-- 형식: WAV, PCM16, mono, 48,000Hz, 2,000ms
-- Source: `SEG-019 / UNIT-045 / SOUND`
-- J-cut: 849,000–851,000ms, 경계 850,000ms
-- 실제 bytes를 ProjectStore의 hash 기반 `assets/*.wav` 경로에 쓰고 안전 Audio HTTP 경로에서 같은 bytes를 읽는다.
-- 849,500ms playback selector가 Cue를 선택한다. 저장·JSON 재열기 뒤 relation과 Asset 연결이 유지되며 Effective Gate 목록은 바뀌지 않는다.
-- metadata만 메모리에 넣는 기존 검사는 도메인 판정 회귀다. 이 fixture의 저장·HTTP 재읽기 검사가 실제 Audio Asset E2E 완료 근거다.
+## 6. Symlink Safety
 
-## 8 Schema와 Migration
+`SafeStoreFilesystem`은 설정된 data root를 한 번 canonical path로 해석하고 모든 관리 경로가 그 아래인지 확인한다. 기존 component와 parent는 `lstat`·`realpath`로 실제 디렉터리인지 검사하고, 파일은 regular file만 허용한다. read와 exclusive write에는 지원되는 macOS·Ubuntu에서 `O_NOFOLLOW`를 사용한다. Hard link는 source identity와 target parent를 확인하며 unlink 직전에 path, hash와 identity를 다시 확인한다.
 
-- `1.4.0 → 1.5.0`은 독립 Mapping 관계에만 `unresolved` Placement Information Decision을 생성한다. Canonical 상속 관계에는 생성하지 않는다.
-- 원문, ID, Timeline, Source Snapshot, TextCue Authority, Mapping, 기존 Asset과 GenerationRecord를 보존한다. 기존 accepted Frame을 임의로 변경하지 않고 파일 무결성은 출력 시 파생한다.
-- 전체 경로는 `1.0.0 → 1.1.0 → 1.2.0 → 1.3.0 → 1.4.0 → 1.5.0`이다. Zod가 런타임 기준이며 생성 JSON Schema와 일치 여부를 검사한다.
+Asset 디렉터리·파일, versions, transaction, create staging symlink는 거부된다. 복구 중 symlink가 발견되면 link target을 읽거나 삭제하지 않고 block을 남긴다. 이 계약은 macOS와 Ubuntu의 로컬 파일 시스템을 대상으로 하며 SMB·NFS의 분산 lock·rename 의미를 보장하지 않는다.
 
-## 9 테스트 결과
+## 7. Recovery Block
 
-- `npm run schemas:write`: 생성 Schema 갱신
-- `npm run typecheck`: 서버·도메인 TypeScript 검사
-- `npm run typecheck:web`: Web TypeScript 검사
-- `npm test`: 23개 파일, 321개 테스트
-- `npm run schemas:check`: Zod와 JSON Schema drift 검사
-- `npm run build:web`: 운영 웹 빌드
-- `npm run check`: 위 검사의 통합 실행
+소유권·참조·경로·journal·lock·current/version 완전성을 증명하지 못하면 `.recovery-blocks`에 Project ID, transaction, 오류 코드·메시지와 시각을 저장한다. unresolved transaction과 안전하지 않은 lock은 그대로 둔다. 같은 `ProjectStore`와 재시작한 다른 instance의 update, Source Update, Asset upload, Audio normalize, Codex apply와 편집 mutation은 `STORE_RECOVERY_BLOCKED`로 끝난다.
 
-기존 검사를 유지하고 Worker 이벤트 루프 응답·시간 초과 무변경, Hash·참조 기반 rollback, 다른 Host·손상 lock 보존, update·initial create crash 복구의 반복 실행, 복수 Text Cue Anchor를 포함해 23개 파일의 321개 검사를 적용했다. test skip/only와 metadata-only E2E 대체는 사용하지 않았다.
+다른 Project의 mutation은 계속할 수 있다. Current를 정상 파싱하고 안전 출력 검사를 통과하는 read-only 경로도 사용할 수 있다. `/api/status.storageRecoveryBlocks`가 현재 차단을 표시한다. 프로세스 재시작에서 같은 recovery를 다시 실행해 성공한 경우에만 marker, transaction과 lock을 정리한다.
 
-## 10 CI
+## 8. Worker Queue
 
-GitHub Actions는 Ubuntu와 Node.js 24에서 `npm ci`와 `npm run check`를 수행한다. feature branch에 push한 종료 HEAD와 run head SHA가 같은 성공 결과만 완료 근거로 사용한다.
+기본값은 Worker 2개, 대기 job 4개, 실행·대기 입력 예약량 100MB, queue 대기 30초, Worker 실행 30초다. V8 old generation 96MB, young generation 16MB, stack 4MB도 적용한다. job 또는 byte 한도 초과는 `AUDIO_NORMALIZATION_QUEUE_FULL`, 시작 전 queue timeout은 `AUDIO_NORMALIZATION_QUEUE_TIMEOUT`, 실행 timeout은 `AUDIO_NORMALIZATION_TIMEOUT`이다.
 
-## 11 남은 위험
+완료, Worker 오류·exit·시작 실패, queue timeout과 close에서 예약 byte를 한 번만 반환한다. 시작 실패 뒤 다음 job을 계속 drain한다. `close()`는 queue timer를 취소하고 대기 job을 거부하며 active Worker를 종료한다. Fastify `onClose`와 Codex speech CLI의 `finally`가 이를 호출한다. 실제 약 46MB PCM24 multipart 업로드가 처리되는 동안 먼저 완료된 `/api/status` 200으로 Event Loop 진행을 검증했다.
 
-- 지원 오디오 형식은 PCM WAV뿐이다. AIFF·MP3와 압축 WAV codec은 지원하지 않는다.
-- `sharp` prebuilt package를 받을 수 없는 환경에서는 설치가 실패하며 이미지 검증을 우회하지 않는다.
-- 정보 ID 검사는 bitmap의 간접 암시를 자동 판정하지 못하므로 사람의 시각 검토가 필요하다.
-- PRJ-007 전체 32개 Segment의 연출·자막 가독성·음성 호흡과 실제 제작 품질 검토는 남아 있다.
-- 지원 입력은 `native-v1`, `production-v1`이다. 임의 문서 입력, 클라우드 협업, 완성 영상 렌더링은 현재 범위가 아니다.
+## 9. Fault Injection
+
+Fault injector는 constructor dependency로만 전달되며 production 기본값은 비활성이다. `SimulatedStorageCrash`는 writer catch rollback과 정상 lock cleanup을 건너뛰어 process 종료 disk 상태를 남긴다.
+
+| Fault point | 중단 시 상태 | 새 Store instance 결과 |
+|---|---|---|
+| `after-update-preflight` | current=previous, lock, journal 없음 | stale lock 제거, previous 유지 |
+| `after-update-journal-prepared` | current=previous, staged journal, final 없음 | staging rollback, previous 유지 |
+| `after-update-asset-linked` | current=previous, owned Asset, journal·lock | 참조와 identity를 확인해 owned Asset 제거 |
+| `after-update-version-linked` | current=previous, owned Asset·version | version을 먼저 제거하고 참조 검사 후 Asset 제거 |
+| `after-update-current-published` | current=next, 완전한 version·Asset | commit 보존, staging·journal·lock 정리 |
+| `before-update-cleanup` | 검증된 next와 staging | commit 보존, cleanup 완료 |
+| `after-create-journal-prepared` | create journal, final 없음 | 자기 staging rollback |
+| `after-create-version-zero-written` | staging version 0, final 없음 | 자기 staging rollback |
+| `after-create-current-written` | 완성된 staging, final 없음 | 자기 staging rollback |
+| `before-create-directory-publish` | 완성된 staging, final 없음 | 자기 staging rollback |
+| `after-create-directory-publish` | 완전한 final과 create journal | final 보존, journal cleanup |
+| `before-create-cleanup` | 검증된 final과 create journal | final 보존, cleanup 완료 |
+
+수동 disk fixture는 기존 v2 journal과 의도적으로 손상된 version·symlink·다른 inode를 구성하는 데 사용한다. Writer crash 검증은 실제 `ProjectStore.update()`와 `create()`를 호출한 뒤 새 instance에서 disk 결과를 확인한다.
+
+## 10. Source Update
+
+Text 기반 Anchor는 현재 Shot 범위 안에 같은 Source Unit을 가리키는 Cue가 정확히 하나일 때만 다시 확정한다. 후보가 없으면 `MISSING_TEXT_ANCHOR_SOURCE`, 둘 이상이면 `AMBIGUOUS_TEXT_ANCHOR_SOURCE`를 Mapping Review에 추가한다. Issue에는 Shot ID, Source Unit ID, 전체 후보 Cue ID, Mapping Decision ID, `sourceLinks.temporalAnchor`와 하나의 Cue로 확정한 뒤 재생성하라는 해결 방향이 포함된다. 복수 후보의 첫 Cue는 선택하지 않는다.
+
+## 11. PRJ-007
+
+- Scene 12, Segment 32, screenplay Source Unit 79, Panel Turn 16
+- 전체 시간 1,500,000ms, 원문 변경·gap·overlap 0건
+- SEG-024 Gate: FACT-03 1,088,000ms, FACT-02·FACT-09 1,108,000ms, FACT-10 1,148,000ms
+- UNIT-045: `SEG-019 / SOUND`, 849,000–851,000ms J-cut, 경계 850,000ms
+- 실제 WAV: PCM16 mono 48,000Hz, 2,000ms
+- ProjectStore 저장, safe Audio HTTP bytes, Information Gate 불변, JSON round-trip 통과
+
+## 12. 테스트 결과
+
+- `npm test`: 25개 파일, 413개 테스트 통과
+- Storage safety: 74개 통과. 필수 A–F·H 이름 71개와 12개 fault point 전체를 위한 3개 보강 검사다.
+- Worker queue: 11개 통과
+- Source Update 진단: 필수 6개 통과
+- PRJ-007 지정 회귀: 필수 7개와 기존 Golden 19개 통과
+- 요구된 95개 테스트 이름이 모두 존재하며 `skip`·`only`는 없다.
+- `npm run schemas:write`, `npm run typecheck`, `npm run typecheck:web`, `npm run schemas:check`, `npm run build:web`, 통합 `npm run check`가 모두 통과했다. 통합 검사에서도 25개 파일의 413개 테스트를 실행했다.
+- 임시 data root와 Fastify inject로 `/`, `/api/status`, native-v1 Import, revision Update, 실제 WAV 등록과 Safe Audio, version 충돌 409, 영속 Recovery Block과 mutation 차단, Worker Queue 초과를 확인했다. 기존 4317 프로세스는 사용하거나 종료하지 않았다.
+
+## 13. CI
+
+GitHub Actions는 Ubuntu 24.04, Node.js 24에서 `npm ci`와 `npm run check`를 실행한다. 구현 commit을 feature branch에 push한 뒤 run head SHA가 같은 결과를 이 절에 기록한다. master에는 병합하지 않는다.
+
+## 14. 남은 위험
+
+- 파일 시스템 계약은 macOS·Ubuntu 로컬 저장소를 대상으로 한다. SMB·NFS 분산 lock과 모든 외부 process race를 보장하지 않는다.
+- 지원 오디오는 PCM WAV이며 MP3, AIFF, 압축 WAV와 mastering 품질 resampler는 범위 밖이다.
+- 정보 ID 검사는 bitmap의 간접 암시를 자동 판단하지 못한다. 전체 32개 Segment의 연출, 자막 가독성, 음성 호흡과 제작 가능성은 사람 검토가 필요하다.
+- 지원 입력은 `native-v1`, `production-v1`이다. 임의 문서 가져오기, 다중 사용자 협업, 완성 영상 렌더링은 현재 범위가 아니다.

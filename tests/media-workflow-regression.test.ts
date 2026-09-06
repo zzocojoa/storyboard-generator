@@ -13,7 +13,7 @@ import { updatePlacementInformationDecision } from '../src/domain/placement-info
 import { playableAudioCuesAt, playableTextCuesAt, reviewTextPlaybackAt } from '../src/domain/playback.js';
 import type { Asset, AudioCue, GenerationRecord, Project, Shot, ShotSourceLink, SourceUnit, StoryboardFrame, TextCue, TextMappingDecision, TextPlacement, TextPlacementInformationDecision } from '../src/domain/schema.js';
 import { resolveTextCueAuthority } from '../src/domain/text.js';
-import { updateTextMappingDecision } from '../src/domain/mapping.js';
+import { mappingReviewIssues, updateTextMappingDecision } from '../src/domain/mapping.js';
 import { rebuildTextDerivedAnchors, mergePlacementInformationDecisions } from '../src/domain/source-update.js';
 import { validateProject } from '../src/domain/validation.js';
 import { exportProjectJson } from '../src/exporters/json.js';
@@ -321,33 +321,42 @@ describe('C. SAFE AUDIO OUTPUT', (): void => {
 });
 
 describe('D. PRJ-007 UNIT-045', (): void => {
-  it('unit045_actual_wav_is_48000hz', async (): Promise<void> => {
+  it('unit045_fixture_remains_48000hz', async (): Promise<void> => {
     const fixture = await unit045Mutation(); expect(fixture.mutation.inspection.sampleRate).toBe(48000);
   });
-  it('unit045_actual_wav_is_2000ms', async (): Promise<void> => {
+  it('unit045_fixture_remains_2000ms', async (): Promise<void> => {
     const fixture = await unit045Mutation(); expect(fixture.mutation.inspection.durationMs).toBe(2000);
   });
   it('unit045_asset_is_stored_in_project_store', async (): Promise<void> => {
     const fixture = await unit045Mutation(); const { store } = await temporaryStore(fixture.prepared); await saveMutation(store, fixture.prepared, fixture.mutation);
     expect((await store.asset('PRJ-007', 'unit045-audio')).content.equals(fixture.bytes)).toBe(true);
   });
-  it('unit045_j_cut_is_playable_at_849500ms', async (): Promise<void> => {
-    const fixture = await unit045Mutation(); expect(playableAudioCuesAt(fixture.mutation.project, 849500).some((cue: AudioCue): boolean => cue.unitId === 'UNIT-045')).toBe(true);
+  it('unit045_j_cut_relation_is_preserved', async (): Promise<void> => {
+    const fixture = await unit045Mutation(); const cue = playableAudioCuesAt(fixture.mutation.project, 849500).find((candidate: AudioCue): boolean => candidate.unitId === 'UNIT-045');
+    expect(cue).toEqual(expect.objectContaining({ timingRelation: 'j-cut' }));
   });
-  it('unit045_safe_audio_endpoint_returns_wav', async (): Promise<void> => {
+  it('unit045_safe_audio_endpoint_still_returns_bytes', async (): Promise<void> => {
     const fixture = await unit045Mutation(); const { app, store } = await temporaryApp(fixture.prepared); await saveMutation(store, fixture.prepared, fixture.mutation);
     const response = await app.inject({ method: 'GET', url: `/api/projects/PRJ-007/output/audio/${fixture.cue.id}` }); expect(response.rawPayload.subarray(0, 4).toString('ascii')).toBe('RIFF'); await app.close();
   });
-  it('unit045_j_cut_does_not_change_information_gates', async (): Promise<void> => {
+  it('unit045_information_gates_remain_unchanged', async (): Promise<void> => {
     const fixture = await unit045Mutation(); expect(fixture.mutation.project.dataset.informationRules).toEqual(fixture.base.dataset.informationRules);
   });
-  it('unit045_json_round_trip_preserves_asset_and_relation', async (): Promise<void> => {
+  it('prj007_json_round_trip_remains_valid', async (): Promise<void> => {
     const fixture = await unit045Mutation(); const reopened: Project = parseProject(JSON.parse(exportProjectJson(fixture.mutation.project)));
     expect(reopened.audioCues.find((cue: AudioCue): boolean => cue.unitId === 'UNIT-045')).toEqual(expect.objectContaining({ assetId: 'unit045-audio', timingRelation: 'j-cut' }));
   });
   it('unit045_within_segment_relation_is_rejected_for_cross_boundary_timing', async (): Promise<void> => {
     const fixture = await unit045Mutation(); const invalid: Project = { ...fixture.prepared, audioCues: fixture.prepared.audioCues.map((cue: AudioCue): AudioCue => cue.unitId === 'UNIT-045' ? { ...cue, timingRelation: 'within-segment' } : cue) };
     await expect(attachAudioAsset(invalid, fixture.cue.id, 'invalid-unit045', { originalFileName: 'unit045.wav', declaredMimeType: 'audio/wav', bytes: fixture.bytes }, testAudioNormalizer())).rejects.toThrowError();
+  });
+  it('prj007_structure_and_source_text_remain_unchanged', async (): Promise<void> => {
+    const project: Project = await productionOutline(); const reopened: Project = parseProject(JSON.parse(exportProjectJson(project)) as unknown);
+    expect({ scenes: reopened.dataset.scenes.length, segments: reopened.dataset.segments.length,
+      sourceUnits: reopened.dataset.units.filter((unit: SourceUnit): boolean => unit.kind !== 'PANEL').length,
+      panelTurns: reopened.dataset.units.filter((unit: SourceUnit): boolean => unit.kind === 'PANEL').length })
+      .toEqual({ scenes: 12, segments: 32, sourceUnits: 79, panelTurns: 16 });
+    expect(reopened.dataset.units.map((unit: SourceUnit): string => unit.text)).toEqual(project.dataset.units.map((unit: SourceUnit): string => unit.text));
   });
 });
 
@@ -492,6 +501,14 @@ describe('G. IMAGE INTEGRITY', (): void => {
 });
 
 describe('H. SOURCE UPDATE', (): void => {
+  async function textAnchorFixture(): Promise<{ project: Project; shot: Shot; link: ShotSourceLink; cue: TextCue }> {
+    const project: Project = await nativeOutline();
+    const shot: Shot = project.shots.find((value: Shot): boolean => value.sourceLinks.some((link: ShotSourceLink): boolean => link.temporalAnchor.kind === 'shot-offset' && link.temporalAnchor.basis === 'text-cue')) as Shot;
+    const link: ShotSourceLink = shot.sourceLinks.find((value: ShotSourceLink): boolean => value.temporalAnchor.kind === 'shot-offset' && value.temporalAnchor.basis === 'text-cue') as ShotSourceLink;
+    const cue: TextCue = project.textCues.find((value: TextCue): boolean => value.unitId === link.unitId && value.startMs >= shot.startMs && value.endMs <= shot.endMs) as TextCue;
+    return { project, shot, link, cue };
+  }
+
   it('unchanged_placement_information_decision_is_preserved', async (): Promise<void> => {
     const current: Project = standalone(await nativeOutline()); const fixture = placementFixture(current); const reviewed = updatePlacementInformationDecision(current, fixture.placement.id, { status: 'non-informational', informationIds: [], note: '유지' });
     expect(mergePlacementInformationDecisions(reviewed, reviewed, reviewed.textMappingDecisions)[0]?.note).toBe('유지');
@@ -529,6 +546,40 @@ describe('H. SOURCE UPDATE', (): void => {
     expect(rebuilt.sourceLinks.find((value: ShotSourceLink): boolean => value.unitId === link.unitId)).toEqual(expect.objectContaining({
       status: 'mapping-required', temporalAnchor: { kind: 'unresolved', basis: 'source-update', status: 'review-required' },
     }));
+  });
+  it('one_text_cue_candidate_rebuilds_anchor', async (): Promise<void> => {
+    const fixture = await textAnchorFixture(); const rebuilt = rebuildTextDerivedAnchors(fixture.project).find((shot: Shot): boolean => shot.id === fixture.shot.id);
+    expect(rebuilt?.sourceLinks.find((link: ShotSourceLink): boolean => link.unitId === fixture.link.unitId)?.temporalAnchor.status).toBe('confirmed');
+  });
+  it('zero_candidate_returns_missing_text_anchor_issue', async (): Promise<void> => {
+    const fixture = await textAnchorFixture(); const changed: Project = { ...fixture.project, textCues: fixture.project.textCues.filter((cue: TextCue): boolean => cue.unitId !== fixture.link.unitId) };
+    const rebuilt: Project = { ...changed, shots: rebuildTextDerivedAnchors(changed) };
+    expect(mappingReviewIssues(rebuilt)).toContainEqual(expect.objectContaining({ code: 'MISSING_TEXT_ANCHOR_SOURCE', entityId: fixture.shot.id, field: 'sourceLinks.temporalAnchor' }));
+  });
+  it('multiple_candidates_return_ambiguous_text_anchor_issue', async (): Promise<void> => {
+    const fixture = await textAnchorFixture(); const changed: Project = { ...fixture.project, textCues: [...fixture.project.textCues, { ...fixture.cue, id: `${fixture.cue.id}-second` }] };
+    const rebuilt: Project = { ...changed, shots: rebuildTextDerivedAnchors(changed) };
+    expect(mappingReviewIssues(rebuilt)).toContainEqual(expect.objectContaining({ code: 'AMBIGUOUS_TEXT_ANCHOR_SOURCE', entityId: fixture.shot.id }));
+  });
+  it('ambiguous_issue_lists_candidate_cue_ids', async (): Promise<void> => {
+    const fixture = await textAnchorFixture(); const secondId: string = `${fixture.cue.id}-second`;
+    const changed: Project = { ...fixture.project, textCues: [...fixture.project.textCues, { ...fixture.cue, id: secondId }] };
+    const rebuilt: Project = { ...changed, shots: rebuildTextDerivedAnchors(changed) };
+    const actual: string = mappingReviewIssues(rebuilt).find((value): boolean => value.code === 'AMBIGUOUS_TEXT_ANCHOR_SOURCE')?.actual ?? '';
+    expect(actual).toContain(fixture.cue.id); expect(actual).toContain(secondId);
+  });
+  it('ambiguous_issue_lists_mapping_decision_ids', async (): Promise<void> => {
+    const fixture = await textAnchorFixture(); const decisionIds: string[] = fixture.project.textMappingDecisions.filter((decision: TextMappingDecision): boolean => decision.canonicalUnitId === fixture.link.unitId).map((decision: TextMappingDecision): string => decision.id);
+    expect(decisionIds.length).toBeGreaterThan(0);
+    const changed: Project = { ...fixture.project, textCues: [...fixture.project.textCues, { ...fixture.cue, id: `${fixture.cue.id}-second` }] };
+    const rebuilt: Project = { ...changed, shots: rebuildTextDerivedAnchors(changed) };
+    const actual: string = mappingReviewIssues(rebuilt).find((value): boolean => value.code === 'AMBIGUOUS_TEXT_ANCHOR_SOURCE')?.actual ?? '';
+    for (const decisionId of decisionIds) expect(actual).toContain(decisionId);
+  });
+  it('source_update_never_selects_first_ambiguous_candidate', async (): Promise<void> => {
+    const fixture = await textAnchorFixture(); const changed: Project = { ...fixture.project, textCues: [...fixture.project.textCues, { ...fixture.cue, id: `${fixture.cue.id}-second` }] };
+    const rebuilt = rebuildTextDerivedAnchors(changed).find((shot: Shot): boolean => shot.id === fixture.shot.id);
+    expect(rebuilt?.sourceLinks.find((link: ShotSourceLink): boolean => link.unitId === fixture.link.unitId)?.temporalAnchor).toEqual({ kind: 'unresolved', basis: 'source-update', status: 'review-required' });
   });
 });
 

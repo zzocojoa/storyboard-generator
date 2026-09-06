@@ -6,7 +6,10 @@
   "pdfFontPath": "assets/fonts/NanumGothic-Regular.ttf",
   "audioNormalization": {
     "maxWorkers": 2,
-    "timeoutMs": 30000,
+    "maxQueuedJobs": 4,
+    "maxQueuedInputBytes": 104857600,
+    "queueTimeoutMs": 30000,
+    "executionTimeoutMs": 30000,
     "maxOldGenerationSizeMb": 96,
     "maxYoungGenerationSizeMb": 16,
     "stackSizeMb": 4
