@@ -111,7 +111,14 @@ Text 기반 Anchor는 현재 Shot 범위 안에 같은 Source Unit을 가리키�
 
 ## 13. CI
 
-GitHub Actions는 Ubuntu 24.04, Node.js 24에서 `npm ci`와 `npm run check`를 실행한다. 구현 commit을 feature branch에 push한 뒤 run head SHA가 같은 결과를 이 절에 기록한다. master에는 병합하지 않는다.
+- 구현 Push HEAD: `62b7eb7e170fd8d8ffaab6c96bcaefe3bd7cdcfa`
+- Workflow Run ID: [`34030880925`](https://github.com/zzocojoa/storyboard-generator/actions/runs/34030880925)
+- Run Head SHA: `62b7eb7e170fd8d8ffaab6c96bcaefe3bd7cdcfa`
+- Result: `success`
+- 환경과 명령: Ubuntu 24.04, Node.js 24, `npm ci`, `npm run check`
+- CI 검사량: 25개 Test File, 413개 Test, Storage safety 74개, Worker queue 11개
+
+구현 commit과 같은 SHA의 CI 결과다. feature branch에만 push했으며 master에는 병합하지 않았다.
 
 ## 14. 남은 위험
 
