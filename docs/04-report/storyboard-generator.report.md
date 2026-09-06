@@ -1,140 +1,145 @@
-# 범용 콘티 도구 — 저장 Asset 계약 완료 보고서
+# 범용 콘티 도구 — 동시 생성·생성 이력·HTTP 계약 완료 보고서
 
 ## 1. 작업 기준
 
-- 시작 Branch: `codex/storyboard-generator`
-- 시작 HEAD: `ecabc9403cdc3344968a40a7db7656138b98f8be`
-- 구현 검증 HEAD: `1fb4e00b90326a0dcac037b16834a5b0afb820ae`
-- 문서 포함 종료 HEAD: 이 보고서 commit 뒤 최종 보고에서 확정한다.
+- Branch: `codex/storyboard-generator`
+- 시작 HEAD: `618492ee2a9eca34cdad4eeb62b22dd260e35d43`
+- 구현·상태 문서 검증 HEAD: `b692ae17a18d0b60e75f107d0d8aa4ebdfa9c1ba`
+- 보고서 포함 종료 HEAD: 이 보고서 commit 뒤 최종 응답에서 확정한다.
 - Working Tree: `/Users/beatlefeed/Documents/ChatGPT/콘티제작/.worktrees/storyboard-generator`
 - Project Schema: `1.5.0`
 - Storage Journal: version 3, legacy version 2 보수적 읽기·복구 유지
 - Store Lock: version 2
-- 기존 자동 검사: 26개 파일, 491개 테스트
-- 최종 로컬 자동 검사: 27개 파일, 569개 테스트
+- 기존 자동 검사: 27개 파일, 569개 테스트
+- 최종 로컬 자동 검사: 28개 파일, 666개 테스트
+- 지정된 계약 이름: 기존 12개와 신규 97개, 총 109개가 각각 한 번 존재
 - 생성 환경은 Codex App 현재 모델, 내장 `image_gen`, macOS 음성을 사용한다. `OPENAI_API_KEY`, OpenAI SDK, 외부 생성 API fallback을 추가하지 않았다.
-- 기존 127.0.0.1:4317 사용자 서버는 종료하거나 재시작하지 않았다. Runtime 검증은 별도 임시 `dataRoot`와 Fastify inject로 수행했다.
+- 기존 `127.0.0.1:4317` 사용자 서버 PID 44386은 종료하거나 재시작하지 않았다. Runtime 검증은 별도 임시 포트 44317과 격리된 data/request root에서 수행하고 모두 정리했다.
 
 ## 2. 재현한 결함
 
-| 실패 Test | 기존 상태 | 기존 잘못된 동작 | 수정 | 수정 후 결과 |
+| 실패 Test 또는 계약군 | 기존 경쟁·오류 상태 | 기존 Disk 상태 | 수정 | 수정 후 결과 |
 |---|---|---|---|---|
-| `initial_create_rejects_dangling_prop_asset_reference`, `update_rejects_unknown_prop_asset_reference` | `shots[].propIds[]`가 Initial Create collector와 Store Update closure에서 빠져 있었다 | Asset catalog에 없는 Prop ID를 초기 또는 후속 revision에 저장할 수 있었다 | 현재 Schema의 6개 Asset FK를 `asset-references.ts`의 한 정책으로 수집하고 Create·Update·Validation에서 사용했다 | Create는 disk 접근 전 거부하고 Update는 lock 안에서 journal 전 `ASSET_REFERENCE_NOT_FOUND`로 거부한다 |
-| `update_rejects_wrong_kind_prop_asset_reference`, `update_rejects_frame_reference_to_audio_asset`, `update_rejects_audio_asset_subject_mismatch` | Update가 Asset metadata 전이만 검사해 FK의 종류·대상 결합을 완전히 확인하지 않았다 | Prop→Image, Frame→Audio, Audio→다른 Cue 같은 관계가 임의 transform을 통해 저장될 수 있었다 | Next catalog 전체에 대해 존재·허용 kind·frame/cue subject를 중앙 검사했다 | `ASSET_REFERENCE_KIND_MISMATCH`와 `ASSET_REFERENCE_SUBJECT_MISMATCH`로 저장 전에 거부한다 |
-| `eexist_then_lock_vanishes_still_returns_busy`, `lock_directory_sync_failure_removes_owned_lock` | Lock 실패를 사후 경로 존재 여부로 해석하고 생성 호출의 소유권과 inode를 함께 추적하지 않았다 | 실제 `EEXIST`가 raw 오류가 되거나 작성 뒤 sync 실패한 자기 lock이 남을 수 있었다 | 실제 `O_EXCL` 오류 코드, `createdByThisCall`, metadata, `dev/ino`를 추적하고 같은 파일만 정리했다 | 경쟁은 lock이 곧 사라져도 `PROJECT_BUSY`; 자기 lock 정리 실패는 Recovery Block으로 보호한다 |
-| `update_is_busy_after_create_publish_before_cleanup`, `initialization_busy_during_live_create_is_transient` | Final directory 공개와 Create 검증·journal 정리 사이에 Create-owned lock이 없었고 초기화의 Busy promise가 남을 수 있었다 | Update가 revision 0에 진입하거나 같은 Store가 Create 완료 뒤에도 Busy를 재반환할 수 있었다 | staging에 lock을 만들고 디렉터리와 함께 게시해 journal 정리 뒤 마지막에 제거하며, transient Busy의 초기화 promise를 해제했다 | 생성 중 Update는 transform 0회·version/transaction/block 0건으로 409, 완료 뒤 같은 Store 재시도는 200이다 |
+| `root_create_lock_is_acquired_before_target_check`, `concurrent_create_commits_exactly_once`, `concurrent_create_does_not_return_raw_eexist`, `concurrent_create_does_not_return_raw_enotempty` | 같은 Project의 Initial Create 둘이 target check 뒤 각자 staging에 진입할 수 있었다 | loser staging과 파일시스템 원본 오류가 남거나 final 게시 승자를 코드 계약으로 판별하기 어려웠다 | Project ID SHA-256 경로의 Root Create Lock을 target 재검사·staging·journal보다 먼저 `O_EXCL`로 획득했다 | 한 Create만 revision 0을 게시하고 경쟁자는 `PROJECT_BUSY`, 완료 후 재시도는 `PROJECT_ALREADY_EXISTS`다 |
+| `crash_after_root_lock_before_journal_is_recovered`, `dead_root_lock_with_matching_journal_is_recovered`, `root_lock_journal_transaction_mismatch_is_blocked`, `create_recovery_is_idempotent` | staging journal만으로는 journal 전 crash와 root 수준 소유권을 설명할 수 없었다 | journal 없는 고아 상태 또는 root/final/journal 관계가 불명확한 상태를 안전하게 분류할 수 없었다 | root lock·journal·final lock의 Project·transaction·host·PID와 file identity를 교차 검증하는 startup recovery를 추가했다 | dead pre-journal lock과 증명 가능한 commit/rollback은 정리되고, 손상·다른 Host·불일치는 Project별 recovery block과 함께 보존된다 |
+| `live_create_does_not_block_unrelated_project_read`, `live_create_does_not_block_unrelated_project_update`, `live_create_does_not_block_unrelated_project_create` 및 기존 `startup_does_not_remove_live_create_lock` | 살아 있는 Initial Create를 본 initialize가 Store 전체를 `PROJECT_BUSY`로 끝냈다 | 관련 없는 Project에도 전역 Busy가 전파됐다 | 같은 Host live owner를 Project별 Active Create로 기록하고 대상 mutation 때만 다시 확인한다 | 해당 Project Create·Update만 Busy이며 다른 Project read·update·create는 계속된다 |
+| `existing_generation_record_removal_is_rejected`, `existing_generation_record_reordering_is_rejected`, provider/model/prompt/result/shot/createdAt 변경 계약 | Asset append-only와 달리 Generation Record의 revision 전이가 중앙에서 강제되지 않았다 | 과거 생성 근거가 삭제·재배열·수정된 next Project가 journal에 들어갈 수 있었다 | Asset 전이 뒤, Asset closure 전에 Generation Record의 prefix 순서와 전체 metadata를 검사한다 | 기존 Record는 byte-equivalent metadata와 순서를 유지하고 신규 Record만 끝에 추가된다. 실패는 journal·block을 만들지 않고 lock을 해제한다 |
+| `recovery_blocked_returns_423`, `lock_acquisition_failed_returns_503`, `existing_error_code_message_and_issues_are_preserved` 및 Web UI 계약 | 복구가 필요한 저장 오류도 포괄적인 400으로 응답했고 UI가 입력 오류와 구분하지 못했다 | Disk는 보존됐지만 사용자가 재시도 여부와 운영자 조치 필요성을 판단할 구조가 없었다 | 기존 오류 필드에 category·retryable·operatorActionRequired를 추가하고 상태별 HTTP 정책과 UI를 연결했다 | 복구 잠금은 423과 영속 배너·mutation 차단, 일시 lock 획득 실패는 503, 기존 code·message·issues는 유지된다 |
+| 첫 전체 회귀의 `startup_does_not_remove_live_create_lock`, `blocked_project_rejects_asset_upload`, `blocked_project_rejects_source_update` 계열 기대값 | 새 Project 범위 초기화와 423 계약이 이전 전역 Busy·400 기대와 충돌했다 | 구현 결함이 아니라 기존 테스트가 이전 API 의미를 고정했다 | 기존 저장 안전 검사는 유지하면서 Project별 Active Create와 구조화 423을 직접 검증하도록 기대값을 갱신했다 | 관련 파일 213개 테스트와 전체 666개 테스트가 통과했다 |
 
-## 3. Asset Reference Policy
+## 3. Root Create Lock
 
-현재 Project Schema에 명시된 Asset Foreign Key를 다음 수용 표로 관리한다.
+Root Create Lock 경로는 `<dataRoot>/.create-locks/<sha256(projectId)>.lock`이다. 관리 디렉터리는 Project 목록에서 제외한다. Lock version 2 metadata는 `projectId`, `transactionId`, `host`, `pid`, `createdAt`을 기록한다.
 
-| Reference Field | Expected Kind | Subject Rule | Create | Update |
-|---|---|---|---|---|
-| Frame imageAssetId | image | frame ID | 거부 | Closure 검사 |
-| AudioCue assetId | audio | cue ID | 거부 | Closure 검사 |
-| Shot propIds | prop | 기존 Prop 계약 | 거부 | Closure 검사 |
-| Continuity before | character/location/prop | 기존 계약 | 거부 | Closure 검사 |
-| Continuity after | character/location/prop | 기존 계약 | 거부 | Closure 검사 |
-| Generation resultAssetIds | 현재 생성 계약 | 기존 계약 | 거부 | Closure 검사 |
+Initial Create 순서는 `ProjectSchema와 Asset-free 계약 → Store initialize → transaction ID → root lock 획득 → final target 재검사 → staging·journal → Current·Version 0 → final write.lock → final 게시 → 완전성 검증 → journal 정리 → final lock 제거 → root lock 제거`다. Final lock은 root lock과 Project·transaction·host·PID가 같다. 두 lock은 제거 직전에 metadata와 `dev`·`ino`를 다시 검사하며 root lock을 마지막에 제거한다.
 
-Generation Result는 기존 정상 데이터에 Prop 결과가 있으므로 현재 Asset kind 다섯 가지(`image`, `audio`, `character`, `location`, `prop`)의 존재를 허용한다. Frame과 Audio만으로 범위를 좁히지 않았다. 모든 참조는 entity ID, 실제 field 경로, Asset ID, 허용 kind와 필요한 subject를 보존한다. 오류는 `ASSET_REFERENCE_NOT_FOUND`, `ASSET_REFERENCE_KIND_MISMATCH`, `ASSET_REFERENCE_SUBJECT_MISMATCH`이며 메시지에 Project·Entity·Field·Asset·Expected/Actual Kind·Expected/Actual Subject를 담는다.
+Startup recovery는 다음 상태를 구분한다.
 
-## 4. Initial Create Closure
+- dead owner, journal 없음, final 없음: pre-journal crash로 root lock만 제거한다.
+- dead owner, matching journal: 기존 create transaction 복구를 끝낸 뒤 root lock을 제거한다.
+- dead owner, 완전한 final: journal 유무와 관계없이 Current·Version 0과 final lock을 확인해 Project를 보존하고 남은 lock을 제거한다.
+- live same-host owner: Active Create로 유지한다.
+- 다른 Host, malformed metadata, root·journal·final transaction 불일치: 자동 삭제하지 않고 root lock과 관련 자료를 보존하며 해당 Project를 차단한다.
 
-`ProjectSchema.parse → Asset metadata·6개 FK 수집 → Asset-free assertion → parseProject → Store initialize·disk` 순서로 처리한다. `propIds`, Frame, Audio, Generation Result, Continuity Before/After 가운데 하나라도 참조하거나 Asset metadata가 하나라도 있으면 `UNSUPPORTED_INITIAL_PROJECT_ASSETS`로 거부한다.
+## 4. Concurrent Create
 
-거부 시 `dataRoot`, final Project directory, Create journal·staging, version 0, Asset, lock, Recovery Block이 생기지 않는다. 정상 create staging은 asset·transaction 디렉터리가 비어 있고 Current와 Version 0이 같은 Asset-free revision 0인지 Create-owned lock 아래에서 확인한다.
+테스트는 두 `ProjectStore` instance와 Promise barrier/fault point로 순서를 고정한다. sleep과 기존 사용자 서버 상태에 의존하지 않는다.
 
-## 5. Update Closure
+| 시나리오 | Create A | Create B | Final Revision | Version 0 | Root Lock | Recovery Block |
+|---|---|---|---:|---:|---:|---:|
+| A Root Lock 보유 중 B | 성공 | `PROJECT_BUSY` | 0 | 1 | 0 | 0 |
+| A 완료 후 B 재시도 | 기존 유지 | `PROJECT_ALREADY_EXISTS` | 0 | 1 | 0 | 0 |
+| A/B 동시 시작 | 1건 성공 | Busy 또는 Already Exists | 0 | 1 | 0 | 0 |
+| A Root Lock 후 Crash | Startup Recovery | 재시도 가능 | 0/없음 | 0/1 | 0 | 0 |
+| A Final 게시 후 Crash | Commit Recovery | 기존 Project 확인 | 0 | 1 | 0 | 0 |
+| Root Lock·Journal 불일치 | 차단 | 차단 | 기존 유지 | 기존 유지 | 보존 | 1 |
+| 서로 다른 Project | 성공 | 성공 | 각각 0 | 각각 1 | 0 | 0 |
 
-Update는 lock 내부에서 `Current 검증 → Transform → ProjectSchema shape → Asset catalog transition → Asset reference closure → parseProject → AssetWrite preflight → journal` 순서로 진행한다. Closure 기준은 기존 Asset과 같은 revision에서 추가한 신규 Asset을 합친 Next catalog다.
+HTTP 이중 Import는 정확히 한 요청이 201, 경쟁 요청이 409이고 같은 Project 디렉터리·Version 0·Source Snapshot을 하나만 남긴다. 정상 경쟁에서는 loser staging, raw `EEXIST`·`ENOTEMPTY`, recovery block이 남지 않는다.
 
-- 기존 Asset 참조와 신규 Asset metadata·write·참조의 같은 revision 등록을 허용한다.
-- Missing Asset, Wrong Kind, Frame/Audio Subject 불일치는 journal 전에 거부한다.
-- 임의 Store transform도 중앙 closure를 건너뛸 수 없다.
-- 실패 시 Current·version·Asset을 바꾸지 않고 transaction·Recovery Block을 만들지 않으며, 정상 소유 lock을 해제한다.
-- 기존 Asset catalog append-only, 동일 ID의 전체 metadata 불변, 신규 metadata와 실제 write 1:1 계약을 유지한다.
+## 5. Project-scoped Active Create
 
-## 6. Lock Acquisition
+초기화가 같은 Host의 살아 있는 root lock을 발견하면 owner를 죽이거나 lock을 지우지 않고 `activeCreates()`에 기록한다. 해당 Project의 Create와 Update는 `PROJECT_BUSY`다. Root·transaction·final lock이 사라지거나 create가 끝나면 다음 대상 작업에서 상태를 새로 읽고 Active Create를 제거한다.
 
-Lock은 `O_CREAT | O_EXCL | O_NOFOLLOW`로 만들고 열린 handle에서 `dev/ino`를 얻는다. 실제 exclusive write가 `EEXIST`를 반환한 경우 이후 경로가 사라져도 `PROJECT_BUSY`이며 HTTP는 409다. 이 경로에서 경쟁 lock을 삭제하지 않는다.
+관련 없는 Project의 목록, 읽기, Update, Initial Create는 계속된다. 살아 있는 정상 작업 때문에 전역 recovery block을 만들지 않는다. 일반 Update의 live `write.lock`은 Initial Create root lock과 구분하며 기존의 전역 초기화 안전 계약을 유지한다.
 
-호출별로 `createdByThisCall`, lock metadata, file identity를 추적한다. 작성·fsync·close·metadata 검증·directory sync 중 실패하면 이 호출이 만든 동일 metadata와 동일 `dev/ino`의 파일만 지운다. 소유권이나 identity를 증명할 수 없거나 정리에 실패하면 lock을 임의 삭제하지 않고 `STORE_LOCK_CLEANUP_REQUIRED`와 영속 Recovery Block으로 변경을 차단한다. 일반 획득 실패는 원인 코드가 포함된 `STORE_LOCK_ACQUISITION_FAILED`로 반환한다.
+## 6. Generation Record
 
-## 7. Create–Update Serialization
+`generationRecords`는 감사 가능한 생성 이력이다. Update 순서는 `Project shape → Asset transition → Generation Record transition → Asset reference closure → full Project validation → write preflight → journal`이다.
 
-Create는 Current와 Version 0을 staging에 쓴 뒤 staging 내부에 Create-owned lock을 만든다. staging 전체를 lock 아래 검증하고, lock을 포함한 디렉터리를 final 경로로 원자 게시한다. 게시 뒤 final Current·Version·Asset-free 상태와 lock metadata·identity를 다시 확인한다.
+| 변경 | 허용 여부 | 오류 |
+|---|---|---|
+| 기존 Record 유지 | 허용 | 없음 |
+| 기존 Record 삭제 | 거부 | `GENERATION_RECORD_REMOVAL_FORBIDDEN` |
+| 기존 Record Metadata 변경 | 거부 | `GENERATION_RECORD_IMMUTABLE` |
+| 기존 Record 순서 변경 | 거부 | `GENERATION_RECORD_ORDER_IMMUTABLE` |
+| 신규 Record 뒤에 추가 | 허용 | 없음 |
+| 없는 Shot 참조 | 거부 | `GENERATION_RECORD_SHOT_NOT_FOUND` |
+| 없는 Asset 참조 | 거부 | `ASSET_REFERENCE_NOT_FOUND` |
+| 같은 Revision 신규 Asset 참조 | 허용 | 없음 |
 
-그 뒤 Create journal을 정리하고 lock을 마지막에 제거한 후 revision 0을 반환한다. Final 공개부터 이 시점까지 다른 Update는 `PROJECT_BUSY`이고 transform, version 1, update transaction, Recovery Block을 만들지 않는다. 완료 후 같은 요청은 revision 1로 저장된다. 초기화 중 live Create를 본 Store의 `PROJECT_BUSY` promise는 캐시에서 해제되어 같은 인스턴스가 재시도할 수 있다.
+ID 중복과 Shot 존재는 공통 Validator에서도 검사한다. Image·Speech 결과 적용은 신규 Record를 추가하고 Proposal·Source Update·Asset replacement는 과거 Record를 그대로 보존한다. JSON round-trip과 storage recovery 뒤에도 순서와 metadata가 유지된다.
 
-Startup Recovery는 journal v3의 dead owned final lock과 완전한 Asset-free snapshot을 증명하면 create commit을 완료하고 journal과 lock을 정리한다. 살아 있는 owner는 유지해 Busy로 처리한다. lock 없음, journal·lock 소유자 불일치, metadata·identity·snapshot 불일치는 자동 정리하지 않고 복구 필요 상태로 둔다. Legacy journal v2는 기존의 보수적 복구를 유지한다.
+## 7. HTTP Semantics
 
-## 8. Concurrency Matrix
+응답은 기존 `{ error: { code, message, issues } }`를 유지하면서 `category`, `retryable`, `operatorActionRequired`를 추가한다.
 
-| 시나리오 | Create 상태 | Update 결과 | Final Revision | Version 수 | Recovery Block |
-|---|---|---|---:|---:|---:|
-| Create 게시 전 | Staging | PROJECT_NOT_FOUND 또는 BUSY | 0/없음 | 0/1 | 0 |
-| Final 게시 후 검증 중 | Create Lock 보유 | PROJECT_BUSY | 0 | 1 | 0 |
-| Create Journal Cleanup 중 | Create Lock 보유 | PROJECT_BUSY | 0 | 1 | 0 |
-| Create 완료 후 | Lock 제거 | Update 성공 | 1 | 2 | 0 |
-| Create 게시 후 Crash | Dead Create Lock | Startup Recovery | 0 | 1 | 0 |
-| Lock·Journal 불일치 | Recovery Required | Update 차단 | 기존 유지 | 기존 유지 | 1 |
+| 분류 | HTTP | 주요 Code | 자동 재시도 |
+|---|---:|---|---|
+| Validation | 400 | `ASSET_REFERENCE_*`, `GENERATION_RECORD_*` | 아니오 |
+| Not Found | 404 | `PROJECT_NOT_FOUND` 등 | 아니오 |
+| Conflict | 409 | `PROJECT_BUSY`, `REVISION_CONFLICT`, `PROJECT_ALREADY_EXISTS` | 조건부 |
+| Storage Locked | 423 | `STORE_RECOVERY_*`, `STORE_LOCK_CLEANUP_REQUIRED` | 아니오 |
+| Unavailable | 503 | `STORE_LOCK_ACQUISITION_FAILED` | 가능 |
+| Internal | 500 | Unknown Error | 아니오 |
 
-테스트는 두 `ProjectStore` 인스턴스와 Promise barrier/fault point로 순서를 고정했다. 시간 지연이나 기존 사용자 서버 상태에는 의존하지 않는다.
+Web은 Import 요청이 진행되는 동안 버튼을 비활성화하고 `IMPORTING`을 표시해 이중 제출을 막는다. 423에서는 **STORAGE RECOVERY REQUIRED** 배너를 유지하고 해당 Project의 mutation control을 잠그며 자동 재시도하지 않는다. 503은 **STORAGE TEMPORARILY UNAVAILABLE**로 구분한다.
 
-## 9. PRJ-007
+## 8. PRJ-007
 
 - Scene 12, Segment 32, screenplay Source Unit 79, Panel Turn 16, Text Placement 25를 유지한다.
 - 원문 문자열과 총 Timeline 1,500,000ms를 유지한다.
-- UNIT-045의 849,000–851,000ms J-cut, `unit045-audio`, PCM16 mono 48,000Hz 2,000ms를 유지한다.
+- `UNIT-045`의 849,000–851,000ms J-cut, `unit045-audio`, PCM16 mono 48,000Hz 2,000ms를 유지한다.
 - Safe Audio HTTP 200과 RIFF bytes를 확인했다.
-- 기존 Asset catalog append-only, Information Gate와 JSON round-trip을 확인했다.
+- `SEG-024` Text의 1,088,000ms, 1,108,000ms, 1,148,000ms 공개 Gate를 유지한다.
+- 기존 Asset catalog와 Generation Record의 append-only, JSON 재열기, recovery 뒤 이력 불변성을 확인했다.
 
-PRJ-007은 회귀 기준이며 Asset 정책과 저장 직렬화는 특정 프로젝트 ID나 절대경로에 고정하지 않은 범용 계약이다.
+PRJ-007은 실제 제작 회귀 기준이다. Root Create Lock, Generation Record, HTTP 정책은 Project ID·절대경로·장면 수·분량에 고정하지 않은 범용 계약이다.
 
-## 10. 테스트 결과
+## 9. 테스트 결과
 
 | 명령 또는 검사 | 결과 | 범위 |
 |---|---|---|
-| `npm run schemas:write` | 성공 | Zod 기준 JSON Schema 재생성, 변경 없음 |
+| 정확한 계약 이름 검사 | 성공 | 지정 109개 존재, 누락 0, 중복 0 |
 | `npm run typecheck` | 성공 | Domain·Server·테스트 TypeScript |
 | `npm run typecheck:web` | 성공 | Web TypeScript |
-| `npm test` | 성공 | 27개 파일, 569개 테스트 |
+| `npm test` | 성공 | 28개 파일, 666개 테스트 |
 | `npm run schemas:check` | 성공 | Zod와 생성 JSON Schema 일치 |
 | `npm run build:web` | 성공 | Web production build |
-| `npm run check` | 성공 | 두 타입 검사, 569개 테스트, schema drift, web build 통합 실행 |
+| `npm run check` | 성공 | 두 타입 검사, 666개 테스트, schema drift, web build 통합 실행 |
 | `git diff --check` | 성공 | 공백 오류 없음 |
-| 임시 Fastify runtime | 성공 | `/` 200, status 200, asset-free import 201, initial Prop 거부, dangling/wrong-kind 거부, valid Prop revision 1, 실제 EEXIST 409, active Create Update 409, 완료 후 200, Recovery Block 0, Safe Audio 200 |
+| 임시 44317 Runtime | 성공 | `/` 200, `/api/status` 200, asset-free Import 201, 중복 Import 409와 구조화 Conflict body |
+| 임시 Runtime 정리 | 성공 | PID 84391 종료, 임시 data/request/config/응답 파일 제거, 44317 listener 없음 |
+| 기존 사용자 서버 보존 | 성공 | PID 44386, `127.0.0.1:4317` listener 유지 |
 
-신규 파일의 78개 테스트와 기존에 있던 12개 테스트를 합쳐 명세의 정확한 이름 90개가 각각 한 번 존재한다. 그룹별 수는 A 8, B 10, C 15, D 4, E 13, F 10, G 10, H 4, I 7, J 9다. 기존 491개에 신규 78개를 더한 최종 수는 569개다.
+기존 569개에 신규 97개를 더한 최종 수는 666개다. 지정된 정확한 이름 109개는 기존 12개와 신규 97개로 구성되며 각각 한 번 존재한다. Root lock 획득·정리, 두 Store concurrent create, crash recovery, Active Create 범위, Generation Record 전이, HTTP/UI 의미, 기존 storage와 PRJ-007 회귀를 함께 실행한다.
 
-완료 조건 57개는 다음 증거군으로 확인했다.
+## 10. CI
 
-| 완료 조건 | 결과 | 증거 |
-|---|---|---|
-| 1–17 Asset reference·Create/Update closure | 충족 | 중앙 6필드 collector, 공통 validator, 저장 전 오류·무부작용 테스트 |
-| 18–23 Lock 획득·정리·HTTP | 충족 | 실제 EEXIST, 소멸 경쟁, sync/verify 실패, identity 변경, 409 테스트 |
-| 24–39 Create lock·직렬화·복구·재초기화 | 충족 | 네 barrier, two-store 경쟁, dead/live/mismatch recovery 테스트 |
-| 40–46 기존 저장·PRJ-007 회귀 | 충족 | update concurrency, immutability, journal v2/v3, UNIT-045·Gate·round-trip |
-| 47–55 품질 게이트·버전·운영 제약 | 충족 | 27/569, schema 1.5.0, lock 2, journal 3, schema/build, 사용자 서버 보존, SDK 미추가 |
-| 56 master 미병합 | 충족 | feature branch만 사용 |
-| 57 세 저장 경계 완결 | 충족 | Asset closure, owned cleanup, Create–Update serialization 모두 구현·검증 |
-
-## 11. CI
-
-- 구현 Push HEAD: `1fb4e00b90326a0dcac037b16834a5b0afb820ae`
-- Workflow Run ID: [`34038096081`](https://github.com/zzocojoa/storyboard-generator/actions/runs/34038096081)
-- Run Head SHA: `1fb4e00b90326a0dcac037b16834a5b0afb820ae`
+- 구현·상태 문서 Push HEAD: `b692ae17a18d0b60e75f107d0d8aa4ebdfa9c1ba`
+- Workflow Run ID: [`34041424584`](https://github.com/zzocojoa/storyboard-generator/actions/runs/34041424584)
+- Run Head SHA: `b692ae17a18d0b60e75f107d0d8aa4ebdfa9c1ba`
 - Result: `success`
 - 환경과 명령: Ubuntu 24.04, Node.js 24, `npm ci`, `npm run check`
-- CI 검사량: 27개 Test File, 569개 Test
+- CI 검사량: 28개 Test File, 666개 Test
 
-구현과 같은 SHA의 CI 결과다. 이 보고서를 포함한 문서 commit을 push한 뒤 최신 종료 HEAD의 CI도 별도로 확인한다. 이전 Run `34035122120`의 성공은 이번 변경의 완료 근거로 사용하지 않았다.
+구현과 상태 문서가 포함된 같은 SHA의 CI 결과다. 이 보고서 commit을 push한 뒤 보고서 포함 종료 HEAD의 CI도 최종 응답에서 exact SHA·Run ID·결과로 확인한다.
 
-## 12. 남은 위험
+## 11. 남은 위험
 
-- Lock 보장은 macOS·Ubuntu 로컬 파일 시스템에서 협력하는 `ProjectStore` writer를 대상으로 한다. SMB·NFS의 분산 lock 의미와 lock을 무시하는 외부 writer까지 보장하지 않는다.
-- 명시된 6개 FK를 중앙 정책으로 관리한다. 향후 Project Schema에 새 Asset FK를 추가할 때 정책·필드 목록·계약 테스트를 함께 갱신해야 한다.
+- Lock 보장은 macOS·Ubuntu 로컬 파일 시스템에서 협력하는 `ProjectStore` writer를 대상으로 한다. SMB·NFS의 분산 lock 의미와 lock을 무시하는 외부 writer는 보장하지 않는다.
+- 다른 Host의 live 여부는 안전하게 판정하지 않으므로 자동 복구하지 않고 해당 Project를 차단한다. 사람이 owner와 저장 상태를 확인해야 한다.
+- Generation Record metadata 비교는 현재 1.5.0 Schema로 parse된 정규 객체를 기준으로 한다. 향후 필드를 추가하면 Migration과 전이 계약을 함께 갱신해야 한다.
 - Asset-bearing Initial Create, 자동 대기 queue, Asset garbage collection은 구현하지 않았다.
 - 지원 오디오는 PCM WAV다. MP3, AIFF, 압축 WAV와 mastering 품질 resampler는 지원하지 않는다.
 - 정보 ID 검사는 bitmap의 간접 암시를 판정하지 못한다. 전체 32개 Segment의 연출, 자막 가독성, 음성 호흡과 제작 가능성은 사람 검토가 필요하다.
