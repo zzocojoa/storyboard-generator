@@ -106,7 +106,14 @@ Lock 아래에서 읽어 검증한 current로 previous JSON과 SHA-256을 먼저
 
 ## 10. CI
 
-Feature Branch push 뒤 현재 종료 HEAD와 같은 SHA의 GitHub Actions를 확인한다. Workflow는 Ubuntu 24.04, Node.js 24, `npm ci`, `npm run check`를 사용한다. 이전 기준 Run `34030959878`의 성공은 이번 변경의 완료 근거로 사용하지 않는다. Push HEAD, 새 Run ID, Run Head SHA와 conclusion은 최종 완료 보고에 기록한다.
+- 구현 Push HEAD: `e102e2ad4679415d23f50ef70e20f786c1fa95df`
+- Workflow Run ID: [`34035027040`](https://github.com/zzocojoa/storyboard-generator/actions/runs/34035027040)
+- Run Head SHA: `e102e2ad4679415d23f50ef70e20f786c1fa95df`
+- Result: `success`
+- 환경과 명령: Ubuntu 24.04, Node.js 24, `npm ci`, `npm run check`
+- CI 검사량: 26개 Test File, 491개 Test
+
+구현 commit과 같은 SHA의 CI 결과다. feature branch에만 push했으며 master에는 병합하지 않았다. 이전 기준 Run `34030959878`의 성공은 이번 변경의 완료 근거로 사용하지 않았다.
 
 ## 11. 남은 위험
 
