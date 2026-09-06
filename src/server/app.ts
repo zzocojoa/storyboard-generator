@@ -72,18 +72,48 @@ async function queueRequest(kind: CodexRequestKind, projectId: string, targetId:
   return requests.create(kind, projectId, targetId, codexRequestBasis(project, kind, targetId), new Date().toISOString());
 }
 
-function statusCode(error: Error): number {
-  const code: string = 'code' in error && typeof error.code === 'string' ? error.code : error.name;
-  if (code.endsWith('_NOT_FOUND')) return 404;
-  if (['REVISION_CONFLICT', 'PROJECT_ALREADY_EXISTS', 'PROJECT_BUSY', 'PROJECT_VERSION_EXISTS'].includes(code)) return 409;
-  if (error instanceof ZodError || code.startsWith('FST_') || code.startsWith('INVALID_') || code.startsWith('MISSING_') || code.startsWith('DUPLICATE_') || code.startsWith('UNSAFE_') || code.startsWith('UNKNOWN_') || code.startsWith('FORBIDDEN_') || code.startsWith('TEXT_') || code.startsWith('AUDIO_') || code.startsWith('ASSET_') || code.startsWith('UNSUPPORTED_') || code.endsWith('_LOCKED') || code.endsWith('_REQUIRED') || code.endsWith('_BLOCKED') || code.endsWith('_DELETED')) return 400;
-  return 500;
+export type HttpErrorCategory = 'validation' | 'not-found' | 'conflict' | 'locked' | 'unavailable' | 'internal';
+export type HttpErrorPolicy = { status: number; category: HttpErrorCategory; retryable: boolean; operatorActionRequired: boolean };
+export type HttpErrorBody = { error: { code: string; message: string; issues: unknown[]; category: HttpErrorCategory; retryable: boolean; operatorActionRequired: boolean } };
+
+const conflictPolicies: ReadonlyMap<string, boolean> = new Map<string, boolean>([
+  ['PROJECT_BUSY', true], ['REVISION_CONFLICT', true], ['PROJECT_ALREADY_EXISTS', false], ['PROJECT_VERSION_EXISTS', false],
+]);
+const lockedCodes: ReadonlySet<string> = new Set<string>([
+  'STORE_RECOVERY_BLOCKED', 'STORE_RECOVERY_REQUIRED', 'STORE_CREATE_RECOVERY_REQUIRED', 'STORE_LOCK_CLEANUP_REQUIRED',
+  'STORE_CONCURRENT_MODIFICATION', 'STORE_PATH_UNSAFE', 'TRANSACTION_JOURNAL_PATH_UNSAFE',
+]);
+
+function isValidationError(error: Error, code: string): boolean {
+  return error instanceof ZodError || code.startsWith('FST_') || code.startsWith('INVALID_') || code.startsWith('MISSING_')
+    || code.startsWith('DUPLICATE_') || code.startsWith('UNSAFE_') || code.startsWith('UNKNOWN_') || code.startsWith('FORBIDDEN_')
+    || code.startsWith('TEXT_') || code.startsWith('AUDIO_') || code.startsWith('ASSET_') || code.startsWith('GENERATION_RECORD_')
+    || code.startsWith('UNSUPPORTED_') || code.endsWith('_LOCKED') || code.endsWith('_REQUIRED') || code.endsWith('_BLOCKED')
+    || code.endsWith('_DELETED');
 }
 
-function errorBody(error: Error): { error: { code: string; message: string; issues: unknown[] } } {
+/** 서버 오류 코드를 사용자 입력, 충돌, 복구 잠금과 일시 장애로 명시적으로 분류한다. */
+export function httpErrorPolicy(error: Error): HttpErrorPolicy {
+  const code: string = 'code' in error && typeof error.code === 'string' ? error.code : error.name;
+  if (lockedCodes.has(code) || code.startsWith('STORE_RECOVERY_') || code.startsWith('STORE_CREATE_RECOVERY_')) {
+    return { status: 423, category: 'locked', retryable: false, operatorActionRequired: true };
+  }
+  if (code === 'STORE_LOCK_ACQUISITION_FAILED') return { status: 503, category: 'unavailable', retryable: true, operatorActionRequired: false };
+  const conflictRetryable: boolean | undefined = conflictPolicies.get(code);
+  if (conflictRetryable !== undefined) return { status: 409, category: 'conflict', retryable: conflictRetryable, operatorActionRequired: false };
+  if (code !== 'ASSET_REFERENCE_NOT_FOUND' && code.endsWith('_NOT_FOUND')) {
+    return { status: 404, category: 'not-found', retryable: false, operatorActionRequired: false };
+  }
+  if (isValidationError(error, code)) return { status: 400, category: 'validation', retryable: false, operatorActionRequired: false };
+  return { status: 500, category: 'internal', retryable: false, operatorActionRequired: false };
+}
+
+export function errorBody(error: Error): HttpErrorBody {
   const code: string = 'code' in error && typeof error.code === 'string' ? error.code : error.name;
   const issues: unknown[] = error instanceof ZodError ? error.issues : 'issues' in error && Array.isArray(error.issues) ? error.issues : [];
-  return { error: { code, message: error.message, issues } };
+  const policy: HttpErrorPolicy = httpErrorPolicy(error);
+  return { error: { code, message: error.message, issues, category: policy.category, retryable: policy.retryable,
+    operatorActionRequired: policy.operatorActionRequired } };
 }
 
 type AudioUpload = { expectedRevision: number; originalFileName: string; declaredMimeType: string; bytes: Buffer };
@@ -129,7 +159,7 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
   await app.register(fastifyMultipart, { limits: { fileSize: MAX_AUDIO_BYTES, files: 1, fields: 1, parts: 2 } });
 
   app.setErrorHandler((error: Error, _request: FastifyRequest, reply: FastifyReply): void => {
-    reply.status(statusCode(error)).send(errorBody(error));
+    reply.status(httpErrorPolicy(error).status).send(errorBody(error));
   });
 
   app.get('/api/status', async (): Promise<object> => {

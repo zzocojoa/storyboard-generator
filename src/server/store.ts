@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { assertAssetFreeInitialProject, assertAssetReferenceClosure } from '../domain/asset-references.js';
 import { contractError } from '../domain/errors.js';
 import { reviewFrameOutput } from '../domain/frame-output.js';
+import { assertGenerationRecordTransition } from '../domain/generation-records.js';
 import { inspectAudioFileBytes, verifyStoredAsset } from '../domain/media-inspection.js';
 import type { InspectedAudioFile } from '../domain/media-inspection.js';
 import { reviewAudioPlaybackAt, reviewTextPlaybackAt } from '../domain/playback.js';
@@ -37,7 +38,10 @@ export type AudioAssetRecoverySource = { content: Buffer; asset: Asset; inspecti
 export type StorageRecoveryEvent = {
   projectId: string; transactionId: string;
   outcome: 'committed' | 'rolled-back' | 'restored-previous' | 'staging-removed' | 'stale-lock-removed'
-    | 'create-committed' | 'create-rolled-back' | 'create-superseded';
+    | 'create-committed' | 'create-rolled-back' | 'create-superseded' | 'root-create-lock-removed';
+};
+export type ActiveCreateState = {
+  projectId: string; transactionId: string; host: string; pid: number; detectedAt: string;
 };
 export type StorageRecoveryBlock = {
   version: 1; projectId: string; directoryName: string; transactionId: string; code: string; message: string; detectedAt: string;
@@ -46,9 +50,11 @@ export type StorageFaultPoint = 'after-update-lock-acquired' | 'after-update-cur
   | 'before-update-journal-create' | 'after-update-preflight' | 'after-update-journal-prepared' | 'after-update-asset-linked'
   | 'after-update-version-linked' | 'after-update-current-published' | 'before-update-cleanup'
   | 'after-create-journal-prepared' | 'after-create-version-zero-written' | 'after-create-current-written'
+  | 'after-root-create-lock-acquired' | 'after-create-target-rechecked' | 'after-create-staging-complete'
   | 'before-create-directory-publish' | 'after-create-directory-publish' | 'before-create-cleanup'
   | 'before-lock-write' | 'after-lock-file-created' | 'after-lock-write-eexist' | 'before-lock-directory-sync'
-  | 'after-lock-directory-sync' | 'after-create-lock-written' | 'before-create-journal-cleanup' | 'before-create-lock-removal';
+  | 'after-lock-directory-sync' | 'after-create-lock-written' | 'before-create-journal-cleanup' | 'before-create-lock-removal'
+  | 'before-root-create-lock-removal';
 export type StorageFaultInjector = { ownerPid: number; trigger(point: StorageFaultPoint): void | Promise<void> };
 
 export class SimulatedStorageCrash extends Error {
@@ -62,6 +68,7 @@ export class SimulatedStorageCrash extends Error {
 export const STORAGE_TRANSACTION_JOURNAL_VERSION: number = 3;
 const TRANSACTIONS_DIRECTORY: string = '.transactions';
 const CREATE_TRANSACTIONS_DIRECTORY: string = '.create-transactions';
+const CREATE_LOCKS_DIRECTORY: string = '.create-locks';
 const RECOVERY_BLOCKS_DIRECTORY: string = '.recovery-blocks';
 const TRANSACTION_JOURNAL: string = 'journal.json';
 const TRANSACTION_PHASE_JOURNAL: string = 'journal.phase.json';
@@ -121,7 +128,8 @@ const StorageRecoveryBlockSchema = z.strictObject({
   transactionId: z.string().min(1), code: z.string().min(1), message: z.string().min(1), detectedAt: z.iso.datetime(),
 });
 
-function projectKey(projectId: string): string { return sha256Text(projectId); }
+export function projectStoreKey(projectId: string): string { return sha256Text(projectId); }
+function projectKey(projectId: string): string { return projectStoreKey(projectId); }
 function transactionVersionFileName(revision: number): string { return `${String(revision).padStart(6, '0')}.json`; }
 function recoveryRequired(message: string): never { throw contractError('STORE_RECOVERY_REQUIRED', message, []); }
 function createRecoveryRequired(message: string, cause: unknown): never {
@@ -233,6 +241,7 @@ export class ProjectStore {
   readonly #faultInjector: StorageFaultInjector | null;
   readonly #recoveryEvents: StorageRecoveryEvent[] = [];
   readonly #recoveryBlocks: Map<string, StorageRecoveryBlock> = new Map<string, StorageRecoveryBlock>();
+  readonly #activeCreates: Map<string, ActiveCreateState> = new Map<string, ActiveCreateState>();
   #initialization: Promise<void> | null = null;
 
   constructor(root: string, faultInjector?: StorageFaultInjector) {
@@ -248,6 +257,8 @@ export class ProjectStore {
   #transactionPath(projectId: string, transactionId: string): string { return join(this.#transactionsPath(projectId), transactionId); }
   #createTransactionsPath(): string { return this.#fs.path(CREATE_TRANSACTIONS_DIRECTORY); }
   #createTransactionPath(transactionId: string): string { return join(this.#createTransactionsPath(), transactionId); }
+  #createLocksPath(): string { return this.#fs.path(CREATE_LOCKS_DIRECTORY); }
+  #rootCreateLockPath(projectId: string): string { return join(this.#createLocksPath(), `${projectKey(projectId)}.lock`); }
   #recoveryBlocksPath(): string { return this.#fs.path(RECOVERY_BLOCKS_DIRECTORY); }
   #recoveryBlockPath(directoryName: string): string { return join(this.#recoveryBlocksPath(), `${directoryName}.json`); }
   #owner(transactionId: string): z.infer<typeof TransactionOwnerSchema> {
@@ -511,6 +522,43 @@ export class ProjectStore {
     if (projectKey(metadata.projectId) !== directoryName) recoveryRequired(`Project lock과 저장 디렉터리가 다릅니다. projectId=${metadata.projectId}`);
     if (metadata.host !== hostname()) recoveryRequired(`다른 Host의 Project lock은 자동 삭제할 수 없습니다. projectId=${metadata.projectId}`);
     return { metadata, path, identity: await this.#fs.identity(path) };
+  }
+
+  async #readRootCreateLock(entryName: string): Promise<RecoveryLock | null> {
+    if (!/^[a-f0-9]{64}\.lock$/.test(entryName)) {
+      createRecoveryRequired(`Root Create lock 파일 이름이 올바르지 않습니다. entry=${entryName}`, 'invalid lock name');
+    }
+    const path: string = join(this.#createLocksPath(), entryName);
+    const kind: SafePathKind = await this.#fs.kind(path);
+    if (kind === 'missing') return null;
+    if (kind !== 'file') createRecoveryRequired(`Root Create lock이 정규 파일이 아닙니다. entry=${entryName}`, 'invalid lock kind');
+    let metadata: StoreLock;
+    try { metadata = StoreLockSchema.parse(JSON.parse(await this.#fs.readText(path)) as unknown); }
+    catch (error: unknown) {
+      if (await this.#fs.kind(path) === 'missing') return null;
+      createRecoveryRequired(`Root Create lock을 해석할 수 없습니다. entry=${entryName}`, error);
+    }
+    if (`${projectKey(metadata.projectId)}.lock` !== entryName) {
+      createRecoveryRequired(`Root Create lock과 Project ID가 다릅니다. entry=${entryName}, projectId=${metadata.projectId}`, 'project key mismatch');
+    }
+    try { return { metadata, path, identity: await this.#fs.identity(path) }; }
+    catch (error: unknown) {
+      if (await this.#fs.kind(path) === 'missing') return null;
+      createRecoveryRequired(`Root Create lock identity를 확인할 수 없습니다. entry=${entryName}`, error);
+    }
+  }
+
+  async #rootCreateLock(projectId: string): Promise<RecoveryLock | null> {
+    const path: string = this.#rootCreateLockPath(projectId);
+    if (await this.#fs.kind(path) === 'missing') return null;
+    return this.#readRootCreateLock(`${projectKey(projectId)}.lock`);
+  }
+
+  #rememberActiveCreate(lock: RecoveryLock): void {
+    this.#activeCreates.set(projectKey(lock.metadata.projectId), {
+      projectId: lock.metadata.projectId, transactionId: lock.metadata.transactionId, host: lock.metadata.host,
+      pid: lock.metadata.pid, detectedAt: new Date().toISOString(),
+    });
   }
 
   async #acquireProjectLock(projectId: string, transactionId: string): Promise<RecoveryLock> {
@@ -798,6 +846,7 @@ export class ProjectStore {
 
   async #recoverCreateTransaction(transactionId: string): Promise<string | null> {
     const transactionPath: string = this.#createTransactionPath(transactionId);
+    if (await this.#fs.kind(transactionPath) === 'missing') return null;
     if (await this.#fs.kind(join(transactionPath, TRANSACTION_JOURNAL)) === 'missing'
       && await this.#fs.kind(join(transactionPath, TRANSACTION_PHASE_JOURNAL)) === 'missing') {
       if ((await this.#fs.entries(transactionPath)).length !== 0) recoveryRequired(`journal 없는 Create staging을 삭제할 수 없습니다. transactionId=${transactionId}`);
@@ -857,6 +906,83 @@ export class ProjectStore {
     return journal.projectId;
   }
 
+  async #createJournalsForProject(projectId: string): Promise<CreateJournal[]> {
+    const journals: CreateJournal[] = [];
+    for (const entry of await this.#fs.entries(this.#createTransactionsPath())) {
+      if (!entry.isDirectory()) recoveryRequired(`Create transaction 목록에 디렉터리가 아닌 항목이 있습니다. entry=${entry.name}`);
+      const transactionPath: string = this.#createTransactionPath(entry.name);
+      const hasJournal: boolean = await this.#fs.kind(join(transactionPath, TRANSACTION_JOURNAL)) === 'file'
+        || await this.#fs.kind(join(transactionPath, TRANSACTION_PHASE_JOURNAL)) === 'file';
+      if (!hasJournal) continue;
+      const journal: CreateJournal = await this.#readCreateJournal(entry.name);
+      if (journal.projectId === projectId) journals.push(journal);
+    }
+    return journals;
+  }
+
+  async #recoverRootCreateLock(lock: RecoveryLock): Promise<void> {
+    const { projectId, transactionId } = lock.metadata;
+    const matchingPath: string = this.#createTransactionPath(transactionId);
+    const matchingExists: boolean = await this.#fs.kind(matchingPath) === 'directory';
+    const projectJournals: CreateJournal[] = await this.#createJournalsForProject(projectId);
+    const matchingJournal: CreateJournal | undefined = projectJournals.find((journal: CreateJournal): boolean => journal.transactionId === transactionId);
+    if (matchingExists && matchingJournal === undefined) {
+      createRecoveryRequired(`Root Create lock과 같은 Transaction의 journal을 확인할 수 없습니다. projectId=${projectId}, transactionId=${transactionId}`, 'journal mismatch');
+    }
+    if (matchingJournal === undefined && projectJournals.length > 0) {
+      createRecoveryRequired(`Root Create lock과 Create journal의 Transaction ID가 다릅니다. projectId=${projectId}, rootTransactionId=${transactionId}, journalTransactionIds=${projectJournals.map((journal: CreateJournal): string => journal.transactionId).join(',')}`, 'transaction mismatch');
+    }
+    if (matchingJournal !== undefined) {
+      if (matchingJournal.owner.host !== lock.metadata.host || matchingJournal.owner.pid !== lock.metadata.pid
+        || matchingJournal.owner.transactionId !== lock.metadata.transactionId) {
+        createRecoveryRequired(`Root Create lock과 Create journal 소유권이 다릅니다. projectId=${projectId}, transactionId=${transactionId}`, 'owner mismatch');
+      }
+      await this.#recoverCreateTransaction(transactionId);
+    } else {
+      const finalKind: SafePathKind = await this.#fs.kind(this.#directory(projectId));
+      if (finalKind === 'directory') {
+        const finalLock: RecoveryLock | null = await this.#readRecoveryLock(projectKey(projectId));
+        if (finalLock === null) await this.#verifyCompleteProjectDirectory(projectId);
+        else {
+          if (finalLock.metadata.projectId !== lock.metadata.projectId || finalLock.metadata.transactionId !== lock.metadata.transactionId
+            || finalLock.metadata.host !== lock.metadata.host || finalLock.metadata.pid !== lock.metadata.pid) {
+            createRecoveryRequired(`Root Create lock과 Final lock 소유권이 다릅니다. projectId=${projectId}, transactionId=${transactionId}`, 'final lock mismatch');
+          }
+          await this.#verifyCompleteProjectDirectoryUnderLock(projectId, finalLock, true);
+          await this.#removeRecoveryLock(finalLock);
+        }
+      }
+      else if (finalKind !== 'missing') createRecoveryRequired(`Root Create lock의 Final 경로가 디렉터리가 아닙니다. projectId=${projectId}`, `kind=${finalKind}`);
+    }
+    await this.#verifyOwnedLock(lock);
+    await this.#removeRecoveryLock(lock);
+    this.#activeCreates.delete(projectKey(projectId));
+    this.#recordRecovery({ projectId, transactionId, outcome: 'root-create-lock-removed' });
+  }
+
+  async #refreshActiveCreate(projectId: string): Promise<boolean> {
+    const directoryName: string = projectKey(projectId);
+    const lock: RecoveryLock | null = await this.#rootCreateLock(projectId);
+    if (lock === null) {
+      const active: ActiveCreateState | undefined = this.#activeCreates.get(directoryName);
+      if (active !== undefined) {
+        const transactionPath: string = this.#createTransactionPath(active.transactionId);
+        if (await this.#fs.kind(transactionPath) === 'directory' && active.host === hostname() && processIsAlive(active.pid)) return true;
+        const finalLock: RecoveryLock | null = await this.#readRecoveryLock(directoryName);
+        if (finalLock !== null && finalLock.metadata.host === hostname() && processIsAlive(finalLock.metadata.pid)) return true;
+      }
+      this.#activeCreates.delete(directoryName);
+      return false;
+    }
+    if (lock.metadata.host !== hostname()) {
+      throw contractError('STORE_CREATE_RECOVERY_REQUIRED', `다른 Host의 Root Create lock은 자동 복구할 수 없습니다. projectId=${projectId}`, []);
+    }
+    if (processIsAlive(lock.metadata.pid)) { this.#rememberActiveCreate(lock); return true; }
+    await this.#recoverRootCreateLock(lock);
+    await this.#clearRecoveryBlock(directoryName);
+    return false;
+  }
+
   async #writeRecoveryBlock(directoryName: string, projectId: string, transactionId: string, error: unknown): Promise<void> {
     const block: StorageRecoveryBlock = StorageRecoveryBlockSchema.parse({ version: 1, projectId, directoryName, transactionId,
       code: errorCode(error), message: error instanceof Error ? error.message : String(error), detectedAt: new Date().toISOString() });
@@ -887,25 +1013,71 @@ export class ProjectStore {
   async #initialize(): Promise<void> {
     await this.#fs.initialize();
     await this.#fs.ensureDirectory(this.#createTransactionsPath());
+    await this.#fs.ensureDirectory(this.#createLocksPath());
     await this.#fs.ensureDirectory(this.#recoveryBlocksPath());
     await this.#loadRecoveryBlocks();
     const blockedDuringInitialization: Set<string> = new Set<string>();
+    this.#activeCreates.clear();
+    for (const entry of await this.#fs.entries(this.#createLocksPath())) {
+      const fileKey: string = /^[a-f0-9]{64}\.lock$/.test(entry.name) ? entry.name.slice(0, -5) : projectKey(`unknown:${entry.name}`);
+      let lock: RecoveryLock | null = null;
+      try {
+        lock = await this.#readRootCreateLock(entry.name);
+        if (lock === null) continue;
+        const directoryName: string = projectKey(lock.metadata.projectId);
+        if (lock.metadata.host !== hostname()) {
+          const error = contractError('STORE_CREATE_RECOVERY_REQUIRED',
+            `다른 Host의 Root Create lock은 자동 삭제할 수 없습니다. projectId=${lock.metadata.projectId}, host=${lock.metadata.host}`, []);
+          await this.#writeRecoveryBlock(directoryName, lock.metadata.projectId, lock.metadata.transactionId, error);
+          blockedDuringInitialization.add(directoryName);
+          continue;
+        }
+        if (processIsAlive(lock.metadata.pid)) {
+          this.#rememberActiveCreate(lock);
+          blockedDuringInitialization.add(directoryName);
+          continue;
+        }
+        await this.#recoverRootCreateLock(lock);
+        await this.#clearRecoveryBlock(directoryName);
+      } catch (error: unknown) {
+        const projectId: string = lock?.metadata.projectId ?? `unknown:${fileKey}`;
+        const transactionId: string = lock?.metadata.transactionId ?? 'root-create-lock';
+        await this.#writeRecoveryBlock(fileKey, projectId, transactionId, error);
+        blockedDuringInitialization.add(fileKey);
+      }
+    }
     for (const entry of await this.#fs.entries(this.#createTransactionsPath())) {
       if (!entry.isDirectory()) recoveryRequired(`Create transaction 목록에 디렉터리가 아닌 항목이 있습니다. entry=${entry.name}`);
+      if (await this.#fs.kind(this.#createTransactionPath(entry.name)) === 'missing') continue;
+      const journalPath: string = join(this.#createTransactionPath(entry.name), TRANSACTION_JOURNAL);
+      const phasePath: string = join(this.#createTransactionPath(entry.name), TRANSACTION_PHASE_JOURNAL);
+      if (await this.#fs.kind(journalPath) === 'file' || await this.#fs.kind(phasePath) === 'file') {
+        const preview: CreateJournal = await this.#readCreateJournal(entry.name);
+        if (blockedDuringInitialization.has(projectKey(preview.projectId))) continue;
+      }
       try {
         const projectId: string | null = await this.#recoverCreateTransaction(entry.name);
         if (projectId !== null) await this.#clearRecoveryBlock(projectKey(projectId));
       } catch (error: unknown) {
-        if (errorCode(error) === 'PROJECT_BUSY') throw error;
         let projectId: string = `unknown:${entry.name}`;
-        try { projectId = (await this.#readCreateJournal(entry.name)).projectId; } catch { /* 원래 복구 오류를 보존한다. */ }
+        let journal: CreateJournal | null = null;
+        try { journal = await this.#readCreateJournal(entry.name); projectId = journal.projectId; }
+        catch (journalError: unknown) {
+          if (errorCode(error) === 'PROJECT_BUSY') throw journalError;
+        }
         const directoryName: string = projectKey(projectId);
+        if (errorCode(error) === 'PROJECT_BUSY' && journal !== null) {
+          this.#activeCreates.set(directoryName, { projectId, transactionId: journal.transactionId, host: journal.owner.host,
+            pid: journal.owner.pid, detectedAt: new Date().toISOString() });
+          blockedDuringInitialization.add(directoryName);
+          continue;
+        }
         await this.#writeRecoveryBlock(directoryName, projectId, entry.name, error);
         blockedDuringInitialization.add(directoryName);
       }
     }
     for (const entry of await this.#fs.entries(this.#fs.root())) {
-      if ([CREATE_TRANSACTIONS_DIRECTORY, RECOVERY_BLOCKS_DIRECTORY].includes(entry.name)) continue;
+      if ([CREATE_TRANSACTIONS_DIRECTORY, CREATE_LOCKS_DIRECTORY, RECOVERY_BLOCKS_DIRECTORY].includes(entry.name)) continue;
       if (blockedDuringInitialization.has(entry.name)) continue;
       if (!entry.isDirectory()) {
         if (/^[a-f0-9]{64}$/.test(entry.name)) await this.#writeRecoveryBlock(entry.name, `unknown:${entry.name}`, 'directory', contractError('STORE_PATH_UNSAFE', 'Project 저장 경로가 디렉터리가 아닙니다.', []));
@@ -916,9 +1088,11 @@ export class ProjectStore {
         projectId = await this.#recoverProjectDirectory(entry.name);
         await this.#clearRecoveryBlock(entry.name);
       } catch (error: unknown) {
-        if (errorCode(error) === 'PROJECT_BUSY') throw error;
         if (projectId === null) {
           try { projectId = (await this.#readProjectFile(this.#fs.path(entry.name, 'project.json'))).projectId; } catch { projectId = `unknown:${entry.name}`; }
+        }
+        if (errorCode(error) === 'PROJECT_BUSY') {
+          throw error;
         }
         await this.#writeRecoveryBlock(entry.name, projectId, 'recovery', error);
       }
@@ -931,6 +1105,7 @@ export class ProjectStore {
     if (block !== undefined || await this.#fs.kind(this.#recoveryBlockPath(directoryName)) !== 'missing') {
       throw contractError('STORE_RECOVERY_BLOCKED', `${projectId}: 저장 복구가 완료될 때까지 변경할 수 없습니다. cause=${block?.code ?? 'recovery marker'}`, []);
     }
+    if (await this.#refreshActiveCreate(projectId)) throw contractError('PROJECT_BUSY', `${projectId}: Initial Create 저장 작업이 진행 중입니다.`, []);
     if (await this.#fs.kind(this.#directory(projectId)) === 'missing') throw contractError('PROJECT_NOT_FOUND', `저장된 프로젝트를 찾을 수 없습니다: ${projectId}`, []);
     if (await this.#fs.kind(join(this.#directory(projectId), 'write.lock')) !== 'missing') throw contractError('PROJECT_BUSY', `${projectId}: 다른 저장 작업이 진행 중입니다.`, []);
   }
@@ -1051,6 +1226,7 @@ export class ProjectStore {
 
   recoveryEvents(): readonly StorageRecoveryEvent[] { return [...this.#recoveryEvents]; }
   recoveryBlocks(): readonly StorageRecoveryBlock[] { return [...this.#recoveryBlocks.values()]; }
+  activeCreates(): readonly ActiveCreateState[] { return [...this.#activeCreates.values()]; }
 
   async assertMutable(projectId: string): Promise<void> {
     await this.initialize();
@@ -1061,7 +1237,7 @@ export class ProjectStore {
     await this.initialize();
     const summaries: ProjectSummary[] = [];
     for (const entry of await this.#fs.entries(this.#fs.root())) {
-      if (!entry.isDirectory() || [CREATE_TRANSACTIONS_DIRECTORY, RECOVERY_BLOCKS_DIRECTORY].includes(entry.name)) continue;
+      if (!entry.isDirectory() || [CREATE_TRANSACTIONS_DIRECTORY, CREATE_LOCKS_DIRECTORY, RECOVERY_BLOCKS_DIRECTORY].includes(entry.name)) continue;
       const path: string = this.#fs.path(entry.name, 'project.json');
       if (await this.#fs.kind(path) !== 'file') continue;
       const project: Project = await this.#readProjectFile(path);
@@ -1086,22 +1262,36 @@ export class ProjectStore {
     const directoryName: string = projectKey(valid.projectId);
     if (this.#recoveryBlocks.has(directoryName)) throw contractError('STORE_RECOVERY_BLOCKED', `${valid.projectId}: 저장 복구가 필요합니다.`, []);
     const directory: string = this.#directory(valid.projectId);
-    await this.#assertCreateTargetAvailable(valid.projectId);
     const transactionId: string = randomUUID();
+    const owner: z.infer<typeof TransactionOwnerSchema> = this.#owner(transactionId);
+    const lockMetadata: StoreLock = StoreLockSchema.parse({ version: 2, projectId: valid.projectId, host: owner.host,
+      pid: owner.pid, transactionId, createdAt: new Date().toISOString() });
     const transactionPath: string = this.#createTransactionPath(transactionId);
     const stagedDirectory: string = join(transactionPath, CREATE_STAGED_PROJECT_DIRECTORY);
     const content: string = exportProjectJson(valid);
     const contentSha256: string = sha256Text(content);
     let journal: CreateJournalV3 = CreateJournalV3Schema.parse({ version: 3, operation: 'create', phase: 'prepared', transactionId,
-      projectId: valid.projectId, owner: this.#owner(transactionId), projectDirectoryName: directoryName,
+      projectId: valid.projectId, owner, projectDirectoryName: directoryName,
       currentFile: { stagedRelativePath: 'project/project.json', finalRelativePath: 'project.json', sha256: contentSha256 },
       versionFile: { stagedRelativePath: 'project/versions/000000.json', finalRelativePath: 'versions/000000.json', sha256: contentSha256 } });
     let published: boolean = false;
-    let createLock: RecoveryLock | null = null;
+    let journalPrepared: boolean = false;
+    let finalLock: RecoveryLock | null = null;
+    let rootLock: RecoveryLock | null = null;
+    let preserveLocks: boolean = false;
     try {
+      rootLock = await this.#acquireOwnedLock(this.#rootCreateLockPath(valid.projectId), lockMetadata);
+      await this.#fault('after-root-create-lock-acquired');
+      await this.#verifyOwnedLock(rootLock);
+      if (this.#recoveryBlocks.has(directoryName) || await this.#fs.kind(this.#recoveryBlockPath(directoryName)) !== 'missing') {
+        throw contractError('STORE_RECOVERY_BLOCKED', `${valid.projectId}: 저장 복구가 필요합니다.`, []);
+      }
+      await this.#assertCreateTargetAvailable(valid.projectId);
+      await this.#fault('after-create-target-rechecked');
       await this.#fs.ensureDirectory(transactionPath);
       await this.#fs.writeExclusive(join(transactionPath, TRANSACTION_JOURNAL), JSON.stringify(journal));
       await this.#fs.syncDirectory(transactionPath); await this.#fs.syncDirectory(this.#createTransactionsPath());
+      journalPrepared = true;
       await this.#fault('after-create-journal-prepared');
       await this.#fs.ensureDirectory(stagedDirectory); await this.#fs.ensureDirectory(join(stagedDirectory, 'versions'));
       await this.#fs.ensureDirectory(join(stagedDirectory, 'assets')); await this.#fs.ensureDirectory(join(stagedDirectory, TRANSACTIONS_DIRECTORY));
@@ -1113,39 +1303,59 @@ export class ProjectStore {
       await this.#fs.syncDirectory(stagedDirectory);
       journal = await this.#writeCreateJournalPhase(transactionId, journal, 'current-written');
       await this.#fault('after-create-current-written');
-      const lockMetadata: StoreLock = StoreLockSchema.parse({ version: 2, projectId: valid.projectId, host: journal.owner.host,
-        pid: journal.owner.pid, transactionId, createdAt: new Date().toISOString() });
-      createLock = await this.#acquireOwnedLock(join(stagedDirectory, 'write.lock'), lockMetadata);
+      finalLock = await this.#acquireOwnedLock(join(stagedDirectory, 'write.lock'), lockMetadata);
       await this.#fault('after-create-lock-written');
-      await this.#verifyCompleteCreateStagingUnderLock(transactionId, journal, createLock);
+      await this.#verifyCompleteCreateStagingUnderLock(transactionId, journal, finalLock);
+      await this.#fault('after-create-staging-complete');
       await this.#fault('before-create-directory-publish');
       await this.#assertCreateTargetAvailable(valid.projectId);
       await this.#fs.renameNewDirectory(stagedDirectory, directory); published = true;
-      createLock = { ...createLock, path: join(directory, 'write.lock') };
+      finalLock = { ...finalLock, path: join(directory, 'write.lock') };
       await this.#fs.syncDirectory(this.#fs.root());
       journal = await this.#writeCreateJournalPhase(transactionId, journal, 'published');
       await this.#fault('after-create-directory-publish');
-      await this.#verifyCompleteProjectDirectoryUnderLock(valid.projectId, createLock, true);
+      await this.#verifyCompleteProjectDirectoryUnderLock(valid.projectId, finalLock, true);
       journal = await this.#writeCreateJournalPhase(transactionId, journal, 'verified');
       await this.#fault('before-create-cleanup');
       await this.#fault('before-create-journal-cleanup');
       await this.#removeCreateTransaction(transactionId, journal);
       await this.#fault('before-create-lock-removal');
-      await this.#removeRecoveryLock(createLock);
-      createLock = null;
+      await this.#removeRecoveryLock(finalLock);
+      finalLock = null;
+      await this.#fault('before-root-create-lock-removal');
+      await this.#removeRecoveryLock(rootLock);
+      rootLock = null;
+      this.#activeCreates.delete(directoryName);
     } catch (error: unknown) {
       if (isSimulatedCrash(error)) throw error;
       if (!published) {
-        if (storageProtectionRequired(error)) {
+        if (journalPrepared && storageProtectionRequired(error)) {
+          preserveLocks = true;
           await this.#writeRecoveryBlock(directoryName, valid.projectId, transactionId, error);
           throw error;
         }
         try {
-          if (await this.#fs.kind(transactionPath) !== 'missing') await this.#removeCreateTransaction(transactionId, journal);
+          if (await this.#fs.kind(transactionPath) !== 'missing') {
+            if (journalPrepared) await this.#removeCreateTransaction(transactionId, journal);
+            else { await this.#fs.removeTree(transactionPath); await this.#fs.syncDirectory(this.#createTransactionsPath()); }
+            finalLock = null;
+          }
         }
-        catch (cleanupError: unknown) { await this.#writeRecoveryBlock(directoryName, valid.projectId, transactionId, cleanupError); throw new AggregateError([error, cleanupError], `Initial Project 생성 실패 후 staging 정리도 실패했습니다. projectId=${valid.projectId}`); }
+        catch (cleanupError: unknown) {
+          preserveLocks = true;
+          await this.#writeRecoveryBlock(directoryName, valid.projectId, transactionId, cleanupError);
+          throw new AggregateError([error, cleanupError], `Initial Project 생성 실패 후 staging 정리도 실패했습니다. projectId=${valid.projectId}`);
+        }
       } else {
+        preserveLocks = true;
         await this.#writeRecoveryBlock(directoryName, valid.projectId, transactionId, error);
+      }
+      if (!preserveLocks && rootLock !== null) {
+        try { await this.#removeRecoveryLock(rootLock); rootLock = null; this.#activeCreates.delete(directoryName); }
+        catch (lockError: unknown) {
+          await this.#writeRecoveryBlock(directoryName, valid.projectId, transactionId, lockError);
+          throw new AggregateError([error, lockError], `Initial Project 생성 실패 후 Root Create lock 정리도 실패했습니다. projectId=${valid.projectId}`);
+        }
       }
       throw error;
     }
@@ -1171,6 +1381,7 @@ export class ProjectStore {
       const changed: Project = transform(transformInput);
       const shapedNext: Project = ProjectSchema.parse({ ...changed, projectId: current.projectId, revision: current.revision + 1 });
       const transition: AssetCatalogTransition = assertAssetCatalogTransition(current, shapedNext, assetWrites);
+      assertGenerationRecordTransition(current, shapedNext);
       assertAssetReferenceClosure(shapedNext);
       const next: Project = parseProject(shapedNext);
       const committedVersion: string = this.#versionPath(projectId, next.revision);

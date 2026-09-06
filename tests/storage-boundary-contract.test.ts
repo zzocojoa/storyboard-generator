@@ -465,7 +465,7 @@ describe('F. Create owned lock', (): void => {
     const fixture = await crashedCreate('after-create-directory-publish'); const recovered = new ProjectStore(fixture.dataRoot); await recovered.initialize(); expect((await recovered.read(fixture.project.projectId)).revision).toBe(0); expect(await exists(join(projectDirectory(fixture.dataRoot, fixture.project.projectId), 'write.lock'))).toBe(false);
   });
   it('startup_does_not_remove_live_create_lock', async (): Promise<void> => {
-    const scenario = await activeCreate('after-create-directory-publish', false); const observer = new ProjectStore(scenario.dataRoot); await expect(observer.initialize()).rejects.toMatchObject({ code: 'PROJECT_BUSY' }); expect(await exists(join(projectDirectory(scenario.dataRoot, scenario.project.projectId), 'write.lock'))).toBe(true); scenario.gate.release(); await scenario.pending;
+    const scenario = await activeCreate('after-create-directory-publish', false); const observer = new ProjectStore(scenario.dataRoot); await expect(observer.initialize()).resolves.toBeUndefined(); expect(observer.activeCreates()).toContainEqual(expect.objectContaining({ projectId: scenario.project.projectId })); expect(await exists(join(projectDirectory(scenario.dataRoot, scenario.project.projectId), 'write.lock'))).toBe(true); scenario.gate.release(); await scenario.pending;
   });
   it('mismatched_create_lock_requires_recovery', async (): Promise<void> => {
     const fixture = await crashedCreate('after-create-directory-publish'); const path = join(projectDirectory(fixture.dataRoot, fixture.project.projectId), 'write.lock'); const lock = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>; await writeFile(path, JSON.stringify({ ...lock, transactionId: randomUUID() })); const recovered = new ProjectStore(fixture.dataRoot); await recovered.initialize(); expect(recovered.recoveryBlocks()[0]?.code).toBe('STORE_CREATE_RECOVERY_REQUIRED'); expect(await exists(path)).toBe(true);
@@ -515,16 +515,16 @@ describe('H. Transient initialization', (): void => {
   async function transientScenario(): Promise<ActiveCreate> { return activeCreate('before-create-journal-cleanup', false); }
 
   it('initialization_busy_during_live_create_is_transient', async (): Promise<void> => {
-    const scenario = await transientScenario(); await expect(scenario.second.initialize()).rejects.toMatchObject({ code: 'PROJECT_BUSY' }); scenario.gate.release(); await scenario.pending; await expect(scenario.second.initialize()).resolves.toBeUndefined();
+    const scenario = await transientScenario(); await expect(scenario.second.initialize()).resolves.toBeUndefined(); expect(scenario.second.activeCreates()).toContainEqual(expect.objectContaining({ projectId: scenario.project.projectId })); scenario.gate.release(); await scenario.pending; await expect(scenario.second.initialize()).resolves.toBeUndefined();
   });
   it('same_store_instance_can_retry_after_create_finishes', async (): Promise<void> => {
-    const scenario = await transientScenario(); await captureError(scenario.second.initialize()); scenario.gate.release(); await scenario.pending; const updated = await scenario.second.update(scenario.project.projectId, 0, (project: Project): Project => ({ ...project, title: '재시도' }), []); expect(updated.revision).toBe(1);
+    const scenario = await transientScenario(); await scenario.second.initialize(); expect((await captureError(scenario.second.update(scenario.project.projectId, 0, (project: Project): Project => project, []))).code).toBe('PROJECT_BUSY'); scenario.gate.release(); await scenario.pending; const updated = await scenario.second.update(scenario.project.projectId, 0, (project: Project): Project => ({ ...project, title: '재시도' }), []); expect(updated.revision).toBe(1);
   });
   it('transient_busy_does_not_create_recovery_block', async (): Promise<void> => {
-    const scenario = await transientScenario(); await captureError(scenario.second.initialize()); expect(await recoveryBlockCount(scenario.dataRoot)).toBe(0); scenario.gate.release(); await scenario.pending;
+    const scenario = await transientScenario(); await scenario.second.initialize(); expect((await captureError(scenario.second.create(scenario.project))).code).toBe('PROJECT_BUSY'); expect(await recoveryBlockCount(scenario.dataRoot)).toBe(0); scenario.gate.release(); await scenario.pending;
   });
   it('transient_busy_does_not_leave_rejected_initialization_cached', async (): Promise<void> => {
-    const scenario = await transientScenario(); expect((await captureError(scenario.second.initialize())).code).toBe('PROJECT_BUSY'); scenario.gate.release(); await scenario.pending; expect((await scenario.second.read(scenario.project.projectId)).revision).toBe(0);
+    const scenario = await transientScenario(); await scenario.second.initialize(); expect(scenario.second.activeCreates()).toHaveLength(1); scenario.gate.release(); await scenario.pending; expect((await scenario.second.read(scenario.project.projectId)).revision).toBe(0);
   });
 });
 

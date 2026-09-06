@@ -411,13 +411,13 @@ describe('F. Recovery-blocked mutation', (): void => {
   it('blocked_project_rejects_asset_upload', async (): Promise<void> => {
     const fixture = await blockFixture(); const app = await appForStore(fixture.root, fixture.dataRoot, new ProjectStore(fixture.dataRoot));
     const response = await app.inject({ method: 'POST', url: `/api/projects/${fixture.project.projectId}/references`, payload: {} }); await app.close();
-    expect(response.statusCode).toBe(400); expect(response.json().error.code).toBe('STORE_RECOVERY_BLOCKED');
+    expect(response.statusCode).toBe(423); expect(response.json().error).toMatchObject({ code: 'STORE_RECOVERY_BLOCKED', category: 'locked', operatorActionRequired: true });
   });
 
   it('blocked_project_rejects_source_update', async (): Promise<void> => {
     const fixture = await blockFixture(); const app = await appForStore(fixture.root, fixture.dataRoot, new ProjectStore(fixture.dataRoot));
     const response = await app.inject({ method: 'POST', url: `/api/projects/${fixture.project.projectId}/source-update`, payload: {} }); await app.close();
-    expect(response.statusCode).toBe(400); expect(response.json().error.code).toBe('STORE_RECOVERY_BLOCKED');
+    expect(response.statusCode).toBe(423); expect(response.json().error).toMatchObject({ code: 'STORE_RECOVERY_BLOCKED', category: 'locked', operatorActionRequired: true });
   });
 
   it('blocked_project_is_reported_in_status', async (): Promise<void> => {

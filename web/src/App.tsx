@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, FormEvent, ReactElement } from 'react';
 import { audioOverhangAfterMs, audioOverhangBeforeMs } from '../../src/domain/audio.js';
 import { reviewIssuesForTextCue, textCueInformationIds } from '../../src/domain/emission.js';
@@ -14,9 +14,10 @@ import type { Asset, AudioCue, Issue, LockedField, Profile, Project, Segment, Sh
 import type { AudioCueTimingInput, TextCueTimingInput } from '../../src/domain/tracks.js';
 import type { TextCueAuthorityResolutionInput } from '../../src/domain/text.js';
 import { frameDisplayAbsoluteMs, frameEvaluationAbsoluteMs } from '../../src/domain/time.js';
-import { fetchProject, fetchStatus, importProject, listProjects, mutateProject, normalizeAudioAsset, previewSourceUpdate, queueCodexRequest, updateProjectSource, uploadAudioAsset } from './api.js';
+import { apiErrorMessage, fetchProject, fetchStatus, importProject, isStorageRecoveryError, listProjects, mutateProject, normalizeAudioAsset, previewSourceUpdate, queueCodexRequest, updateProjectSource, uploadAudioAsset } from './api.js';
 import type { AppStatus, CodexRequest, ProjectSummary, SourceImpact } from './api.js';
 import { BrowserAudioController } from './audio-lifecycle.js';
+import { importButtonState, mutationControlsDisabled } from './ui-policy.js';
 
 type Notice = { tone: 'info' | 'error'; text: string };
 type ReferenceDraft = { kind: 'character' | 'location' | 'prop'; subjectId: string; description: string; file: File | null };
@@ -31,7 +32,7 @@ function contentFromShot(shot: Shot): ShotContent {
 }
 
 function readableError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return apiErrorMessage(error);
 }
 
 function clock(milliseconds: number): string {
@@ -110,20 +111,26 @@ function safeAudioUrl(projectId: string, cueId: string): string {
   return `/api/projects/${encodeURIComponent(projectId)}/output/audio/${encodeURIComponent(cueId)}`;
 }
 
-function ImportPanel(props: { working: boolean; onImport: (path: string, holdMs: number) => Promise<void> }): ReactElement {
+export function ImportPanel(props: { working: boolean; onImport: (path: string, holdMs: number) => Promise<void> }): ReactElement {
   const [path, setPath] = useState<string>('');
   const [hold, setHold] = useState<string>('2000');
+  const [submitting, setSubmitting] = useState<boolean>(false);
+  const submittingRef = useRef<boolean>(false);
   const submit = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault();
-    void props.onImport(path, Number(hold));
+    if (props.working || submittingRef.current) return;
+    submittingRef.current = true;
+    setSubmitting(true);
+    void props.onImport(path, Number(hold)).finally((): void => { submittingRef.current = false; setSubmitting(false); });
   };
+  const button = importButtonState(props.working, submitting);
   return <form className="import-panel" onSubmit={submit}>
     <div className="eyebrow">INPUT CONTRACT</div>
     <h2>새 콘티 시작</h2>
     <p>handoff JSON을 선택하면 원본을 검증하고 편집용 컷 초안을 만듭니다.</p>
     <label>handoff 파일 경로<input value={path} onChange={(event): void => { setPath(event.target.value); }} placeholder="/project/storyboard_handoff.json" required /></label>
     <label>임시 화면 글자 유지 시간<input type="number" min="1" value={hold} onChange={(event): void => { setHold(event.target.value); }} required /><span className="unit">ms</span></label>
-    <button className="primary" disabled={props.working}>{props.working ? '검증 중…' : '패키지 불러오기'}</button>
+    <button className="primary" disabled={button.disabled}>{button.label}</button>
   </form>;
 }
 
@@ -505,8 +512,13 @@ export default function App(): ReactElement {
   const [shotId, setShotId] = useState<string>('');
   const [draft, setDraft] = useState<ShotContent | null>(null);
   const [working, setWorking] = useState<boolean>(false);
+  const [storageRecoveryRequired, setStorageRecoveryRequired] = useState<boolean>(false);
   const [queuedRequest, setQueuedRequest] = useState<CodexRequest | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const showError = (error: unknown): void => {
+    if (isStorageRecoveryError(error)) setStorageRecoveryRequired(true);
+    setNotice({ tone: 'error', text: readableError(error) });
+  };
   const [playhead, setPlayhead] = useState<number>(0);
   const [playing, setPlaying] = useState<boolean>(false);
   const [monitorOpen, setMonitorOpen] = useState<boolean>(false);
@@ -524,7 +536,8 @@ export default function App(): ReactElement {
   const refreshSummaries = async (): Promise<void> => { setSummaries(await listProjects()); };
   const openProject = async (projectId: string): Promise<void> => {
     setWorking(true); setNotice(null); setSourceImpactReport(null);
-    try { setProject(await fetchProject(projectId)); } catch (error: unknown) { setNotice({ tone: 'error', text: readableError(error) }); }
+    try { setProject(await fetchProject(projectId)); setStorageRecoveryRequired(status?.storageRecoveryBlocks.some((block): boolean => block.projectId === projectId) ?? false); }
+    catch (error: unknown) { showError(error); }
     finally { setWorking(false); }
   };
 
@@ -532,8 +545,11 @@ export default function App(): ReactElement {
     void Promise.all([fetchStatus(), listProjects()]).then(async ([nextStatus, nextSummaries]): Promise<void> => {
       setStatus(nextStatus); setSummaries(nextSummaries);
       const first: ProjectSummary | undefined = nextSummaries[0];
-      if (first !== undefined) setProject(await fetchProject(first.projectId));
-    }).catch((error: unknown): void => { setNotice({ tone: 'error', text: readableError(error) }); });
+      if (first !== undefined) {
+        setProject(await fetchProject(first.projectId));
+        setStorageRecoveryRequired(nextStatus.storageRecoveryBlocks.some((block): boolean => block.projectId === first.projectId));
+      }
+    }).catch((error: unknown): void => { showError(error); });
   }, []);
 
   useEffect((): void => {
@@ -583,16 +599,16 @@ export default function App(): ReactElement {
 
   const importHandoff = async (path: string, holdMs: number): Promise<void> => {
     setWorking(true); setNotice(null); setSourceImpactReport(null);
-    try { const next: Project = await importProject(path, holdMs); setProject(next); await refreshSummaries(); setNotice({ tone: 'info', text: `${next.title} 원본을 검증하고 컷 초안을 만들었습니다.` }); }
-    catch (error: unknown) { setNotice({ tone: 'error', text: readableError(error) }); }
+    try { const next: Project = await importProject(path, holdMs); setProject(next); setStorageRecoveryRequired(false); await refreshSummaries(); setNotice({ tone: 'info', text: `${next.title} 원본을 검증하고 컷 초안을 만들었습니다.` }); }
+    catch (error: unknown) { showError(error); }
     finally { setWorking(false); }
   };
 
   const mutate = async (path: string, method: 'DELETE' | 'PATCH' | 'POST', body: object): Promise<void> => {
     if (project === null) return;
     setWorking(true); setNotice(null);
-    try { const next: Project = await mutateProject(project.projectId, path, method, body); setProject(next); await refreshSummaries(); }
-    catch (error: unknown) { setNotice({ tone: 'error', text: readableError(error) }); }
+    try { const next: Project = await mutateProject(project.projectId, path, method, body); setProject(next); setStorageRecoveryRequired(false); await refreshSummaries(); }
+    catch (error: unknown) { showError(error); }
     finally { setWorking(false); }
   };
 
@@ -603,7 +619,7 @@ export default function App(): ReactElement {
       const current: CodexRequest = await queueCodexRequest(project.projectId, path, project.revision); setQueuedRequest(current);
       const nextStatus: AppStatus = await fetchStatus(); setStatus(nextStatus);
       setNotice({ tone: 'info', text: `Codex 요청을 저장했습니다. ${nextStatus.generationInstruction} 요청 ID: ${current.id}` });
-    } catch (error: unknown) { setNotice({ tone: 'error', text: readableError(error) }); }
+    } catch (error: unknown) { showError(error); }
     finally { setWorking(false); }
   };
 
@@ -612,8 +628,8 @@ export default function App(): ReactElement {
     setWorking(true); setNotice(null);
     try {
       const [nextProject, nextStatus, nextSummaries] = await Promise.all([fetchProject(project.projectId), fetchStatus(), listProjects()]);
-      setProject(nextProject); setStatus(nextStatus); setSummaries(nextSummaries); setQueuedRequest(null); setNotice({ tone: 'info', text: 'Codex 결과와 프로젝트 상태를 새로 읽었습니다.' });
-    } catch (error: unknown) { setNotice({ tone: 'error', text: readableError(error) }); }
+      setProject(nextProject); setStatus(nextStatus); setSummaries(nextSummaries); setStorageRecoveryRequired(nextStatus.storageRecoveryBlocks.some((block): boolean => block.projectId === nextProject.projectId)); setQueuedRequest(null); setNotice({ tone: 'info', text: 'Codex 결과와 프로젝트 상태를 새로 읽었습니다.' });
+    } catch (error: unknown) { showError(error); }
     finally { setWorking(false); }
   };
 
@@ -653,7 +669,7 @@ export default function App(): ReactElement {
         : next.assets.find((candidate: Asset): boolean => candidate.id === next.audioCues.find((cue: AudioCue): boolean => cue.id === cueId)?.assetId);
       setNotice({ tone: 'info', text: asset?.audioMetadata === undefined || asset.audioMetadata === null ? '오디오 파일을 등록했습니다.'
         : `오디오 등록 완료: ${asset.durationMs}ms · ${asset.audioMetadata.sampleRate}Hz · ${asset.audioMetadata.channels}ch` });
-    } catch (error: unknown) { setNotice({ tone: 'error', text: readableError(error) }); }
+    } catch (error: unknown) { showError(error); }
     finally { setWorking(false); }
   };
 
@@ -664,7 +680,7 @@ export default function App(): ReactElement {
       const next: Project = await normalizeAudioAsset(project.projectId, cueId, project.revision);
       setProject(next); await refreshSummaries();
       setNotice({ tone: 'info', text: '기존 WAV를 프로젝트 형식으로 정규화해 새 Asset 버전으로 복구했습니다.' });
-    } catch (error: unknown) { setNotice({ tone: 'error', text: readableError(error) }); }
+    } catch (error: unknown) { showError(error); }
     finally { setWorking(false); }
   };
 
@@ -672,7 +688,7 @@ export default function App(): ReactElement {
     if (project === null) return;
     setWorking(true); setNotice(null);
     try { const impact: SourceImpact = await previewSourceUpdate(project.projectId, path, holdMs, project.revision); setSourceImpactReport(impact); setNotice({ tone: 'info', text: `원본 변경이 ${impact.impactedShotIds.length}개 컷에 영향을 줍니다.` }); }
-    catch (error: unknown) { setNotice({ tone: 'error', text: readableError(error) }); }
+    catch (error: unknown) { showError(error); }
     finally { setWorking(false); }
   };
 
@@ -680,7 +696,7 @@ export default function App(): ReactElement {
     if (project === null) return;
     setWorking(true); setNotice(null);
     try { const next: Project = await updateProjectSource(project.projectId, path, holdMs, project.revision); setProject(next); setSourceImpactReport(null); await refreshSummaries(); setNotice({ tone: 'info', text: '새 원본을 적용하고 영향 받은 구간만 편집 초안으로 교체했습니다.' }); }
-    catch (error: unknown) { setNotice({ tone: 'error', text: readableError(error) }); }
+    catch (error: unknown) { showError(error); }
     finally { setWorking(false); }
   };
 
@@ -693,20 +709,23 @@ export default function App(): ReactElement {
     setMonitorOpen(true); setPlaying(true);
   };
 
-  if (project === null) return <main className="empty-shell"><ProjectRail summaries={summaries} currentId={null} working={working} onSelect={openProject} onImport={importHandoff} />
-    <div className="welcome"><div className="welcome-number">01</div><div className="eyebrow">SOURCE TO SEQUENCE</div><h1>원문에서<br/><em>촬영 가능한 콘티</em>까지.</h1><p>입력 계약을 검증하고, 컷·그림·가이드 음성·자막을 하나의 시간축에서 편집합니다.</p><ImportPanel working={working} onImport={importHandoff} /></div>{notice !== null && <div className={`notice ${notice.tone}`}>{notice.text}</div>}</main>;
+  const mutationDisabled: boolean = mutationControlsDisabled(working, storageRecoveryRequired);
+  if (project === null) return <main className="empty-shell"><ProjectRail summaries={summaries} currentId={null} working={mutationDisabled} onSelect={openProject} onImport={importHandoff} />
+    <div className="welcome"><div className="welcome-number">01</div><div className="eyebrow">SOURCE TO SEQUENCE</div><h1>원문에서<br/><em>촬영 가능한 콘티</em>까지.</h1><p>입력 계약을 검증하고, 컷·그림·가이드 음성·자막을 하나의 시간축에서 편집합니다.</p><ImportPanel working={mutationDisabled} onImport={importHandoff} /></div>
+    {storageRecoveryRequired && <div className="storage-recovery-banner" role="alert"><strong>STORAGE RECOVERY REQUIRED</strong><span>해당 Project는 저장소 복구 전 변경할 수 없습니다. 자동 재시도하지 마세요.</span></div>}
+    {notice !== null && <div className={`notice ${notice.tone}`}>{notice.text}</div>}</main>;
 
   const exportBase: string = `/api/projects/${encodeURIComponent(project.projectId)}`;
   const providerLabel: string = status === null ? 'Codex App 상태를 불러오는 중입니다.' : `Codex App 완료 ${status.completedRequests}건, 대기 ${status.pendingRequests}건, 실패 ${status.failedRequests}건, 평균 처리 ${elapsed(status.averageLatencyMs)}, 반복 생성 ${status.repeatedRequests}건, 저장 복구 ${status.storageRecovery.length}건${status.recentFailures.map((failure): string => `, 최근 실패 ${failure.error?.code ?? 'UNKNOWN'}: ${failure.error?.message ?? '오류 설명이 없습니다.'}`).join('')}`;
   return <main className="app-shell">
-    <ProjectRail summaries={summaries} currentId={project.projectId} working={working} onSelect={openProject} onImport={importHandoff} />
+    <ProjectRail summaries={summaries} currentId={project.projectId} working={mutationDisabled} onSelect={openProject} onImport={importHandoff} />
     <section className="workspace"><header className="topbar"><div><span className="eyebrow">ACTIVE PRODUCTION</span><h1>{project.title}</h1></div><div className="project-facts"><span>REV <b>{project.revision}</b></span><span>{project.profile.aspectWidth}:{project.profile.aspectHeight}</span><span>{project.profile.medium.toUpperCase()}</span></div>
       <div className="top-actions"><a href={`${exportBase}/export.json`}>JSON</a><a href={`${exportBase}/export.csv`}>CSV</a><a href={`${exportBase}/export.pdf`}>PDF</a><button onClick={(): void => { void refreshWorkspace(); }}>REFRESH</button><details className={status !== null && status.failedRequests > 0 ? 'provider-status failed' : 'provider-status'}><summary className="provider ready" aria-label={providerLabel}>CODEX APP · {status?.pendingRequests ?? 0} QUEUED · {status?.failedRequests ?? 0} FAILED</summary>{status !== null && <div className="status-popover"><div className="request-metrics"><span><b>{status.completedRequests}</b> 완료</span><span><b>{elapsed(status.averageLatencyMs)}</b> 평균</span><span><b>{elapsed(status.maximumLatencyMs)}</b> 최대</span><span><b>{status.repeatedRequests}</b> 반복 생성</span><span><b>{status.storageRecovery.length}</b> 저장 복구</span><span title={status.costNote}><b>N/A</b> 요청별 비용</span></div>{status.recentFailures.length > 0 && <div className="failure-list">{status.recentFailures.map((failure): ReactElement => <article key={failure.id}><b>{failure.error?.code ?? 'UNKNOWN'}</b><span>{failure.projectId} · {failure.kind} · {failure.targetId}</span><p>{failure.error?.message ?? '오류 설명이 없습니다.'}</p></article>)}</div>}{status.storageRecovery.length > 0 && <div className="recovery-list">{status.storageRecovery.map((recovery): ReactElement => <article key={`${recovery.projectId}:${recovery.transactionId}`}><b>{recovery.outcome.toUpperCase()}</b><span>{recovery.projectId} · {recovery.transactionId}</span></article>)}</div>}</div>}</details></div></header>
       <div className="edit-grid">{segment !== null && <SceneRail project={project} segmentId={segment.id} onSelect={(id: string): void => { setSegmentId(id); setShotId(''); }} />}
-        <section className="board-area">{segment !== null && <><header className="segment-header"><div><span>{segment.mode}</span><h2>{project.dataset.scenes.find((scene): boolean => scene.id === segment.sceneId)?.title}</h2><p>{clock(segment.startMs)} — {clock(segment.endMs)} · {shots.length} CUTS</p></div><button className="propose" disabled={working} onClick={(): void => { void queueGeneration(`/segments/${encodeURIComponent(segment.id)}/propose`); }}>◇ CODEX CUT PROPOSAL</button></header>
-          <div className="board-grid">{shots.map((candidate: Shot): ReactElement => <ShotBoard key={candidate.id} project={project} shot={candidate} selected={candidate.id === shot?.id} onSelect={setShotId} busy={working} onGenerate={async (frameId: string): Promise<void> => { await queueGeneration(`/frames/${encodeURIComponent(frameId)}/generate`); }} />)}</div></>}
+        <section className="board-area">{segment !== null && <><header className="segment-header"><div><span>{segment.mode}</span><h2>{project.dataset.scenes.find((scene): boolean => scene.id === segment.sceneId)?.title}</h2><p>{clock(segment.startMs)} — {clock(segment.endMs)} · {shots.length} CUTS</p></div><button className="propose" disabled={mutationDisabled} onClick={(): void => { void queueGeneration(`/segments/${encodeURIComponent(segment.id)}/propose`); }}>◇ CODEX CUT PROPOSAL</button></header>
+          <div className="board-grid">{shots.map((candidate: Shot): ReactElement => <ShotBoard key={candidate.id} project={project} shot={candidate} selected={candidate.id === shot?.id} onSelect={setShotId} busy={mutationDisabled} onGenerate={async (frameId: string): Promise<void> => { await queueGeneration(`/frames/${encodeURIComponent(frameId)}/generate`); }} />)}</div></>}
         </section>
-        {segment !== null && <Inspector project={project} segment={segment} shot={shot} draft={draft} working={working} status={status} onDraft={setDraft}
+        {segment !== null && <Inspector project={project} segment={segment} shot={shot} draft={draft} working={mutationDisabled} status={status} onDraft={setDraft}
           onSave={async (): Promise<void> => { if (shot !== null && draft !== null) await mutate(`/shots/${encodeURIComponent(shot.id)}`, 'PATCH', { expectedRevision: project.revision, content: draft }); }}
           onSplit={async (): Promise<void> => { if (shot !== null) await mutate(`/shots/${encodeURIComponent(shot.id)}/split`, 'POST', { expectedRevision: project.revision, atMs: Math.floor((shot.startMs + shot.endMs) / 2) }); }}
           onMerge={merge} onMove={reorder} onLocks={async (fields: LockedField[]): Promise<void> => { if (shot !== null) await mutate(`/shots/${encodeURIComponent(shot.id)}/locks`, 'POST', { expectedRevision: project.revision, fields }); }}
@@ -730,6 +749,7 @@ export default function App(): ReactElement {
       <Timeline project={project} playhead={playhead} playing={playing} onChange={(value: number): void => { audioController.reset(); setPlaying(false); setPlayhead(value); }} onToggle={togglePlayback} />
     </section>
     {monitorOpen && <PlaybackMonitor project={project} playhead={playhead} onClose={(): void => { audioController.reset(); setPlaying(false); setMonitorOpen(false); }} />}
+    {storageRecoveryRequired && <div className="storage-recovery-banner" role="alert"><strong>STORAGE RECOVERY REQUIRED</strong><span>해당 Project는 저장소 복구 전 변경할 수 없습니다. 자동 재시도하지 마세요.</span></div>}
     {notice !== null && <button className={`notice ${notice.tone}`} onClick={(): void => { setNotice(null); }}>{notice.text}<span>×</span></button>}
     {queuedRequest !== null && <div className="job-strip"><span></span>CODEX {queuedRequest.kind.toUpperCase()} · {queuedRequest.status.toUpperCase()}</div>}
   </main>;

@@ -1,6 +1,7 @@
 import { audioTimingIssues } from './audio.js';
 import { assetReferenceIssues } from './asset-references.js';
 import { issue } from './errors.js';
+import { generationRecordIssues } from './generation-records.js';
 import type { Dataset, InformationRule, Issue, Project, Segment, Shot, ShotSourceLink, Snapshot, SourceRef, SourceUnit, TextMappingDecision, TextPlacement, TextPlacementInformationDecision } from './schema.js';
 import { sourcePolicyIssues } from './source-policy.js';
 
@@ -112,7 +113,6 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
     { name: 'audioCues', ids: project.audioCues.map((value): string => value.id) },
     { name: 'textCues', ids: project.textCues.map((value): string => value.id) },
     { name: 'assets', ids: project.assets.map((value): string => value.id) },
-    { name: 'generationRecords', ids: project.generationRecords.map((value): string => value.id) },
   ];
   const shotIssues: Issue[] = project.shots.flatMap((shot): Issue[] => {
     const segment = dataset.segments.find((value): boolean => value.id === shot.segmentId);
@@ -276,11 +276,12 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
     });
   });
   const assetClosureIssues: Issue[] = assetReferenceIssues(project);
+  const generationIssues: Issue[] = generationRecordIssues(project);
   const assetSubjectIssues: Issue[] = project.assets.flatMap((asset): Issue[] => {
     if (asset.subjectId === null) return ['character', 'location'].includes(asset.kind) ? [issue('MISSING_ASSET_SUBJECT', 'error', asset.id, 'subjectId', '인물·장소 기준 자산은 연결 대상을 지정해야 합니다.', null, null, [])] : [];
     const exists: boolean = asset.kind === 'character' ? dataset.people.some((person): boolean => person.id === asset.subjectId)
       : asset.kind === 'location' ? dataset.locations.some((location): boolean => location.id === asset.subjectId) : true;
     return referenceIssue(exists, asset.id, 'subjectId', asset.subjectId, []);
   });
-  return [...sourceIssues, ...projectIssues, ...groups.flatMap((group): Issue[] => duplicateIssues(group.ids, group.name)), ...shotIssues, ...coverageIssues, ...unitCoverage, ...sourceOrderIssues(project), ...frameIssues, ...frameGroupIssues, ...audioIssues, ...textIssues, ...sourceUnitTextCueIssues, ...placementCoverage, ...mappingIssues, ...decisionCoverage, ...placementInformationIssues, ...placementInformationCoverage, ...orderIssues, ...continuityIssues, ...assetClosureIssues, ...assetSubjectIssues];
+  return [...sourceIssues, ...projectIssues, ...groups.flatMap((group): Issue[] => duplicateIssues(group.ids, group.name)), ...shotIssues, ...coverageIssues, ...unitCoverage, ...sourceOrderIssues(project), ...frameIssues, ...frameGroupIssues, ...audioIssues, ...textIssues, ...sourceUnitTextCueIssues, ...placementCoverage, ...mappingIssues, ...decisionCoverage, ...placementInformationIssues, ...placementInformationCoverage, ...orderIssues, ...continuityIssues, ...generationIssues, ...assetClosureIssues, ...assetSubjectIssues];
 }

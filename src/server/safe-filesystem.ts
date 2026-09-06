@@ -81,7 +81,10 @@ export class SafeStoreFilesystem {
     if (kind === 'directory') return;
     if (kind !== 'missing') unsafe(path, `cannot create directory over ${kind}`);
     await this.requireDirectory(dirname(path));
-    await mkdir(path);
+    try { await mkdir(path); }
+    catch (error: unknown) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
+    }
     await this.requireDirectory(path);
   }
 
