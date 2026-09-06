@@ -20,7 +20,7 @@ import type { AppConfig } from '../src/server/config.js';
 import { ProjectStore } from '../src/server/store.js';
 import { BrowserAudioController } from '../web/src/audio-lifecycle.js';
 import type { AudioElementPort, AudioLifecycleCue, AudioScheduler } from '../web/src/audio-lifecycle.js';
-import { nativePackage, pcmWav, testAudioNormalizer, TEST_AUDIO_NORMALIZATION_OPTIONS } from './helpers.js';
+import { nativePackage, pcmWav, png, testAudioNormalizer, TEST_AUDIO_NORMALIZATION_OPTIONS } from './helpers.js';
 
 const roots: string[] = [];
 
@@ -97,7 +97,11 @@ async function createLegacyFixture(sampleRate: number, channels: 1 | 2, bitsPerS
   const root: string = await temporaryRoot('storyboard-hardening-');
   const dataRoot: string = join(root, 'data');
   const store: ProjectStore = new ProjectStore(dataRoot);
-  await store.create(project);
+  await store.create(base);
+  const directory: string = projectDirectory(dataRoot, project.projectId);
+  const content: string = exportProjectJson(project);
+  await writeFile(join(directory, 'project.json'), content);
+  await writeFile(join(directory, 'versions', '000000.json'), content);
   const assetPath: string = await store.assetPath(project.projectId, asset.id);
   await mkdir(dirname(assetPath), { recursive: true });
   await writeFile(assetPath, bytes);
@@ -547,17 +551,18 @@ describe('저장 Transaction journal 복구', (): void => {
 
   it('현재 Project가 참조하는 Asset을 rollback으로 삭제하지 않는다', async (): Promise<void> => {
     const root: string = await temporaryRoot('storyboard-transaction-'); const dataRoot: string = join(root, 'data');
-    const assetBytes: Buffer = Buffer.from('preserved-asset'); const asset: Asset = imageAsset('preserved', 'assets/preserved.png', assetBytes);
-    const initial: Project = parseProject({ ...await outline(), assets: [asset] });
-    const store: ProjectStore = new ProjectStore(dataRoot); const previous: Project = await store.create(initial);
-    const assetPath: string = join(projectDirectory(dataRoot, previous.projectId), asset.path); await writeFile(assetPath, assetBytes);
-    const next: Project = parseProject({ ...previous, revision: 1 }); const transactionId: string = '00000000-0000-4000-8000-000000000013';
+    const assetBytes: Buffer = await png(2, 2); const asset: Asset = imageAsset('preserved', 'assets/preserved.png', assetBytes);
+    const store: ProjectStore = new ProjectStore(dataRoot); const initial: Project = await store.create(await outline());
+    const previous: Project = await store.update(initial.projectId, initial.revision, (current: Project): Project => ({ ...current,
+      assets: [...current.assets, asset] }), [{ relativePath: asset.path, content: assetBytes }]);
+    const assetPath: string = join(projectDirectory(dataRoot, previous.projectId), asset.path);
+    const next: Project = parseProject({ ...previous, revision: 2 }); const transactionId: string = '00000000-0000-4000-8000-000000000013';
     const transactionPath: string = await stageTransaction(dataRoot, previous, next, transactionId, [{ asset, bytes: assetBytes }]);
     await unlink(join(transactionPath, 'asset-0.bin'));
     const blocked: ProjectStore = new ProjectStore(dataRoot); await blocked.initialize();
     await expect(blocked.assertMutable(previous.projectId)).rejects.toMatchObject({ code: 'STORE_RECOVERY_BLOCKED' });
     expect((await readFile(assetPath)).equals(assetBytes)).toBe(true);
-    expect((await store.read(previous.projectId)).revision).toBe(0);
+    expect((await store.read(previous.projectId)).revision).toBe(1);
   });
 
   it('복구를 다시 실행해도 이미 복구된 저장 상태가 바뀌지 않는다', async (): Promise<void> => {

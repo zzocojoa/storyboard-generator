@@ -107,7 +107,7 @@ function placementFixture(project: Project): { placement: TextPlacement; decisio
   return { placement, decision, cue, unit };
 }
 
-async function lateGateAudioProject(assetId: string): Promise<{ project: Project; cue: AudioCue; asset: Asset; bytes: Buffer }> {
+async function lateGateAudioProject(assetId: string): Promise<{ base: Project; project: Project; cue: AudioCue; asset: Asset; bytes: Buffer }> {
   const payload = await nativePackage();
   const data = nativeData(payload);
   const sound = data.units.find((unit): boolean => unit.kind === 'SOUND');
@@ -122,7 +122,7 @@ async function lateGateAudioProject(assetId: string): Promise<{ project: Project
   const bytes: Buffer = pcmWav(500, 48000, 1, 16);
   const asset: Asset = { id: assetId, kind: 'audio', subjectId: cue.id, path: `assets/${sha256Text(assetId)}.wav`, mimeType: 'audio/wav',
     sha256: sha256Bytes(bytes), description: 'Gate 검증', durationMs: 500, version: 1, audioMetadata: { sampleRate: 48000, channels: 1, codec: 'pcm_s16le' } };
-  return { cue, asset, bytes, project: { ...base, assets: [asset], audioCues: base.audioCues.map((value: AudioCue): AudioCue => value.id === cue.id
+  return { base, cue, asset, bytes, project: { ...base, assets: [asset], audioCues: base.audioCues.map((value: AudioCue): AudioCue => value.id === cue.id
     ? { ...value, endMs: value.startMs + 500, timingStatus: 'measured', assetId } : value) } };
 }
 
@@ -276,9 +276,9 @@ describe('B. AUDIO ASSET IMPORT', (): void => {
 });
 
 describe('C. SAFE AUDIO OUTPUT', (): void => {
-  async function storedAudio(): Promise<{ app: FastifyInstance; store: ProjectStore; project: Project; cue: AudioCue; bytes: Buffer; path: string }> {
-    const base: Project = await nativeOutline(); const cue: AudioCue = sfxCue(base); const { app, store } = await temporaryApp(base); const mutation = await attach(base, cue, 500, 'safe-audio');
-    const project: Project = await saveMutation(store, base, mutation); return { app, store, project, cue, bytes: mutation.content as Buffer, path: await store.assetPath(base.projectId, 'safe-audio') };
+  async function storedAudio(): Promise<{ app: FastifyInstance; root: string; store: ProjectStore; project: Project; cue: AudioCue; bytes: Buffer; path: string }> {
+    const base: Project = await nativeOutline(); const cue: AudioCue = sfxCue(base); const { app, root, store } = await temporaryApp(base); const mutation = await attach(base, cue, 500, 'safe-audio');
+    const project: Project = await saveMutation(store, base, mutation); return { app, root, store, project, cue, bytes: mutation.content as Buffer, path: await store.assetPath(base.projectId, 'safe-audio') };
   }
   it('safe_audio_endpoint_returns_actual_bytes', async (): Promise<void> => {
     const fixture = await storedAudio(); const response = await fixture.app.inject({ method: 'GET', url: `/api/projects/${fixture.project.projectId}/output/audio/${fixture.cue.id}` });
@@ -294,8 +294,8 @@ describe('C. SAFE AUDIO OUTPUT', (): void => {
     expect((await fixture.app.inject({ method: 'GET', url: `/api/projects/${fixture.project.projectId}/output/audio/${fixture.cue.id}` })).statusCode).toBe(400); await fixture.app.close();
   });
   it('gate_blocked_audio_is_not_returned', async (): Promise<void> => {
-    const gated = await lateGateAudioProject('gate-blocked'); const { app, store } = await temporaryApp(gated.project);
-    await store.update(gated.project.projectId, 0, (project: Project): Project => project, [{ relativePath: gated.asset.path, content: gated.bytes }]);
+    const gated = await lateGateAudioProject('gate-blocked'); const { app, store } = await temporaryApp(gated.base);
+    await store.update(gated.project.projectId, 0, (): Project => gated.project, [{ relativePath: gated.asset.path, content: gated.bytes }]);
     expect((await app.inject({ method: 'GET', url: `/api/projects/${gated.project.projectId}/output/audio/${gated.cue.id}` })).statusCode).toBe(400); await app.close();
   });
   it('missing_audio_file_is_blocked', async (): Promise<void> => {
@@ -308,7 +308,10 @@ describe('C. SAFE AUDIO OUTPUT', (): void => {
   });
   it('corrupt_audio_file_is_blocked', async (): Promise<void> => {
     const fixture = await storedAudio(); const corrupt: Buffer = Buffer.from('RIFF-corrupt'); await writeFile(fixture.path, corrupt);
-    await fixture.store.update(fixture.project.projectId, 1, (project: Project): Project => ({ ...project, assets: project.assets.map((asset: Asset): Asset => asset.id === 'safe-audio' ? { ...asset, sha256: sha256Bytes(corrupt) } : asset) }), []);
+    const corrupted: Project = parseProject({ ...fixture.project, assets: fixture.project.assets.map((asset: Asset): Asset => asset.id === 'safe-audio'
+      ? { ...asset, sha256: sha256Bytes(corrupt) } : asset) });
+    const directory: string = join(fixture.root, 'data', sha256Text(fixture.project.projectId)); const content: string = exportProjectJson(corrupted);
+    await writeFile(join(directory, 'project.json'), content); await writeFile(join(directory, 'versions', '000001.json'), content);
     expect((await fixture.app.inject({ method: 'GET', url: `/api/projects/${fixture.project.projectId}/output/audio/${fixture.cue.id}` })).statusCode).not.toBe(200); await fixture.app.close();
   });
   it('raw_review_asset_does_not_replace_safe_output_policy', async (): Promise<void> => {
@@ -598,8 +601,8 @@ describe('I. READY METRICS', (): void => {
     await store.update(base.projectId, saved.revision, (project: Project): Project => ({ ...project, audioCues: project.audioCues.map((value: AudioCue): AudioCue => value.id === cue.id ? { ...value, timingStatus: 'proposed' } : value) }), []); expect((await store.list())[0]?.audioPlayable).toBe(0);
   });
   it('gate_blocked_audio_is_not_counted_as_playable', async (): Promise<void> => {
-    const gated = await lateGateAudioProject('metric-gate'); const { store } = await temporaryStore(gated.project);
-    await store.update(gated.project.projectId, 0, (project: Project): Project => project, [{ relativePath: gated.asset.path, content: gated.bytes }]);
+    const gated = await lateGateAudioProject('metric-gate'); const { store } = await temporaryStore(gated.base);
+    await store.update(gated.project.projectId, 0, (): Project => gated.project, [{ relativePath: gated.asset.path, content: gated.bytes }]);
     expect((await store.list())[0]?.audioPlayable).toBe(0);
   });
   it('valid_measured_audio_is_counted_as_playable', async (): Promise<void> => {

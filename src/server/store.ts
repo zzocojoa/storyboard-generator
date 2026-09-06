@@ -8,6 +8,7 @@ import { reviewFrameOutput } from '../domain/frame-output.js';
 import { inspectAudioFileBytes, verifyStoredAsset } from '../domain/media-inspection.js';
 import type { InspectedAudioFile } from '../domain/media-inspection.js';
 import { reviewAudioPlaybackAt, reviewTextPlaybackAt } from '../domain/playback.js';
+import { ProjectSchema } from '../domain/schema.js';
 import type { Asset, Project } from '../domain/schema.js';
 import { exportProjectJson } from '../exporters/json.js';
 import { sha256Bytes, sha256Text } from '../importers/integrity.js';
@@ -22,6 +23,12 @@ export type ProjectSummary = {
   textPlayable: number; textTotal: number; blockedOutputCount: number; issues: number; updatedAt: string;
 };
 export type AssetWrite = { relativePath: string; content: Buffer };
+export type ProjectAssetReference = { assetId: string; field: string };
+export type AssetCatalogTransition = {
+  preservedAssets: readonly Asset[];
+  newAssets: readonly Asset[];
+  writesByAssetId: ReadonlyMap<string, AssetWrite>;
+};
 export type StoredAsset = { content: Buffer; mimeType: string; asset: Asset };
 export type AudioAssetRecoverySource = { content: Buffer; asset: Asset; inspection: InspectedAudioFile };
 export type StorageRecoveryEvent = {
@@ -32,7 +39,8 @@ export type StorageRecoveryEvent = {
 export type StorageRecoveryBlock = {
   version: 1; projectId: string; directoryName: string; transactionId: string; code: string; message: string; detectedAt: string;
 };
-export type StorageFaultPoint = 'after-update-preflight' | 'after-update-journal-prepared' | 'after-update-asset-linked'
+export type StorageFaultPoint = 'after-update-lock-acquired' | 'after-update-current-read' | 'after-update-under-lock-preflight'
+  | 'before-update-journal-create' | 'after-update-preflight' | 'after-update-journal-prepared' | 'after-update-asset-linked'
   | 'after-update-version-linked' | 'after-update-current-published' | 'before-update-cleanup'
   | 'after-create-journal-prepared' | 'after-create-version-zero-written' | 'after-create-current-written'
   | 'before-create-directory-publish' | 'after-create-directory-publish' | 'before-create-cleanup';
@@ -131,8 +139,87 @@ function assetFailureCode(error: unknown): string | null {
     .includes(code) ? code : null;
 }
 
+function storageProtectionRequired(error: unknown): boolean {
+  return ['STORE_RECOVERY_REQUIRED', 'STORE_PATH_UNSAFE', 'STORE_CONCURRENT_MODIFICATION'].includes(errorCode(error));
+}
+
+function assetDifferenceFields(current: Asset, next: Asset): string[] {
+  const fields: string[] = [...new Set([...Object.keys(current), ...Object.keys(next)])].sort();
+  return fields.filter((field: string): boolean => JSON.stringify(current[field as keyof Asset]) !== JSON.stringify(next[field as keyof Asset]));
+}
+
+/** Project Schema에서 Asset ID를 참조하는 모든 필드를 한 곳에서 수집한다. */
+export function collectProjectAssetReferences(project: Project): ProjectAssetReference[] {
+  const references: ProjectAssetReference[] = [];
+  for (const frame of project.frames) if (frame.imageAssetId !== null) references.push({ assetId: frame.imageAssetId, field: `frames.${frame.id}.imageAssetId` });
+  for (const cue of project.audioCues) if (cue.assetId !== null) references.push({ assetId: cue.assetId, field: `audioCues.${cue.id}.assetId` });
+  for (const record of project.generationRecords) for (const assetId of record.resultAssetIds) {
+    references.push({ assetId, field: `generationRecords.${record.id}.resultAssetIds` });
+  }
+  for (const shot of project.shots) {
+    for (const [index, continuity] of shot.continuityBefore.entries()) {
+      references.push({ assetId: continuity.assetId, field: `shots.${shot.id}.continuityBefore.${index}.assetId` });
+    }
+    for (const [index, continuity] of shot.continuityAfter.entries()) {
+      references.push({ assetId: continuity.assetId, field: `shots.${shot.id}.continuityAfter.${index}.assetId` });
+    }
+  }
+  return references;
+}
+
+/** Revision 사이의 Asset catalog와 write 집합이 append-only 계약을 만족하는지 검사한다. */
+export function assertAssetCatalogTransition(
+  current: Project, next: Project, assetWrites: readonly AssetWrite[],
+): AssetCatalogTransition {
+  const currentById: Map<string, Asset> = new Map<string, Asset>();
+  const currentPaths: Set<string> = new Set<string>();
+  for (const asset of current.assets) {
+    if (currentById.has(asset.id) || currentPaths.has(asset.path)) throw contractError('DUPLICATE_ASSET_METADATA', `Current Asset ID와 경로는 각각 유일해야 합니다. assetId=${asset.id}, path=${asset.path}`, []);
+    currentById.set(asset.id, asset); currentPaths.add(asset.path);
+  }
+  const nextById: Map<string, Asset> = new Map<string, Asset>();
+  for (const asset of next.assets) {
+    if (nextById.has(asset.id)) throw contractError('DUPLICATE_ASSET_METADATA', `Next Asset ID가 중복됩니다. assetId=${asset.id}`, []);
+    nextById.set(asset.id, asset);
+  }
+  const preservedAssets: Asset[] = [];
+  for (const currentAsset of current.assets) {
+    const nextAsset: Asset | undefined = nextById.get(currentAsset.id);
+    if (nextAsset === undefined) throw contractError('ASSET_REMOVAL_FORBIDDEN', `기존 Asset metadata는 삭제할 수 없습니다. assetId=${currentAsset.id}`, []);
+    const changedFields: string[] = assetDifferenceFields(currentAsset, nextAsset);
+    if (changedFields.length > 0) throw contractError('ASSET_METADATA_IMMUTABLE', `기존 Asset metadata는 변경할 수 없습니다. assetId=${currentAsset.id}, fields=${changedFields.join(',')}`, []);
+    preservedAssets.push(nextAsset);
+  }
+  const newAssets: Asset[] = next.assets.filter((asset: Asset): boolean => !currentById.has(asset.id));
+  for (const asset of newAssets) if (currentPaths.has(asset.path)) {
+    throw contractError('ASSET_PATH_REUSE_FORBIDDEN', `신규 Asset은 기존 Asset 경로를 재사용할 수 없습니다. assetId=${asset.id}, path=${asset.path}`, []);
+  }
+  const nextPaths: Set<string> = new Set<string>();
+  for (const asset of next.assets) {
+    if (nextPaths.has(asset.path)) throw contractError('DUPLICATE_ASSET_METADATA', `Next Asset 경로가 중복됩니다. assetId=${asset.id}, path=${asset.path}`, []);
+    nextPaths.add(asset.path);
+  }
+  const writesByPath: Map<string, AssetWrite> = new Map<string, AssetWrite>();
+  for (const write of assetWrites) {
+    if (writesByPath.has(write.relativePath)) throw contractError('DUPLICATE_ASSET_WRITE', `AssetWrite 경로가 중복됩니다. path=${write.relativePath}`, []);
+    if (currentPaths.has(write.relativePath)) throw contractError('ASSET_WRITE_FOR_EXISTING_ASSET', `기존 Asset 경로에는 새 AssetWrite를 제출할 수 없습니다. path=${write.relativePath}`, []);
+    writesByPath.set(write.relativePath, write);
+  }
+  const writesByAssetId: Map<string, AssetWrite> = new Map<string, AssetWrite>();
+  for (const asset of newAssets) {
+    const write: AssetWrite | undefined = writesByPath.get(asset.path);
+    if (write === undefined) throw contractError('ASSET_WRITE_COUNT_MISMATCH', `새 Asset metadata에 대응하는 AssetWrite가 없습니다. assetId=${asset.id}, path=${asset.path}`, []);
+    writesByAssetId.set(asset.id, write);
+  }
+  for (const write of assetWrites) if (!newAssets.some((asset: Asset): boolean => asset.path === write.relativePath)) {
+    throw contractError('ASSET_WRITE_UNDECLARED', `신규 Asset metadata가 없는 AssetWrite입니다. path=${write.relativePath}`, []);
+  }
+  return { preservedAssets, newAssets, writesByAssetId };
+}
+
 type NormalizedFileProof = { stagedRelativePath: string; finalRelativePath: string; sha256: string };
 type NormalizedAssetProof = NormalizedFileProof & { assetId: string };
+type StagedAsset = { stagedRelativePath: string; finalPath: string; proof: NormalizedAssetProof; content: Buffer };
 type NormalizedJournal = {
   version: 2 | 3; transactionId: string; projectId: string; owner: z.infer<typeof TransactionOwnerSchema>;
   expectedRevision: number; nextRevision: number; previousProject: NormalizedFileProof; nextProject: NormalizedFileProof;
@@ -456,6 +543,17 @@ export class ProjectStore {
     await this.#fs.syncDirectory(dirname(lock.path));
   }
 
+  async #verifyOwnedLock(lock: RecoveryLock): Promise<void> {
+    if (await this.#fs.kind(lock.path) !== 'file') recoveryRequired(`현재 Update가 소유한 Project lock이 없습니다. projectId=${lock.metadata.projectId}, transactionId=${lock.metadata.transactionId}`);
+    let current: StoreLock;
+    try { current = StoreLockSchema.parse(JSON.parse(await this.#fs.readText(lock.path)) as unknown); }
+    catch (error: unknown) { recoveryRequired(`현재 Update의 Project lock을 검증할 수 없습니다. projectId=${lock.metadata.projectId}, cause=${error instanceof Error ? error.message : String(error)}`); }
+    if (current.projectId !== lock.metadata.projectId || current.transactionId !== lock.metadata.transactionId
+      || current.host !== lock.metadata.host || current.pid !== lock.metadata.pid || JSON.stringify(current) !== JSON.stringify(lock.metadata)) {
+      recoveryRequired(`현재 Update의 Project lock 소유권이 일치하지 않습니다. projectId=${lock.metadata.projectId}, transactionId=${lock.metadata.transactionId}`);
+    }
+  }
+
   async #recoverTransaction(projectId: string, transactionId: string, lock: RecoveryLock | null): Promise<void> {
     const transactionPath: string = this.#transactionPath(projectId, transactionId);
     const journalPath: string = join(transactionPath, TRANSACTION_JOURNAL);
@@ -542,29 +640,9 @@ export class ProjectStore {
     return projectId;
   }
 
-  async #verifyProjectStructure(projectId: string): Promise<Project> {
+  async #verifyCurrentSnapshotEntries(projectId: string, allowed: ReadonlySet<string>): Promise<Project> {
     const directory: string = this.#directory(projectId);
     await this.#fs.requireDirectory(directory);
-    const allowed: Set<string> = new Set<string>(['project.json', 'versions', 'assets', TRANSACTIONS_DIRECTORY]);
-    const unknown: string[] = (await this.#fs.entries(directory)).filter((entry): boolean => !allowed.has(entry.name)).map((entry): string => entry.name);
-    if (unknown.length > 0) recoveryRequired(`Project 디렉터리에 알 수 없는 항목이 있습니다. projectId=${projectId}, entries=${unknown.join(',')}`);
-    await this.#fs.requireDirectory(this.#versionsPath(projectId));
-    await this.#fs.requireDirectory(join(directory, 'assets'));
-    await this.#fs.requireDirectory(this.#transactionsPath(projectId));
-    if ((await this.#fs.entries(this.#transactionsPath(projectId))).length > 0) recoveryRequired(`Project 디렉터리에 미해결 Transaction이 있습니다. projectId=${projectId}`);
-    const current: Project = await this.#readProjectFile(this.#currentPath(projectId));
-    if (current.projectId !== projectId) recoveryRequired(`Project 디렉터리와 현재 Project ID가 다릅니다. projectId=${projectId}`);
-    const versions: Project[] = await this.#versionProjects(projectId, null);
-    if (!versions.some((project: Project): boolean => project.revision === 0)) recoveryRequired(`Initial revision snapshot이 없습니다. projectId=${projectId}`);
-    const currentVersion: Project | undefined = versions.find((project: Project): boolean => project.revision === current.revision);
-    if (currentVersion === undefined || exportProjectJson(currentVersion) !== exportProjectJson(current)) recoveryRequired(`현재 Project와 revision snapshot이 다릅니다. projectId=${projectId}, revision=${current.revision}`);
-    return current;
-  }
-
-  async #verifyCurrentSnapshot(projectId: string): Promise<Project> {
-    const directory: string = this.#directory(projectId);
-    await this.#fs.requireDirectory(directory);
-    const allowed: Set<string> = new Set<string>(['project.json', 'versions', 'assets', TRANSACTIONS_DIRECTORY]);
     const unknown: string[] = (await this.#fs.entries(directory)).filter((entry): boolean => !allowed.has(entry.name)).map((entry): string => entry.name);
     if (unknown.length > 0) recoveryRequired(`Project 디렉터리에 알 수 없는 항목이 있습니다. projectId=${projectId}, entries=${unknown.join(',')}`);
     await this.#fs.requireDirectory(this.#versionsPath(projectId));
@@ -577,6 +655,15 @@ export class ProjectStore {
     if (current.projectId !== projectId || snapshot.projectId !== projectId || snapshot.revision !== current.revision
       || exportProjectJson(snapshot) !== exportProjectJson(current)) recoveryRequired(`현재 Project와 revision snapshot이 다릅니다. projectId=${projectId}, revision=${current.revision}`);
     return current;
+  }
+
+  async #verifyCurrentSnapshot(projectId: string): Promise<Project> {
+    return this.#verifyCurrentSnapshotEntries(projectId, new Set<string>(['project.json', 'versions', 'assets', TRANSACTIONS_DIRECTORY]));
+  }
+
+  async #verifyCurrentSnapshotUnderLock(projectId: string, lock: RecoveryLock): Promise<Project> {
+    await this.#verifyOwnedLock(lock);
+    return this.#verifyCurrentSnapshotEntries(projectId, new Set<string>(['project.json', 'versions', 'assets', TRANSACTIONS_DIRECTORY, 'write.lock']));
   }
 
   async #verifyCompleteProjectDirectory(projectId: string): Promise<Project> {
@@ -729,40 +816,33 @@ export class ProjectStore {
     }
   }
 
-  async #assertMutationReady(projectId: string): Promise<Project> {
+  async #assertProjectCanAttemptMutation(projectId: string): Promise<void> {
     const directoryName: string = projectKey(projectId);
     const block: StorageRecoveryBlock | undefined = this.#recoveryBlocks.get(directoryName);
     if (block !== undefined || await this.#fs.kind(this.#recoveryBlockPath(directoryName)) !== 'missing') {
       throw contractError('STORE_RECOVERY_BLOCKED', `${projectId}: 저장 복구가 완료될 때까지 변경할 수 없습니다. cause=${block?.code ?? 'recovery marker'}`, []);
     }
     if (await this.#fs.kind(this.#directory(projectId)) === 'missing') throw contractError('PROJECT_NOT_FOUND', `저장된 프로젝트를 찾을 수 없습니다: ${projectId}`, []);
-    const current: Project = await this.#verifyCurrentSnapshot(projectId);
     if (await this.#fs.kind(join(this.#directory(projectId), 'write.lock')) !== 'missing') throw contractError('PROJECT_BUSY', `${projectId}: 다른 저장 작업이 진행 중입니다.`, []);
-    return current;
   }
 
-  async #preflightAssetWrites(projectId: string, current: Project, next: Project, assetWrites: readonly AssetWrite[]): Promise<Array<{ stagedRelativePath: string; finalPath: string; proof: NormalizedAssetProof; content: Buffer }>> {
-    const ids: Set<string> = new Set<string>();
-    const paths: Set<string> = new Set<string>();
-    for (const asset of next.assets) {
-      if (ids.has(asset.id) || paths.has(asset.path)) throw contractError('DUPLICATE_ASSET_METADATA', `Asset ID와 경로는 각각 유일해야 합니다. assetId=${asset.id}, path=${asset.path}`, []);
-      ids.add(asset.id); paths.add(asset.path);
+  async #verifyMutationReadyUnderLock(projectId: string, lock: RecoveryLock): Promise<Project> {
+    const directoryName: string = projectKey(projectId);
+    if (this.#recoveryBlocks.has(directoryName) || await this.#fs.kind(this.#recoveryBlockPath(directoryName)) !== 'missing') {
+      throw contractError('STORE_RECOVERY_BLOCKED', `${projectId}: 저장 복구가 완료될 때까지 변경할 수 없습니다.`, []);
     }
-    const newAssets: Asset[] = next.assets.filter((asset: Asset): boolean => !current.assets.some((candidate: Asset): boolean => candidate.id === asset.id));
-    const suppliedPaths: Set<string> = new Set<string>(assetWrites.map((assetWrite: AssetWrite): string => assetWrite.relativePath));
-    const missingNew: Asset[] = newAssets.filter((asset: Asset): boolean => !suppliedPaths.has(asset.path));
-    if (missingNew.length > 0) throw contractError('ASSET_WRITE_COUNT_MISMATCH', `새 Asset metadata에 대응하는 AssetWrite가 없습니다. assetIds=${missingNew.map((asset: Asset): string => asset.id).join(',')}`, []);
-    const writePaths: Set<string> = new Set<string>();
-    const result: Array<{ stagedRelativePath: string; finalPath: string; proof: NormalizedAssetProof; content: Buffer }> = [];
-    for (const [index, assetWrite] of assetWrites.entries()) {
-      if (writePaths.has(assetWrite.relativePath)) throw contractError('DUPLICATE_ASSET_WRITE', `AssetWrite 경로가 중복됩니다. path=${assetWrite.relativePath}`, []);
-      writePaths.add(assetWrite.relativePath);
-      const matches: Asset[] = next.assets.filter((asset: Asset): boolean => asset.path === assetWrite.relativePath);
-      const metadata: Asset | undefined = matches[0];
-      if (matches.length !== 1 || metadata === undefined) throw contractError('ASSET_WRITE_UNDECLARED', `새 Project metadata의 자산 경로와 AssetWrite가 1:1이 아닙니다. path=${assetWrite.relativePath}, matches=${matches.length}`, []);
+    return this.#verifyCurrentSnapshotUnderLock(projectId, lock);
+  }
+
+  async #preflightAssetWrites(projectId: string, next: Project, transition: AssetCatalogTransition): Promise<StagedAsset[]> {
+    const result: StagedAsset[] = [];
+    for (const [index, metadata] of transition.newAssets.entries()) {
+      const assetWrite: AssetWrite | undefined = transition.writesByAssetId.get(metadata.id);
+      if (assetWrite === undefined) throw contractError('ASSET_WRITE_COUNT_MISMATCH', `새 Asset metadata에 대응하는 AssetWrite가 없습니다. assetId=${metadata.id}`, []);
       if (sha256Bytes(assetWrite.content) !== metadata.sha256) throw contractError('ASSET_WRITE_HASH_MISMATCH', `AssetWrite 해시가 metadata와 다릅니다. assetId=${metadata.id}`, []);
       await verifyStoredAsset(next, metadata, assetWrite.content);
       const finalPath: string = this.#safeAssetPath(projectId, metadata);
+      if (await this.#fs.kind(dirname(finalPath)) === 'missing') throw contractError('ASSET_PARENT_DIRECTORY_MISSING', `Asset 저장 상위 디렉터리가 없습니다. assetId=${metadata.id}, path=${metadata.path}`, []);
       await this.#fs.requireDirectory(dirname(finalPath));
       if (await this.#fs.kind(finalPath) !== 'missing') throw contractError('ASSET_FILE_EXISTS', `새 자산 경로가 이미 존재합니다. path=${finalPath}`, []);
       const stagedRelativePath: string = `asset-${index}.bin`;
@@ -770,6 +850,28 @@ export class ProjectStore {
         proof: { assetId: metadata.id, stagedRelativePath, finalRelativePath: metadata.path, sha256: metadata.sha256 } });
     }
     return result;
+  }
+
+  async #recheckCurrentBeforeJournal(projectId: string, lock: RecoveryLock, currentRevision: number,
+    currentSha256: string, committedVersion: string, stagedAssets: readonly StagedAsset[]): Promise<void> {
+    await this.#verifyOwnedLock(lock);
+    const currentPath: string = this.#currentPath(projectId);
+    if (await this.#fs.kind(currentPath) !== 'file') throw contractError('STORE_CONCURRENT_MODIFICATION', `Journal 생성 전 Current Project가 사라졌습니다. projectId=${projectId}`, []);
+    const currentContent: string = await this.#fs.readText(currentPath);
+    let current: Project;
+    try { current = parseProject(JSON.parse(currentContent) as unknown); }
+    catch (error: unknown) { throw contractError('STORE_CONCURRENT_MODIFICATION', `Journal 생성 전 Current Project를 해석할 수 없습니다. projectId=${projectId}, cause=${error instanceof Error ? error.message : String(error)}`, []); }
+    const actualSha256: string = sha256Text(currentContent);
+    if (current.revision !== currentRevision || actualSha256 !== currentSha256) {
+      throw contractError('STORE_CONCURRENT_MODIFICATION', `Journal 생성 전 Current Project가 변경됐습니다. projectId=${projectId}, expectedRevision=${currentRevision}, actualRevision=${current.revision}, expectedSha256=${currentSha256}, actualSha256=${actualSha256}`, []);
+    }
+    if (await this.#fs.kind(committedVersion) !== 'missing') throw contractError('STORE_CONCURRENT_MODIFICATION', `Journal 생성 전 다음 revision 경로가 생겼습니다. projectId=${projectId}, path=${committedVersion}`, []);
+    for (const staged of stagedAssets) if (await this.#fs.kind(staged.finalPath) !== 'missing') {
+      throw contractError('STORE_CONCURRENT_MODIFICATION', `Journal 생성 전 신규 Asset 경로가 생겼습니다. projectId=${projectId}, path=${staged.finalPath}`, []);
+    }
+    if ((await this.#fs.entries(this.#transactionsPath(projectId))).length !== 0) {
+      throw contractError('STORE_CONCURRENT_MODIFICATION', `Journal 생성 전 다른 Transaction이 발견됐습니다. projectId=${projectId}`, []);
+    }
   }
 
   async #assetForProject(project: Project, assetId: string): Promise<StoredAsset> {
@@ -828,7 +930,7 @@ export class ProjectStore {
 
   async assertMutable(projectId: string): Promise<void> {
     await this.initialize();
-    await this.#assertMutationReady(projectId);
+    await this.#assertProjectCanAttemptMutation(projectId);
   }
 
   async list(): Promise<ProjectSummary[]> {
@@ -852,8 +954,14 @@ export class ProjectStore {
   }
 
   async create(project: Project): Promise<Project> {
-    const valid: Project = parseProject(project);
-    if (valid.revision !== 0) throw contractError('INITIAL_PROJECT_REVISION_INVALID', `새 Project revision은 0이어야 합니다. projectId=${valid.projectId}, revision=${valid.revision}`, []);
+    const shaped: Project = ProjectSchema.parse(project);
+    if (shaped.revision !== 0) throw contractError('INITIAL_PROJECT_REVISION_INVALID', `새 Project revision은 0이어야 합니다. projectId=${shaped.projectId}, revision=${shaped.revision}`, []);
+    const assetReferences: ProjectAssetReference[] = collectProjectAssetReferences(shaped);
+    if (shaped.assets.length > 0 || assetReferences.length > 0) {
+      const fields: string = [...new Set(assetReferences.map((reference: ProjectAssetReference): string => reference.field))].join(',') || '없음';
+      throw contractError('UNSUPPORTED_INITIAL_PROJECT_ASSETS', `Initial Create는 Asset-free Project만 지원합니다. projectId=${shaped.projectId}, assetMetadataCount=${shaped.assets.length}, assetReferenceCount=${assetReferences.length}, referenceFields=${fields}. Asset-free Project를 먼저 생성한 뒤 Revision Update로 신규 Asset ID와 실제 파일을 등록하세요.`, []);
+    }
+    const valid: Project = parseProject(shaped);
     await this.initialize();
     const directoryName: string = projectKey(valid.projectId);
     if (this.#recoveryBlocks.has(directoryName)) throw contractError('STORE_RECOVERY_BLOCKED', `${valid.projectId}: 저장 복구가 필요합니다.`, []);
@@ -889,8 +997,7 @@ export class ProjectStore {
       await this.#fs.renameNewDirectory(stagedDirectory, directory); published = true; await this.#fs.syncDirectory(this.#fs.root());
       journal = await this.#writeCreateJournalPhase(transactionId, journal, 'published');
       await this.#fault('after-create-directory-publish');
-      if (valid.assets.length === 0) await this.#verifyCompleteProjectDirectory(valid.projectId);
-      else await this.#verifyProjectStructure(valid.projectId);
+      await this.#verifyCompleteProjectDirectory(valid.projectId);
       journal = await this.#writeCreateJournalPhase(transactionId, journal, 'verified');
       await this.#fault('before-create-cleanup');
       await this.#removeCreateTransaction(transactionId, journal);
@@ -909,29 +1016,37 @@ export class ProjectStore {
 
   async update(projectId: string, expectedRevision: number, transform: (project: Project) => Project, assetWrites: readonly AssetWrite[]): Promise<Project> {
     await this.initialize();
-    const current: Project = await this.#assertMutationReady(projectId);
-    if (current.revision !== expectedRevision) throw contractError('REVISION_CONFLICT', `${projectId}: expected=${expectedRevision}, actual=${current.revision}`, []);
-    const changed: Project = transform(current);
-    const next: Project = parseProject({ ...changed, projectId: current.projectId, revision: current.revision + 1 });
-    const committedVersion: string = this.#versionPath(projectId, next.revision);
-    if (await this.#fs.kind(committedVersion) !== 'missing') throw contractError('PROJECT_VERSION_EXISTS', `Project revision snapshot이 이미 존재합니다. path=${committedVersion}`, []);
-    const stagedAssets = await this.#preflightAssetWrites(projectId, current, next, assetWrites);
+    await this.#assertProjectCanAttemptMutation(projectId);
     const transactionId: string = randomUUID();
     const lock: RecoveryLock = await this.#acquireProjectLock(projectId, transactionId);
-    await this.#fault('after-update-preflight');
     const stagingDirectory: string = this.#transactionPath(projectId, transactionId);
-    const content: string = exportProjectJson(next);
-    const previousContent: string = exportProjectJson(current);
-    let journal: TransactionJournalV3 = TransactionJournalV3Schema.parse({ version: 3, operation: 'update', phase: 'prepared',
-      transactionId, projectId, owner: this.#owner(transactionId), expectedRevision: current.revision, nextRevision: next.revision,
-      previousProject: { stagedRelativePath: TRANSACTION_PREVIOUS_PROJECT, finalRelativePath: 'project.json', sha256: sha256Text(previousContent) },
-      nextProject: { stagedRelativePath: TRANSACTION_NEXT_PROJECT, finalRelativePath: 'project.json', sha256: sha256Text(content) },
-      versionFile: { stagedRelativePath: TRANSACTION_NEXT_VERSION, finalRelativePath: `versions/${transactionVersionFileName(next.revision)}`, sha256: sha256Text(content) },
-      assets: stagedAssets.map((item) => item.proof) });
     let transactionPrepared: boolean = false;
     let preserveLock: boolean = false;
     try {
-      if ((await this.#fs.entries(this.#transactionsPath(projectId))).length !== 0) recoveryRequired(`새 저장 전 미해결 Transaction이 발견됐습니다. projectId=${projectId}`);
+      await this.#fault('after-update-lock-acquired');
+      const current: Project = await this.#verifyMutationReadyUnderLock(projectId, lock);
+      const previousContent: string = exportProjectJson(current);
+      const previousSha256: string = sha256Text(previousContent);
+      await this.#fault('after-update-current-read');
+      if (current.revision !== expectedRevision) throw contractError('REVISION_CONFLICT', `${projectId}: expected=${expectedRevision}, actual=${current.revision}`, []);
+      const transformInput: Project = parseProject(structuredClone(current));
+      const changed: Project = transform(transformInput);
+      const next: Project = parseProject({ ...changed, projectId: current.projectId, revision: current.revision + 1 });
+      const transition: AssetCatalogTransition = assertAssetCatalogTransition(current, next, assetWrites);
+      const committedVersion: string = this.#versionPath(projectId, next.revision);
+      if (await this.#fs.kind(committedVersion) !== 'missing') throw contractError('PROJECT_VERSION_EXISTS', `Project revision snapshot이 이미 존재합니다. path=${committedVersion}`, []);
+      const stagedAssets: StagedAsset[] = await this.#preflightAssetWrites(projectId, next, transition);
+      await this.#fault('after-update-under-lock-preflight');
+      await this.#fault('before-update-journal-create');
+      await this.#recheckCurrentBeforeJournal(projectId, lock, current.revision, previousSha256, committedVersion, stagedAssets);
+      await this.#fault('after-update-preflight');
+      const content: string = exportProjectJson(next);
+      let journal: TransactionJournalV3 = TransactionJournalV3Schema.parse({ version: 3, operation: 'update', phase: 'prepared',
+        transactionId, projectId, owner: this.#owner(transactionId), expectedRevision: current.revision, nextRevision: next.revision,
+        previousProject: { stagedRelativePath: TRANSACTION_PREVIOUS_PROJECT, finalRelativePath: 'project.json', sha256: previousSha256 },
+        nextProject: { stagedRelativePath: TRANSACTION_NEXT_PROJECT, finalRelativePath: 'project.json', sha256: sha256Text(content) },
+        versionFile: { stagedRelativePath: TRANSACTION_NEXT_VERSION, finalRelativePath: `versions/${transactionVersionFileName(next.revision)}`, sha256: sha256Text(content) },
+        assets: stagedAssets.map((item: StagedAsset): NormalizedAssetProof => item.proof) });
       await this.#fs.ensureDirectory(stagingDirectory);
       await this.#fs.writeExclusive(join(stagingDirectory, TRANSACTION_PREVIOUS_PROJECT), previousContent);
       await this.#fs.writeExclusive(join(stagingDirectory, TRANSACTION_NEXT_PROJECT), content);
@@ -981,8 +1096,18 @@ export class ProjectStore {
         preserveLock = true;
         await this.#writeRecoveryBlock(projectKey(projectId), projectId, transactionId, rollbackError);
         throw new AggregateError([error, rollbackError], `프로젝트 저장 실패 후 transaction rollback도 실패했습니다. projectId=${projectId}, transactionId=${transactionId}`);
-      } finally {
-        if (!preserveLock) await this.#removeRecoveryLock(lock);
+      }
+      if (storageProtectionRequired(error)) {
+        preserveLock = true;
+        await this.#writeRecoveryBlock(projectKey(projectId), projectId, transactionId, error);
+      }
+      if (!preserveLock) {
+        try { await this.#removeRecoveryLock(lock); }
+        catch (lockError: unknown) {
+          preserveLock = true;
+          await this.#writeRecoveryBlock(projectKey(projectId), projectId, transactionId, lockError);
+          throw new AggregateError([error, lockError], `프로젝트 저장 실패 후 lock 정리도 실패했습니다. projectId=${projectId}, transactionId=${transactionId}`);
+        }
       }
       throw error;
     }

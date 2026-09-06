@@ -65,3 +65,7 @@ npm run codex-workbench -- fail --request <UUID> --code <SPECIFIC_CODE> --messag
 A stale request means its target changed after it was queued. Mark it failed and ask the user to queue a fresh request. After processing, report completed and failed request IDs and tell the user to press `REFRESH` in the workbench.
 
 If an apply command returns `STORE_RECOVERY_BLOCKED`, stop mutating that project and report the recovery block shown by `/api/status.storageRecoveryBlocks`. Do not remove a lock, transaction, recovery marker, version, or asset manually. A server restart retries journal recovery and clears the block only after ownership, hashes, references, and project structure are proven.
+
+Every apply command uses the ProjectStore revision contract. Another writer can return `PROJECT_BUSY`; retry only after that writer releases the project lock and reload the current revision first. A stale request returns `REVISION_CONFLICT` and must be regenerated or reapplied from fresh context. Do not wait by deleting `write.lock`, and do not treat either response as storage corruption.
+
+Initial Project import is Asset-free. Register generated images, reference images, and speech only through a later revision apply with a new Asset ID, path, version, and actual file. Existing Asset metadata and catalog entries are immutable and append-only. Replacing a frame or cue adds a new Asset and changes the reference while preserving the prior Asset for audit; never reuse its ID or path and never submit a write for an existing Asset.

@@ -103,31 +103,27 @@ async function writeCompleteProject(dataRoot: string, project: Project): Promise
 }
 
 async function referenceCrash(): Promise<CrashFixture> {
-  const fixtureRoot: string = await root('storyboard-reference-crash-'); const dataRoot: string = join(fixtureRoot, 'data');
-  const bytes: Buffer = await png(2, 2); const asset: Asset = assetMetadata('referenced-owned', bytes);
-  const initial: Project = parseProject({ ...(await outline()), assets: [asset] }); const project: Project = await new ProjectStore(dataRoot).create(initial);
-  const store = new ProjectStore(dataRoot, injector('after-update-asset-linked'));
-  await expect(store.update(project.projectId, 0, (current: Project): Project => ({ ...current, title: 'reference-next' }), [{ relativePath: asset.path, content: bytes }]))
-    .rejects.toSatisfy((error: unknown): boolean => codeOf(error) === 'SIMULATED_STORAGE_CRASH');
-  const names: string[] = await readdir(join(projectDirectory(dataRoot, project.projectId), '.transactions'));
-  return { root: fixtureRoot, dataRoot, project, asset, bytes,
-    transactionPath: names[0] === undefined ? null : join(projectDirectory(dataRoot, project.projectId), '.transactions', names[0]) };
+  const fixture: CrashFixture = await crashedUpdate('after-update-asset-linked', true);
+  const asset: Asset = fixture.asset as Asset;
+  const previous: Project = parseProject({ ...fixture.project, assets: [...fixture.project.assets, asset] });
+  const previousContent: string = exportProjectJson(previous);
+  const directory: string = projectDirectory(fixture.dataRoot, previous.projectId);
+  const transactionPath: string = fixture.transactionPath as string;
+  await writeFile(join(directory, 'project.json'), previousContent);
+  await writeFile(join(directory, 'versions', '000000.json'), previousContent);
+  await writeFile(join(transactionPath, 'project.previous.json'), previousContent);
+  const journalPath: string = join(transactionPath, 'journal.json');
+  const journal = JSON.parse(await readFile(journalPath, 'utf8')) as { previousProject: { sha256: string } };
+  journal.previousProject.sha256 = sha256Text(previousContent);
+  await writeFile(journalPath, JSON.stringify(journal));
+  return { ...fixture, project: previous };
 }
 
 async function historicalReferenceCrash(): Promise<CrashFixture> {
-  const fixtureRoot: string = await root('storyboard-history-crash-'); const dataRoot: string = join(fixtureRoot, 'data');
-  const store = new ProjectStore(dataRoot); const base: Project = await store.create(await outline());
-  const bytes: Buffer = await png(2, 2); const asset: Asset = assetMetadata('historical-owned', bytes);
-  const one: Project = await store.update(base.projectId, 0, (current: Project): Project => ({ ...current, assets: [...current.assets, asset] }), [{ relativePath: asset.path, content: bytes }]);
-  const two: Project = await store.update(base.projectId, 1, (current: Project): Project => ({ ...current, assets: current.assets.filter((value: Asset): boolean => value.id !== asset.id) }), []);
-  await unlink(join(projectDirectory(dataRoot, base.projectId), asset.path));
-  const crashing = new ProjectStore(dataRoot, injector('after-update-asset-linked'));
-  await expect(crashing.update(base.projectId, 2, (current: Project): Project => ({ ...current, assets: [...current.assets, asset] }), [{ relativePath: asset.path, content: bytes }]))
-    .rejects.toSatisfy((error: unknown): boolean => codeOf(error) === 'SIMULATED_STORAGE_CRASH');
-  expect(one.revision).toBe(1); expect(two.revision).toBe(2);
-  const names: string[] = await readdir(join(projectDirectory(dataRoot, base.projectId), '.transactions'));
-  return { root: fixtureRoot, dataRoot, project: two, asset, bytes,
-    transactionPath: names[0] === undefined ? null : join(projectDirectory(dataRoot, base.projectId), '.transactions', names[0]) };
+  const fixture: CrashFixture = await crashedUpdate('after-update-asset-linked', true);
+  const historical: Project = parseProject({ ...fixture.project, assets: [...fixture.project.assets, fixture.asset as Asset] });
+  await writeFile(join(projectDirectory(fixture.dataRoot, fixture.project.projectId), 'versions', '000000.json'), exportProjectJson(historical));
+  return fixture;
 }
 
 async function stageOtherReferenceTransaction(fixture: CrashFixture, referencePrevious: boolean): Promise<void> {
@@ -345,8 +341,12 @@ describe('E. Symlink safety', (): void => {
 
   it('asset_file_symlink_is_rejected', async (): Promise<void> => {
     const fixtureRoot: string = await root('storyboard-symlink-file-'); const dataRoot: string = join(fixtureRoot, 'data'); const bytes: Buffer = await png(2, 2); const asset: Asset = assetMetadata('linked', bytes);
-    const project = await new ProjectStore(dataRoot).create(parseProject({ ...(await outline()), assets: [asset] })); const outside: string = join(fixtureRoot, 'outside.png'); await writeFile(outside, bytes);
-    await symlink(outside, join(projectDirectory(dataRoot, project.projectId), asset.path)); await expect(new ProjectStore(dataRoot).asset(project.projectId, asset.id)).rejects.toSatisfy((error: unknown): boolean => codeOf(error) === 'STORE_PATH_UNSAFE');
+    const store: ProjectStore = new ProjectStore(dataRoot); const base: Project = await store.create(await outline());
+    const project: Project = await store.update(base.projectId, base.revision, (current: Project): Project => ({ ...current,
+      assets: [...current.assets, asset] }), [{ relativePath: asset.path, content: bytes }]);
+    const outside: string = join(fixtureRoot, 'outside.png'); const path: string = join(projectDirectory(dataRoot, project.projectId), asset.path);
+    await writeFile(outside, bytes); await unlink(path); await symlink(outside, path);
+    await expect(new ProjectStore(dataRoot).asset(project.projectId, asset.id)).rejects.toSatisfy((error: unknown): boolean => codeOf(error) === 'STORE_PATH_UNSAFE');
   });
 
   it('versions_directory_symlink_is_rejected', async (): Promise<void> => {
@@ -378,7 +378,11 @@ describe('E. Symlink safety', (): void => {
 
   it('safe_read_rejects_symlinked_asset', async (): Promise<void> => {
     const fixtureRoot: string = await root('storyboard-safe-read-'); const dataRoot: string = join(fixtureRoot, 'data'); const bytes: Buffer = await png(2, 2); const asset: Asset = assetMetadata('safe-read', bytes);
-    const project = await new ProjectStore(dataRoot).create(parseProject({ ...(await outline()), assets: [asset] })); const outside: string = join(fixtureRoot, 'read.png'); await writeFile(outside, bytes); await symlink(outside, join(projectDirectory(dataRoot, project.projectId), asset.path));
+    const store: ProjectStore = new ProjectStore(dataRoot); const base: Project = await store.create(await outline());
+    const project: Project = await store.update(base.projectId, base.revision, (current: Project): Project => ({ ...current,
+      assets: [...current.assets, asset] }), [{ relativePath: asset.path, content: bytes }]);
+    const outside: string = join(fixtureRoot, 'read.png'); const path: string = join(projectDirectory(dataRoot, project.projectId), asset.path);
+    await writeFile(outside, bytes); await unlink(path); await symlink(outside, path);
     await expect(new ProjectStore(dataRoot).asset(project.projectId, asset.id)).rejects.toSatisfy((error: unknown): boolean => codeOf(error) === 'STORE_PATH_UNSAFE');
   });
 
