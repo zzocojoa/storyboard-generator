@@ -1,0 +1,201 @@
+{
+  "$schema": "../../STANDARD/schemas/production_manifest_1_1.schema.json",
+  "schema_family": "production-manifest",
+  "schema_version": "1.1.0",
+  "project_id": "PRJ-007",
+  "source_footprint_sha256": "15930878fa6b81bf9f040a783237007d583ce3a7a0908dbda25896bd0eca225f",
+  "scenes": [
+    {
+      "scene_id": "SCN-01",
+      "location_id": "LOC-APARTMENT",
+      "cast_ids": [
+        "CHAR-01",
+        "CHAR-02",
+        "CHAR-03",
+        "CHAR-04"
+      ],
+      "child_actor_use": "NONE",
+      "vehicle_scene": "NONE",
+      "special_effect_level": "NONE",
+      "graphic_violence": "NONE",
+      "production_complexity": "LOW"
+    },
+    {
+      "scene_id": "SCN-02",
+      "location_id": "LOC-APARTMENT",
+      "cast_ids": [
+        "CHAR-01",
+        "CHAR-02",
+        "CHAR-03",
+        "CHAR-04"
+      ],
+      "child_actor_use": "NONE",
+      "vehicle_scene": "NONE",
+      "special_effect_level": "NONE",
+      "graphic_violence": "NONE",
+      "production_complexity": "LOW"
+    },
+    {
+      "scene_id": "SCN-03",
+      "location_id": "LOC-APARTMENT",
+      "cast_ids": [
+        "CHAR-01",
+        "CHAR-02",
+        "CHAR-03",
+        "CHAR-04"
+      ],
+      "child_actor_use": "NONE",
+      "vehicle_scene": "NONE",
+      "special_effect_level": "NONE",
+      "graphic_violence": "NONE",
+      "production_complexity": "LOW"
+    },
+    {
+      "scene_id": "SCN-04",
+      "location_id": "LOC-APARTMENT",
+      "cast_ids": [
+        "CHAR-01",
+        "CHAR-02",
+        "CHAR-03",
+        "CHAR-04"
+      ],
+      "child_actor_use": "NONE",
+      "vehicle_scene": "NONE",
+      "special_effect_level": "NONE",
+      "graphic_violence": "NONE",
+      "production_complexity": "LOW"
+    },
+    {
+      "scene_id": "SCN-05",
+      "location_id": "LOC-APARTMENT",
+      "cast_ids": [
+        "CHAR-01",
+        "CHAR-02",
+        "CHAR-03",
+        "CHAR-04"
+      ],
+      "child_actor_use": "NONE",
+      "vehicle_scene": "NONE",
+      "special_effect_level": "NONE",
+      "graphic_violence": "NONE",
+      "production_complexity": "LOW"
+    },
+    {
+      "scene_id": "SCN-06",
+      "location_id": "LOC-APARTMENT",
+      "cast_ids": [
+        "CHAR-01",
+        "CHAR-02",
+        "CHAR-03",
+        "CHAR-04",
+        "CHAR-05"
+      ],
+      "child_actor_use": "NONE",
+      "vehicle_scene": "NONE",
+      "special_effect_level": "NONE",
+      "graphic_violence": "NONE",
+      "production_complexity": "LOW"
+    },
+    {
+      "scene_id": "SCN-07",
+      "location_id": "LOC-MANAGEMENT",
+      "cast_ids": [
+        "CHAR-05"
+      ],
+      "child_actor_use": "NONE",
+      "vehicle_scene": "NONE",
+      "special_effect_level": "NONE",
+      "graphic_violence": "NONE",
+      "production_complexity": "LOW"
+    },
+    {
+      "scene_id": "SCN-08",
+      "location_id": "LOC-APARTMENT",
+      "cast_ids": [
+        "CHAR-02",
+        "CHAR-03",
+        "CHAR-04",
+        "CHAR-05"
+      ],
+      "child_actor_use": "NONE",
+      "vehicle_scene": "NONE",
+      "special_effect_level": "NONE",
+      "graphic_violence": "NONE",
+      "production_complexity": "LOW"
+    },
+    {
+      "scene_id": "SCN-09",
+      "location_id": "LOC-APARTMENT",
+      "cast_ids": [
+        "CHAR-01",
+        "CHAR-02",
+        "CHAR-03",
+        "CHAR-04",
+        "CHAR-05"
+      ],
+      "child_actor_use": "NONE",
+      "vehicle_scene": "NONE",
+      "special_effect_level": "NONE",
+      "graphic_violence": "NONE",
+      "production_complexity": "LOW"
+    },
+    {
+      "scene_id": "SCN-10",
+      "location_id": "LOC-MANAGEMENT",
+      "cast_ids": [
+        "CHAR-01",
+        "CHAR-02",
+        "CHAR-03",
+        "CHAR-04",
+        "CHAR-05"
+      ],
+      "child_actor_use": "NONE",
+      "vehicle_scene": "NONE",
+      "special_effect_level": "NONE",
+      "graphic_violence": "NONE",
+      "production_complexity": "LOW"
+    },
+    {
+      "scene_id": "SCN-11",
+      "location_id": "LOC-MANAGEMENT",
+      "cast_ids": [
+        "CHAR-01",
+        "CHAR-02",
+        "CHAR-03",
+        "CHAR-04",
+        "CHAR-05"
+      ],
+      "child_actor_use": "NONE",
+      "vehicle_scene": "NONE",
+      "special_effect_level": "NONE",
+      "graphic_violence": "NONE",
+      "production_complexity": "LOW"
+    },
+    {
+      "scene_id": "SCN-12",
+      "location_id": "LOC-MANAGEMENT",
+      "cast_ids": [
+        "CHAR-01",
+        "CHAR-02",
+        "CHAR-03",
+        "CHAR-04",
+        "CHAR-05"
+      ],
+      "child_actor_use": "NONE",
+      "vehicle_scene": "NONE",
+      "special_effect_level": "NONE",
+      "graphic_violence": "NONE",
+      "production_complexity": "LOW"
+    }
+  ],
+  "deliverables": [
+    {
+      "artifact_name": "production_broadcast_readable_script",
+      "path": "09_PRODUCTION/broadcast_readable_script.md",
+      "sha256": "44db07433f6f29c1e4385407fca959800e374fafe9176c5e260f1edf0791a7fd",
+      "source_report_sha256": "ae3324b6291fff5fe1221d6f32a8758dd81ee4a8c5aac8dcf399472a95b49bc7",
+      "profile_id": "BROADCAST_READABLE_SCRIPT",
+      "profile_version": "2.0.0"
+    }
+  ]
+}

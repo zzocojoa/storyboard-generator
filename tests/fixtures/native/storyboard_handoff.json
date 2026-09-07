@@ -1,0 +1,62 @@
+{
+  "contractVersion": "1.0.0",
+  "adapter": "native-v1",
+  "projectId": "plant-care-demo",
+  "packageVersion": "synthetic-1",
+  "upstreamRevision": null,
+  "timebase": {
+    "fpsNumerator": 25,
+    "fpsDenominator": 1,
+    "dropFrame": false,
+    "sampleRate": 48000,
+    "startTimecode": "00:00:00:00"
+  },
+  "profile": {
+    "medium": "unspecified",
+    "aspectWidth": 9,
+    "aspectHeight": 16,
+    "visualStyle": null
+  },
+  "files": [
+    {
+      "id": "native-source",
+      "role": "native-data",
+      "path": "data.json",
+      "required": true,
+      "hashMode": "bytes-sha256",
+      "sha256": "3d2d1d6f0bb61ba90c185dfe170cb54021c19d973b06a9e7d263a1540531eb3e"
+    }
+  ],
+  "authority": [
+    {
+      "field": "timeline",
+      "fileIds": [
+        "native-source"
+      ]
+    },
+    {
+      "field": "units",
+      "fileIds": [
+        "native-source"
+      ]
+    },
+    {
+      "field": "people",
+      "fileIds": [
+        "native-source"
+      ]
+    },
+    {
+      "field": "scenes",
+      "fileIds": [
+        "native-source"
+      ]
+    },
+    {
+      "field": "screen-text",
+      "fileIds": [
+        "native-source"
+      ]
+    }
+  ]
+}

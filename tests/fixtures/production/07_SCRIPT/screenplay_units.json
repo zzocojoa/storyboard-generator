@@ -1,0 +1,1995 @@
+{
+  "$schema": "../../../STANDARD/schemas/screenplay_units.schema.json",
+  "schema_family": "screenplay-units",
+  "schema_version": "1.0.0",
+  "project_id": "PRJ-007",
+  "title": "의부증의 늪",
+  "source_truth_classification": "ORIGINAL_FICTION",
+  "scenes": [
+    {
+      "scene_id": "SCN-01",
+      "order": 1,
+      "title": "숫자만 남은 밤",
+      "time_layer": "PRESENT",
+      "location_id": "LOC-APARTMENT",
+      "segment_ids": [
+        "SEG-001",
+        "SEG-002"
+      ],
+      "context": {
+        "location_description": "거실과 현관이 한눈에 이어지는 오래된 아파트",
+        "time_description": "태균이 귀가하기 전 늦은 밤",
+        "previous_scene_id": null,
+        "background_music_description": "낮은 현악음 위로 짧은 전자음이 불규칙하게 끊긴다.",
+        "sound_cues": [
+          {
+            "sound_cue_id": "SCUE-001",
+            "order": 1,
+            "description": "벽시계 초침과 휴대전화 진동"
+          }
+        ],
+        "opening_character_state": "서진은 태균의 생활 기록을 하나의 결론으로 묶으려 하고, 기철과 민주는 현관 밖에서 호출을 기다린다.",
+        "opening_emotional_state": "서진의 확신과 태균이 아직 모르는 위험이 충돌 직전까지 조여 온다.",
+        "action_summary": "서진이 야간 일정과 카드 내역을 표로 정리하고 익명 감시방 운영자들을 집 안으로 부른다.",
+        "audience_information_gain": "서진이 남편의 일상을 몰래 기록해 왔다는 사실과 맥락이 지워진 늦은 귀가 표를 본다."
+      },
+      "units": [
+        {
+          "unit_id": "UNIT-000",
+          "order": 1,
+          "type": "SCREEN_TEXT",
+          "text": "본 이야기는 창작입니다.",
+          "segment_id": "SEG-001",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-001",
+          "order": 2,
+          "type": "ACTION",
+          "text": "식탁 위 노트북 화면에 날짜와 귀가 시각만 빽빽하게 정렬돼 있다. 서진은 세탁 영수증과 공동 카드 내역을 옆 칸에 옮기며 빈칸마다 붉은 표시를 붙인다.",
+          "segment_id": "SEG-001",
+          "references": {
+            "fact_ids": [
+              "FACT-01"
+            ],
+            "clue_ids": [
+              "CLUE-01"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-002",
+          "order": 3,
+          "type": "SCREEN_TEXT",
+          "text": "최근 귀가 기록 — 월요일 늦음 / 수요일 늦음 / 금요일 늦음",
+          "segment_id": "SEG-001",
+          "references": {
+            "fact_ids": [
+              "FACT-01"
+            ],
+            "clue_ids": [
+              "CLUE-01"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-003",
+          "order": 4,
+          "type": "CHAT",
+          "text": "오늘은 말 돌리지 못하게 하세요. 저희가 옆에서 자료 순서대로 짚겠습니다.",
+          "segment_id": "SEG-001",
+          "speaker_id": "CHAR-03",
+          "references": {
+            "fact_ids": [
+              "FACT-01"
+            ],
+            "clue_ids": [
+              "CLUE-01"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-004",
+          "order": 5,
+          "type": "DIALOGUE",
+          "text": "시간은 거짓말 안 해. 내가 틀렸다면 저 숫자들이 먼저 설명돼야 해.",
+          "segment_id": "SEG-001",
+          "speaker_id": "CHAR-02",
+          "references": {
+            "fact_ids": [
+              "FACT-01"
+            ],
+            "clue_ids": [
+              "CLUE-01"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-005",
+          "order": 6,
+          "type": "SOUND",
+          "text": "엘리베이터 도착음 뒤에 한 사람의 발소리가 복도에서 가까워진다.",
+          "segment_id": "SEG-001",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-006",
+          "order": 7,
+          "type": "ACTION",
+          "text": "서진이 현관을 바라보자 기철과 민주가 안쪽 벽으로 몸을 붙인다. 식탁에는 네 개의 의자가 이미 서로 마주 보게 놓여 있다.",
+          "segment_id": "SEG-001",
+          "references": {
+            "fact_ids": [
+              "FACT-01"
+            ],
+            "clue_ids": [
+              "CLUE-01"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-007",
+          "order": 8,
+          "type": "NARRATION",
+          "text": "문 앞에 섰을 때 나는 오늘의 피곤함만 생각했다. 익숙한 집이 나를 기다리는 게 아니라, 누군가 정해 둔 답이 기다린다는 건 상상하지 못했다.",
+          "segment_id": "SEG-002",
+          "speaker_id": "CHAR-01",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        }
+      ]
+    },
+    {
+      "scene_id": "SCN-02",
+      "order": 2,
+      "title": "잠긴 대화",
+      "time_layer": "PRESENT",
+      "location_id": "LOC-APARTMENT",
+      "segment_ids": [
+        "SEG-003",
+        "SEG-004",
+        "SEG-005"
+      ],
+      "context": {
+        "location_description": "현관문과 식탁 사이의 좁은 거실",
+        "time_description": "태균이 귀가한 직후",
+        "previous_scene_id": "SCN-01",
+        "background_music_description": "둔한 저음이 현관 잠금음 뒤로 길게 이어진다.",
+        "sound_cues": [
+          {
+            "sound_cue_id": "SCUE-002",
+            "order": 1,
+            "description": "도어록 잠금음과 바닥에 놓이는 휴대전화 소리"
+          }
+        ],
+        "opening_character_state": "태균은 설명을 요구받는 부부 다툼이라 여기지만 세 사람은 이미 그의 이동과 연락을 통제하기로 합의했다.",
+        "opening_emotional_state": "당혹감이 명백한 위협 인식으로 급격히 바뀐다.",
+        "action_summary": "서진과 두 운영자가 태균의 퇴거와 연락을 막고 사진과 목격담을 근거로 자백을 요구한다.",
+        "audience_information_gain": "외도 논쟁의 외피가 벗겨지고 자유를 제한하는 감금 범죄가 현재형으로 시작된다."
+      },
+      "units": [
+        {
+          "unit_id": "UNIT-008",
+          "order": 1,
+          "type": "ACTION",
+          "text": "문이 열리자 서진은 태균의 휴대전화를 받아 식탁 끝에 내려놓는다. 기철은 현관 앞을, 민주는 거실 창가 쪽 통로를 막아선다.",
+          "segment_id": "SEG-003",
+          "references": {
+            "fact_ids": [
+              "FACT-04"
+            ],
+            "clue_ids": [
+              "CLUE-02"
+            ],
+            "crime_event_ids": [
+              "EVENT-01"
+            ],
+            "harm_ids": [
+              "HARM-31"
+            ],
+            "development_function_ids": [
+              "CDEV-301"
+            ],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-009",
+          "order": 2,
+          "type": "DIALOGUE",
+          "text": "이 사람들은 누구야? 내 전화부터 돌려줘. 지금 나갈 거야.",
+          "segment_id": "SEG-003",
+          "speaker_id": "CHAR-01",
+          "references": {
+            "fact_ids": [
+              "FACT-04"
+            ],
+            "clue_ids": [
+              "CLUE-02"
+            ],
+            "crime_event_ids": [
+              "EVENT-01"
+            ],
+            "harm_ids": [
+              "HARM-31"
+            ],
+            "development_function_ids": [
+              "CDEV-301"
+            ],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-010",
+          "order": 3,
+          "type": "DIALOGUE",
+          "text": "사진부터 봐. 여기 찍힌 사람이 당신이 아니라는 말부터 해 봐.",
+          "segment_id": "SEG-003",
+          "speaker_id": "CHAR-02",
+          "references": {
+            "fact_ids": [
+              "FACT-04"
+            ],
+            "clue_ids": [
+              "CLUE-02"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-011",
+          "order": 4,
+          "type": "SCREEN_TEXT",
+          "text": "흐릿한 뒷모습 사진 — ‘강태균, 낯선 여성과 함께 확인’",
+          "segment_id": "SEG-003",
+          "references": {
+            "fact_ids": [
+              "FACT-04"
+            ],
+            "clue_ids": [
+              "CLUE-02"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-012",
+          "order": 5,
+          "type": "DIALOGUE",
+          "text": "얼굴도 안 보이는 사진이잖아요. 누구 말인지도 모르겠고요. 비키세요.",
+          "segment_id": "SEG-003",
+          "speaker_id": "CHAR-01",
+          "references": {
+            "fact_ids": [
+              "FACT-04"
+            ],
+            "clue_ids": [
+              "CLUE-02"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-013",
+          "order": 6,
+          "type": "DIALOGUE",
+          "text": "문을 열 생각은 없습니다. 사실관계를 정리할 때까지 여기 계시죠.",
+          "segment_id": "SEG-003",
+          "speaker_id": "CHAR-03",
+          "references": {
+            "fact_ids": [
+              "FACT-04"
+            ],
+            "clue_ids": [
+              "CLUE-02"
+            ],
+            "crime_event_ids": [
+              "EVENT-01"
+            ],
+            "harm_ids": [
+              "HARM-31"
+            ],
+            "development_function_ids": [
+              "CDEV-301"
+            ],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-014",
+          "order": 7,
+          "type": "ACTION",
+          "text": "태균이 현관으로 한 걸음 옮기자 기철이 같은 만큼 길을 막는다. 서진은 휴대전화를 뒤집어 자신의 손 가까이 끌어당긴다.",
+          "segment_id": "SEG-003",
+          "references": {
+            "fact_ids": [
+              "FACT-04"
+            ],
+            "clue_ids": [
+              "CLUE-02"
+            ],
+            "crime_event_ids": [
+              "EVENT-01"
+            ],
+            "harm_ids": [
+              "HARM-31"
+            ],
+            "development_function_ids": [
+              "CDEV-301"
+            ],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-015",
+          "order": 8,
+          "type": "NARRATION",
+          "text": "낯선 사람의 어깨 하나가 현관을 가렸을 뿐인데 집 전체가 좁아졌다. 큰소리를 내면 상황이 더 빨리 닫힐 것 같아, 나는 먼저 출구가 아닌 틈을 찾았다.",
+          "segment_id": "SEG-004",
+          "speaker_id": "CHAR-01",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        }
+      ]
+    },
+    {
+      "scene_id": "SCN-03",
+      "order": 3,
+      "title": "내 이름의 부재",
+      "time_layer": "PRESENT",
+      "location_id": "LOC-APARTMENT",
+      "segment_ids": [
+        "SEG-006",
+        "SEG-007"
+      ],
+      "context": {
+        "location_description": "노트북이 놓인 식탁과 불이 꺼진 현관",
+        "time_description": "대치가 이어지는 같은 밤",
+        "previous_scene_id": "SCN-02",
+        "background_music_description": "가느다란 전자음이 전송 표시와 함께 멈춘다.",
+        "sound_cues": [
+          {
+            "sound_cue_id": "SCUE-003",
+            "order": 1,
+            "description": "키보드 입력음과 메시지 전송음"
+          }
+        ],
+        "opening_character_state": "태균은 물리적 출구뿐 아니라 외부와 연결되는 설명권도 빼앗기고 있다.",
+        "opening_emotional_state": "분노보다 자신의 침묵이 오해될 수 있다는 공포가 커진다.",
+        "action_summary": "태균의 계정에서 자발적 부재처럼 읽히는 예약 메시지가 직장으로 전송된다.",
+        "audience_information_gain": "태균 명의의 부재 메시지를 보지만 누가 작성했는지는 아직 확인하지 못한다."
+      },
+      "units": [
+        {
+          "unit_id": "UNIT-016",
+          "order": 1,
+          "type": "ACTION",
+          "text": "노트북 화면에서 회사 단체 대화창이 열린다. 입력란에 짧은 문장이 완성되고 전송 예약 표시가 켜지지만, 화면을 조작한 손은 프레임 밖에 있다.",
+          "segment_id": "SEG-006",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [
+              "CLUE-03"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-017",
+          "order": 2,
+          "type": "SCREEN_TEXT",
+          "text": "혼자 생각할 시간이 필요합니다. 당분간 연락하지 않겠습니다.",
+          "segment_id": "SEG-006",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [
+              "CLUE-03"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-018",
+          "order": 3,
+          "type": "DIALOGUE",
+          "text": "내가 쓴 말이 아니야. 저걸 보내면 회사 사람들은 내가 숨은 줄 알 거야.",
+          "segment_id": "SEG-006",
+          "speaker_id": "CHAR-01",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [
+              "CLUE-03"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-019",
+          "order": 4,
+          "type": "DIALOGUE",
+          "text": "당신이 생각할 시간을 갖는다고 알려 주는 것뿐이야. 아무도 방해하지 않을 거고.",
+          "segment_id": "SEG-006",
+          "speaker_id": "CHAR-02",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [
+              "CLUE-03"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-020",
+          "order": 5,
+          "type": "ACTION",
+          "text": "전송 완료 표시가 뜬다. 태균은 자신의 이름 옆에 붙은 문장을 오래 바라보다가 현관과 창문, 식탁 아래를 차례로 훑는다.",
+          "segment_id": "SEG-006",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [
+              "CLUE-03"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-021",
+          "order": 6,
+          "type": "NARRATION",
+          "text": "내 이름은 화면 속에서 멀쩡히 움직였고, 실제 나는 아무 말도 보낼 수 없었다. 바깥사람들이 그 문장을 믿을수록 내 침묵은 더 자연스러워질 터였다.",
+          "segment_id": "SEG-007",
+          "speaker_id": "CHAR-01",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        }
+      ]
+    },
+    {
+      "scene_id": "SCN-04",
+      "order": 4,
+      "title": "거짓 선택지",
+      "time_layer": "PRESENT",
+      "location_id": "LOC-APARTMENT",
+      "segment_ids": [
+        "SEG-008",
+        "SEG-009",
+        "SEG-010"
+      ],
+      "context": {
+        "location_description": "자료가 펼쳐진 식탁과 막힌 현관",
+        "time_description": "부재 메시지가 전송된 뒤",
+        "previous_scene_id": "SCN-03",
+        "background_music_description": "서로 다른 박자의 타악음이 압박을 높인다.",
+        "sound_cues": [
+          {
+            "sound_cue_id": "SCUE-004",
+            "order": 1,
+            "description": "종이를 넘기는 마른 소리와 의자가 바닥을 긁는 소리"
+          }
+        ],
+        "opening_character_state": "태균은 설명으로 상황을 풀 수 있다는 기대를 버리기 직전이고, 세 사람은 자백을 결과로 정해 둔다.",
+        "opening_emotional_state": "강요된 평온 아래 분노와 공포가 동시에 눌린다.",
+        "action_summary": "세 사람이 조작 의심 자료와 직장 평판 위협을 반복해 허위 자백을 강요하고 태균은 이를 거부한다.",
+        "audience_information_gain": "자백과 직장 폭로 중 하나만 고르라는 위협이 피해자의 선택을 어떻게 좁히는지 본다."
+      },
+      "units": [
+        {
+          "unit_id": "UNIT-022",
+          "order": 1,
+          "type": "ACTION",
+          "text": "기철은 귀가 기록 위에 사진을 올리고, 민주는 같은 문구가 적힌 목격담 세 장을 부채처럼 펼친다. 출처는 달라 보이지만 문장 끝의 표현은 모두 같다.",
+          "segment_id": "SEG-008",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [
+              "CLUE-01",
+              "CLUE-02"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-023",
+          "order": 2,
+          "type": "DIALOGUE",
+          "text": "여기서 인정하면 부부 일로 끝납니다. 계속 부인하면 이 자료가 회사에도 갈 수 있어요.",
+          "segment_id": "SEG-008",
+          "speaker_id": "CHAR-03",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [
+              "CLUE-01",
+              "CLUE-02"
+            ],
+            "crime_event_ids": [
+              "EVENT-01"
+            ],
+            "harm_ids": [
+              "HARM-31"
+            ],
+            "development_function_ids": [
+              "CDEV-302"
+            ],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-024",
+          "order": 3,
+          "type": "DIALOGUE",
+          "text": "없었던 일을 인정하거나 직장을 잃으라는 게 선택입니까? 문을 열고 내 전화부터 돌려주세요.",
+          "segment_id": "SEG-008",
+          "speaker_id": "CHAR-01",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [
+              "CLUE-01",
+              "CLUE-02"
+            ],
+            "crime_event_ids": [
+              "EVENT-01"
+            ],
+            "harm_ids": [
+              "HARM-31"
+            ],
+            "development_function_ids": [
+              "CDEV-302"
+            ],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-025",
+          "order": 4,
+          "type": "DIALOGUE",
+          "text": "당신이 한 문장만 말하면 끝나. 내가 틀린 사람이 되는 건 더는 못 견뎌.",
+          "segment_id": "SEG-008",
+          "speaker_id": "CHAR-02",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [
+              "CLUE-01",
+              "CLUE-02"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-026",
+          "order": 5,
+          "type": "ACTION",
+          "text": "태균은 사진과 목격담을 번갈아 보다가 반복되는 문구에 시선을 멈춘다. 그는 더 반박하지 않고 손을 무릎 아래로 내린 채 식탁 밑을 살핀다.",
+          "segment_id": "SEG-008",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [
+              "CLUE-01",
+              "CLUE-02"
+            ],
+            "crime_event_ids": [
+              "EVENT-01"
+            ],
+            "harm_ids": [
+              "HARM-31"
+            ],
+            "development_function_ids": [
+              "CDEV-302"
+            ],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-027",
+          "order": 6,
+          "type": "NARRATION",
+          "text": "계속 아니라고 말하면서도 내 목소리가 점점 작아졌다. 혹시 내가 놓친 장면이 있었나 하는 생각이 스쳤고, 바로 그 흔들림이 그들이 기다리는 틈처럼 느껴졌다.",
+          "segment_id": "SEG-010",
+          "speaker_id": "CHAR-01",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        }
+      ]
+    },
+    {
+      "scene_id": "SCN-05",
+      "order": 5,
+      "title": "반송표의 빈칸",
+      "time_layer": "PRESENT",
+      "location_id": "LOC-APARTMENT",
+      "segment_ids": [
+        "SEG-011",
+        "SEG-012",
+        "SEG-013"
+      ],
+      "context": {
+        "location_description": "식탁 아래와 현관 옆 수거 상자가 보이는 거실",
+        "time_description": "대치가 길어진 뒤 잠깐의 정적",
+        "previous_scene_id": "SCN-04",
+        "background_music_description": "음악이 거의 사라지고 짧은 호흡만 남는다.",
+        "sound_cues": [
+          {
+            "sound_cue_id": "SCUE-005",
+            "order": 1,
+            "description": "종이 가장자리가 접히는 작은 마찰음"
+          }
+        ],
+        "opening_character_state": "태균은 언어로 반박하는 대신 들키지 않는 외부 신호를 찾는다.",
+        "opening_emotional_state": "체념을 가장한 집중과 아주 작은 희망이 공존한다.",
+        "action_summary": "태균이 식탁 아래 오래된 반송표에 불완전한 도움 표시를 남겨 수거 상자에 붙인다.",
+        "audience_information_gain": "평범한 배송 물건이 피해자가 만든 구조 경로로 전환되는 순간을 본다."
+      },
+      "units": [
+        {
+          "unit_id": "UNIT-028",
+          "order": 1,
+          "type": "ACTION",
+          "text": "민주가 물을 가지러 등을 돌린 순간, 태균의 손끝이 식탁 밑면에 붙어 있던 오래된 택배 반송표를 떼어 낸다.",
+          "segment_id": "SEG-011",
+          "references": {
+            "fact_ids": [
+              "FACT-06"
+            ],
+            "clue_ids": [
+              "CLUE-04"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [
+              "CDEV-303"
+            ],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-029",
+          "order": 2,
+          "type": "NOTE",
+          "text": "안에 있음. 도움.",
+          "segment_id": "SEG-011",
+          "speaker_id": "CHAR-01",
+          "references": {
+            "fact_ids": [
+              "FACT-06"
+            ],
+            "clue_ids": [
+              "CLUE-04"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [
+              "CDEV-303"
+            ],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-030",
+          "order": 3,
+          "type": "ACTION",
+          "text": "태균은 글씨 일부를 손바닥으로 번지게 한 뒤 반송표를 현관 옆 수거 상자 밑면에 붙인다. 멀리서는 오래된 배송 메모처럼 보인다.",
+          "segment_id": "SEG-011",
+          "references": {
+            "fact_ids": [
+              "FACT-06"
+            ],
+            "clue_ids": [
+              "CLUE-04"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [
+              "CDEV-303"
+            ],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-031",
+          "order": 4,
+          "type": "DIALOGUE",
+          "text": "뭘 찾고 있어? 이제 기억이 좀 나는 거야?",
+          "segment_id": "SEG-011",
+          "speaker_id": "CHAR-02",
+          "references": {
+            "fact_ids": [
+              "FACT-06"
+            ],
+            "clue_ids": [
+              "CLUE-04"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-032",
+          "order": 5,
+          "type": "DIALOGUE",
+          "text": "아니. 아무것도 없어.",
+          "segment_id": "SEG-011",
+          "speaker_id": "CHAR-01",
+          "references": {
+            "fact_ids": [
+              "FACT-06"
+            ],
+            "clue_ids": [
+              "CLUE-04"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-033",
+          "order": 6,
+          "type": "NARRATION",
+          "text": "그 종이가 발견될 가능성은 계산할 수 없었다. 그래도 내 손으로 바깥을 향한 문장 하나를 만들었다는 사실이, 잠시 숨을 고르게 했다.",
+          "segment_id": "SEG-012",
+          "speaker_id": "CHAR-01",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        }
+      ]
+    },
+    {
+      "scene_id": "SCN-06",
+      "order": 6,
+      "title": "문밖의 인기척",
+      "time_layer": "PRESENT",
+      "location_id": "LOC-APARTMENT",
+      "segment_ids": [
+        "SEG-014",
+        "SEG-015"
+      ],
+      "context": {
+        "location_description": "아파트 복도와 닫힌 현관문 앞",
+        "time_description": "예약된 택배 수거 시각 무렵",
+        "previous_scene_id": "SCN-05",
+        "background_music_description": "복도 생활 소음 사이로 낮은 맥박음이 천천히 겹친다.",
+        "sound_cues": [
+          {
+            "sound_cue_id": "SCUE-006",
+            "order": 1,
+            "description": "수거 상자가 끌리는 소리와 문 안쪽에서 멎는 대화"
+          }
+        ],
+        "opening_character_state": "도현은 부재 안내가 붙은 평범한 수거 방문으로 여기고, 태균은 문 너머 발소리를 듣는다.",
+        "opening_emotional_state": "도현의 망설임과 태균의 절박한 침묵이 닫힌 문을 사이에 둔다.",
+        "action_summary": "도현이 반송표의 도움 표시와 부재 안내에 어긋나는 집 안 인기척을 발견하지만 즉시 단정하지 않는다.",
+        "audience_information_gain": "외부 목격자가 서로 독립된 두 위험 신호를 포착했음을 알게 된다."
+      },
+      "units": [
+        {
+          "unit_id": "UNIT-034",
+          "order": 1,
+          "type": "ACTION",
+          "text": "도현은 현관 옆 상자를 들어 올리다 밑면의 반송표를 발견한다. 번진 글씨 사이에서 ‘안에’와 ‘도움’ 두 단어만 또렷하다.",
+          "segment_id": "SEG-014",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [
+              "CLUE-04"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-035",
+          "order": 2,
+          "type": "SCREEN_TEXT",
+          "text": "수거 요청 메모 — 집이 비어 있으니 문 앞 상자를 가져가 주세요.",
+          "segment_id": "SEG-014",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [
+              "CLUE-03",
+              "CLUE-05"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-036",
+          "order": 3,
+          "type": "SOUND",
+          "text": "문 안쪽에서 의자가 짧게 밀리고, 겹쳐 있던 낮은 목소리들이 동시에 멎는다.",
+          "segment_id": "SEG-014",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [
+              "CLUE-05"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-037",
+          "order": 4,
+          "type": "DIALOGUE",
+          "text": "택배 수거 왔습니다. 안에 계시면 확인만 부탁드립니다.",
+          "segment_id": "SEG-014",
+          "speaker_id": "CHAR-05",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [
+              "CLUE-05"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-038",
+          "order": 5,
+          "type": "ACTION",
+          "text": "대답은 없다. 도현은 상자를 내려놓지 못한 채 부재 안내와 닫힌 문을 번갈아 본다. 안쪽에서는 다시 아주 작은 발 마찰음이 난다.",
+          "segment_id": "SEG-014",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [
+              "CLUE-03",
+              "CLUE-04",
+              "CLUE-05"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-039",
+          "order": 6,
+          "type": "NARRATION",
+          "text": "예전에 이상한 낙서를 신고했다가 괜한 참견이라는 핀잔을 들은 적이 있었다. 그 기억이 발을 돌리게 했고, 문 안의 갑작스러운 정적이 다시 나를 세웠다.",
+          "segment_id": "SEG-015",
+          "speaker_id": "CHAR-05",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        }
+      ]
+    },
+    {
+      "scene_id": "SCN-07",
+      "order": 7,
+      "title": "단정하지 않은 신고",
+      "time_layer": "PRESENT",
+      "location_id": "LOC-MANAGEMENT",
+      "segment_ids": [
+        "SEG-016",
+        "SEG-017",
+        "SEG-018"
+      ],
+      "context": {
+        "location_description": "모니터와 인터폰이 놓인 아파트 관리실",
+        "time_description": "수거 방문 직후",
+        "previous_scene_id": "SCN-06",
+        "background_music_description": "멈췄던 저음이 짧고 규칙적인 박자로 바뀐다.",
+        "sound_cues": [
+          {
+            "sound_cue_id": "SCUE-007",
+            "order": 1,
+            "description": "관리실 문이 열리는 소리와 인터폰 호출음"
+          }
+        ],
+        "opening_character_state": "도현은 낙서와 인기척을 우연으로 넘길지 사실 그대로 전달할지 결정해야 한다.",
+        "opening_emotional_state": "확신 없는 불안이 책임 있는 행동으로 바뀐다.",
+        "action_summary": "도현이 반송표 표시와 집 안 인기척을 분리된 관찰 사실로 관리실에 전달하고 즉시 확인을 요청한다.",
+        "audience_information_gain": "태균의 도움 표시가 외부 대응으로 연결되어 구조 경로가 열린다.",
+        "retrospective_meaning": "낡은 배송 메모처럼 보였던 반송표가 감금된 태균이 만든 비상 신호였음이 확인된다."
+      },
+      "units": [
+        {
+          "unit_id": "UNIT-040",
+          "order": 1,
+          "type": "ACTION",
+          "text": "도현은 수거 상자를 관리실 책상 위에 올리고 반송표의 번진 글씨를 손가락으로 짚는다. 이어 휴대전화에 저장된 부재 안내 화면을 함께 내민다.",
+          "segment_id": "SEG-016",
+          "references": {
+            "fact_ids": [
+              "FACT-07"
+            ],
+            "clue_ids": [
+              "CLUE-04",
+              "CLUE-05"
+            ],
+            "crime_event_ids": [
+              "EVENT-01"
+            ],
+            "harm_ids": [
+              "HARM-31"
+            ],
+            "development_function_ids": [
+              "CDEV-303"
+            ],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-041",
+          "order": 2,
+          "type": "DIALOGUE",
+          "text": "범죄라고 단정하는 건 아닙니다. 그런데 집이 비었다는 안내와 달리 안에서 여러 사람 목소리가 났고, 이 표에는 도움이라고 적혀 있습니다.",
+          "segment_id": "SEG-016",
+          "speaker_id": "CHAR-05",
+          "references": {
+            "fact_ids": [
+              "FACT-07"
+            ],
+            "clue_ids": [
+              "CLUE-04",
+              "CLUE-05"
+            ],
+            "crime_event_ids": [
+              "EVENT-01"
+            ],
+            "harm_ids": [
+              "HARM-31"
+            ],
+            "development_function_ids": [
+              "CDEV-303"
+            ],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-042",
+          "order": 3,
+          "type": "DIALOGUE",
+          "text": "두 가지가 동시에 틀릴 수는 있어도, 확인 없이 지나가면 안 될 것 같습니다. 지금 세대 확인을 요청해 주세요.",
+          "segment_id": "SEG-016",
+          "speaker_id": "CHAR-05",
+          "references": {
+            "fact_ids": [
+              "FACT-07"
+            ],
+            "clue_ids": [
+              "CLUE-04",
+              "CLUE-05"
+            ],
+            "crime_event_ids": [
+              "EVENT-01"
+            ],
+            "harm_ids": [
+              "HARM-31"
+            ],
+            "development_function_ids": [
+              "CDEV-303"
+            ],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-043",
+          "order": 4,
+          "type": "ACTION",
+          "text": "관리실 모니터에 해당 층 복도가 뜬다. 도현은 문 앞에 멈췄던 시간과 들은 소리를 차분히 다시 설명하고, 직원의 손이 인터폰과 외부 신고 전화로 이어진다.",
+          "segment_id": "SEG-016",
+          "references": {
+            "fact_ids": [
+              "FACT-07"
+            ],
+            "clue_ids": [
+              "CLUE-04",
+              "CLUE-05"
+            ],
+            "crime_event_ids": [
+              "EVENT-01"
+            ],
+            "harm_ids": [
+              "HARM-31"
+            ],
+            "development_function_ids": [
+              "CDEV-303"
+            ],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-044",
+          "order": 5,
+          "type": "NARRATION",
+          "text": "문밖에서 호출음이 울렸을 때 기쁜 마음보다 먼저 겁이 났다. 저 소리가 사라지기 전에 내가 아직 여기 있다는 걸 보여 줄 수 있을지 알 수 없었다.",
+          "segment_id": "SEG-018",
+          "speaker_id": "CHAR-01",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        }
+      ]
+    },
+    {
+      "scene_id": "SCN-08",
+      "order": 8,
+      "title": "지워지지 않은 이력",
+      "time_layer": "PRESENT",
+      "location_id": "LOC-APARTMENT",
+      "segment_ids": [
+        "SEG-019",
+        "SEG-020"
+      ],
+      "context": {
+        "location_description": "인터폰 불빛이 깜박이는 아파트 거실",
+        "time_description": "관리실 확인이 다가오는 동안",
+        "previous_scene_id": "SCN-07",
+        "background_music_description": "빠른 건반 반복이 삭제 진행 화면과 엇갈린다.",
+        "sound_cues": [
+          {
+            "sound_cue_id": "SCUE-008",
+            "order": 1,
+            "description": "인터폰 벨과 연속된 키보드 입력음"
+          }
+        ],
+        "opening_character_state": "기철과 민주는 익명 감시방의 흔적을 지우려 하고, 서진은 대치가 외부에 드러나는 것을 막으려 한다.",
+        "opening_emotional_state": "통제하던 세 사람 사이에 책임 회피와 공포가 번진다.",
+        "action_summary": "두 운영자가 계정과 게시물을 지우는 가운데 민주가 별도 계정에 남은 수정 이력을 발견한다.",
+        "audience_information_gain": "완벽해 보인 자료에도 삭제되지 않은 편집 흔적이 있음을 처음 확인한다."
+      },
+      "units": [
+        {
+          "unit_id": "UNIT-045",
+          "order": 1,
+          "type": "SOUND",
+          "text": "인터폰 호출음이 길게 이어지자 방 안의 말소리가 한순간 멎는다.",
+          "segment_id": "SEG-019",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-046",
+          "order": 2,
+          "type": "DIALOGUE",
+          "text": "아무도 대답하지 마. 확인하러 왔다가 돌아가면 돼.",
+          "segment_id": "SEG-019",
+          "speaker_id": "CHAR-02",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-047",
+          "order": 3,
+          "type": "ACTION",
+          "text": "기철은 노트북에서 감시방 계정을 닫고 게시물 목록을 지운다. 민주는 다른 휴대전화로 접속한 화면을 넘기다 손을 멈춘다.",
+          "segment_id": "SEG-019",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [
+              "CLUE-01",
+              "CLUE-02",
+              "CLUE-06"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-048",
+          "order": 4,
+          "type": "SCREEN_TEXT",
+          "text": "문서 복구 가능 — 이전 버전 여러 개 보존됨",
+          "segment_id": "SEG-019",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [
+              "CLUE-06"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-049",
+          "order": 5,
+          "type": "DIALOGUE",
+          "text": "왜 수정 기록이 남아 있어? 당신이 전부 지웠다고 했잖아.",
+          "segment_id": "SEG-019",
+          "speaker_id": "CHAR-04",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [
+              "CLUE-06"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-050",
+          "order": 6,
+          "type": "DIALOGUE",
+          "text": "지금 그걸 따질 때가 아니야. 네 계정부터 꺼.",
+          "segment_id": "SEG-019",
+          "speaker_id": "CHAR-03",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [
+              "CLUE-06"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-051",
+          "order": 7,
+          "type": "NARRATION",
+          "text": "복도에서는 같은 호출이 몇 번이나 되풀이됐다. 안에서는 누군가 서둘러 숨을 고르는 소리만 들렸고, 기다리는 시간은 끊어지지 않는 한 줄처럼 늘어졌다.",
+          "segment_id": "SEG-020",
+          "speaker_id": "CHAR-01",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        }
+      ]
+    },
+    {
+      "scene_id": "SCN-09",
+      "order": 9,
+      "title": "열린 현관",
+      "time_layer": "PRESENT",
+      "location_id": "LOC-APARTMENT",
+      "segment_ids": [
+        "SEG-021",
+        "SEG-022",
+        "SEG-023"
+      ],
+      "context": {
+        "location_description": "관리실 직원의 확인으로 열린 아파트 현관과 거실",
+        "time_description": "신고와 세대 확인이 이어진 직후",
+        "previous_scene_id": "SCN-08",
+        "background_music_description": "압박하던 저음이 끊기고 멀리서 잔잔한 현악음이 들어온다.",
+        "sound_cues": [
+          {
+            "sound_cue_id": "SCUE-009",
+            "order": 1,
+            "description": "현관문이 열리는 소리와 복도에서 다가오는 여러 발걸음"
+          }
+        ],
+        "opening_character_state": "태균은 외부 확인이 도착했음을 알고, 세 가해자는 각자 책임을 분리할 설명을 찾는다.",
+        "opening_emotional_state": "즉시 위험에서 벗어나는 안도와 진실이 흩어질 수 있다는 긴장이 겹친다.",
+        "action_summary": "태균이 구조되고 서진·기철·민주는 자발적 대화와 현장 비개입을 주장하며 서로 다른 설명을 내놓는다.",
+        "audience_information_gain": "감금은 끝나지만 세 사람의 상충 진술이 공동 책임 추적의 새 단서가 된다."
+      },
+      "units": [
+        {
+          "unit_id": "UNIT-052",
+          "order": 1,
+          "type": "ACTION",
+          "text": "현관문이 열리자 태균은 식탁에서 천천히 일어나 복도로 이동한다. 도현은 수거 상자를 든 채 길을 비켜 주고, 관리실 쪽에서 외부 신고가 접수됐다는 안내가 들린다.",
+          "segment_id": "SEG-021",
+          "references": {
+            "fact_ids": [
+              "FACT-08"
+            ],
+            "clue_ids": [
+              "CLUE-03",
+              "CLUE-06",
+              "CLUE-07"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-053",
+          "order": 2,
+          "type": "DIALOGUE",
+          "text": "저는 밖으로 나가겠다고 여러 번 말했습니다. 전화도 돌려받지 못했습니다.",
+          "segment_id": "SEG-021",
+          "speaker_id": "CHAR-01",
+          "references": {
+            "fact_ids": [
+              "FACT-08"
+            ],
+            "clue_ids": [
+              "CLUE-07"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-054",
+          "order": 3,
+          "type": "DIALOGUE",
+          "text": "부부가 대화 중이었어요. 저 사람도 앉아서 자기 말을 했습니다.",
+          "segment_id": "SEG-021",
+          "speaker_id": "CHAR-02",
+          "references": {
+            "fact_ids": [
+              "FACT-08"
+            ],
+            "clue_ids": [
+              "CLUE-07"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-055",
+          "order": 4,
+          "type": "DIALOGUE",
+          "text": "저희는 자료 설명만 했습니다. 문을 관리한 적은 없습니다.",
+          "segment_id": "SEG-021",
+          "speaker_id": "CHAR-03",
+          "references": {
+            "fact_ids": [
+              "FACT-08"
+            ],
+            "clue_ids": [
+              "CLUE-07"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-056",
+          "order": 5,
+          "type": "DIALOGUE",
+          "text": "저는 중간에 말리려고 했어요. 현관 쪽에는 있지도 않았고요.",
+          "segment_id": "SEG-021",
+          "speaker_id": "CHAR-04",
+          "references": {
+            "fact_ids": [
+              "FACT-08"
+            ],
+            "clue_ids": [
+              "CLUE-07"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-057",
+          "order": 6,
+          "type": "DIALOGUE",
+          "text": "제가 문 앞에 있을 때는 안에서 여러 사람 목소리가 났고, 제가 부르자 갑자기 조용해졌습니다.",
+          "segment_id": "SEG-021",
+          "speaker_id": "CHAR-05",
+          "references": {
+            "fact_ids": [
+              "FACT-08"
+            ],
+            "clue_ids": [
+              "CLUE-07"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-058",
+          "order": 7,
+          "type": "NARRATION",
+          "text": "복도 공기는 차가웠는데도 숨이 쉽게 들어오지 않았다. 안전해졌다는 말을 듣고서도 나는 열린 문을 몇 번이나 뒤돌아봤다.",
+          "segment_id": "SEG-022",
+          "speaker_id": "CHAR-01",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        }
+      ]
+    },
+    {
+      "scene_id": "SCN-10",
+      "order": 10,
+      "title": "되살아난 문장",
+      "time_layer": "PRESENT",
+      "location_id": "LOC-MANAGEMENT",
+      "segment_ids": [
+        "SEG-024",
+        "SEG-025",
+        "SEG-026"
+      ],
+      "context": {
+        "location_description": "증거 화면과 근무 기록이 나란히 놓인 관리실 회의 탁자",
+        "time_description": "구조 뒤 기록 대조가 시작된 때",
+        "previous_scene_id": "SCN-09",
+        "background_music_description": "흩어진 음들이 증거 대조마다 하나의 반복 선율로 모인다.",
+        "sound_cues": [
+          {
+            "sound_cue_id": "SCUE-010",
+            "order": 1,
+            "description": "복구 파일 알림음과 종이 기록을 넘기는 소리"
+          }
+        ],
+        "opening_character_state": "태균은 안전을 확보한 뒤 외도 의혹보다 세 사람의 공동 가담을 기록으로 확인하려 한다.",
+        "opening_emotional_state": "안도보다 사실을 놓치지 않으려는 냉정한 집중이 앞선다.",
+        "action_summary": "긴급 교대 기록과 복구된 수정 이력, 반송표, 상충 진술을 대조해 외도 조작과 세 사람의 공동 가담을 확정한다.",
+        "audience_information_gain": "외도는 없었고 운영자들이 허위 목격담을 만들었으며 세 사람이 감금에 공동 가담했음을 확인한다.",
+        "retrospective_meaning": "늦은 귀가 표는 정상 근무의 맥락을 잃은 기록이었고, 여러 목격담은 두 운영자가 증폭한 하나의 조작이었다."
+      },
+      "units": [
+        {
+          "unit_id": "UNIT-059",
+          "order": 1,
+          "type": "ACTION",
+          "text": "탁자 한쪽에는 회사의 긴급 교대 확인서가, 다른 쪽에는 복구된 감시방 문서의 버전 목록이 놓인다. 같은 사진 설명이 태균의 귀가 시각에 맞춰 여러 차례 바뀐 흔적이 이어진다.",
+          "segment_id": "SEG-024",
+          "references": {
+            "fact_ids": [
+              "FACT-02",
+              "FACT-03",
+              "FACT-09",
+              "FACT-10"
+            ],
+            "clue_ids": [
+              "CLUE-01",
+              "CLUE-02",
+              "CLUE-06"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": [
+              "REVEAL-TARGET-31"
+            ]
+          }
+        },
+        {
+          "unit_id": "UNIT-060",
+          "order": 2,
+          "type": "SCREEN_TEXT",
+          "text": "긴급 교대 확인 — 해당 야간 일정과 퇴근 기록 일치 / 외도 정황 없음",
+          "segment_id": "SEG-024",
+          "references": {
+            "fact_ids": [
+              "FACT-03"
+            ],
+            "clue_ids": [
+              "CLUE-01"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-061",
+          "order": 3,
+          "type": "SCREEN_TEXT",
+          "text": "복구 문서 — 작성 계정 두 개 / 동일 원문 / 사진 설명 사후 추가 / 삭제 시도 기록",
+          "segment_id": "SEG-024",
+          "references": {
+            "fact_ids": [
+              "FACT-02",
+              "FACT-09"
+            ],
+            "clue_ids": [
+              "CLUE-02",
+              "CLUE-06"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-062",
+          "order": 4,
+          "type": "DIALOGUE",
+          "text": "우리는 들은 내용을 정리했을 뿐입니다. 문장이 바뀐 건 표현을 다듬어서예요.",
+          "segment_id": "SEG-024",
+          "speaker_id": "CHAR-03",
+          "references": {
+            "fact_ids": [
+              "FACT-02",
+              "FACT-09"
+            ],
+            "clue_ids": [
+              "CLUE-02",
+              "CLUE-06",
+              "CLUE-07"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-063",
+          "order": 5,
+          "type": "DIALOGUE",
+          "text": "표현만 고친 게 아니잖아. 먼저 시간을 받아 놓고 그 뒤에 목격 장소와 설명을 맞췄어.",
+          "segment_id": "SEG-024",
+          "speaker_id": "CHAR-04",
+          "references": {
+            "fact_ids": [
+              "FACT-02",
+              "FACT-09"
+            ],
+            "clue_ids": [
+              "CLUE-02",
+              "CLUE-06",
+              "CLUE-07"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        },
+        {
+          "unit_id": "UNIT-064",
+          "order": 6,
+          "type": "ACTION",
+          "text": "현관 앞을 막았다는 태균의 진술, 반송표를 발견한 도현의 관찰, 운영자들의 수정 계정이 한 화면에 정리된다. 세 사람의 이름이 ‘공동 가담 확인 대상’ 아래 나란히 표시된다.",
+          "segment_id": "SEG-024",
+          "references": {
+            "fact_ids": [
+              "FACT-10"
+            ],
+            "clue_ids": [
+              "CLUE-06",
+              "CLUE-07"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": [
+              "REVEAL-TARGET-31"
+            ]
+          }
+        },
+        {
+          "unit_id": "UNIT-065",
+          "order": 7,
+          "type": "DIALOGUE",
+          "text": "내가 설명하지 못한 시간이 증거가 아니라, 당신들이 설명을 덧붙인 시간이 증거가 됐네요.",
+          "segment_id": "SEG-024",
+          "speaker_id": "CHAR-01",
+          "references": {
+            "fact_ids": [
+              "FACT-02",
+              "FACT-03",
+              "FACT-09",
+              "FACT-10"
+            ],
+            "clue_ids": [
+              "CLUE-01",
+              "CLUE-02",
+              "CLUE-06",
+              "CLUE-07"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": [
+              "REVEAL-TARGET-31"
+            ]
+          }
+        },
+        {
+          "unit_id": "UNIT-066",
+          "order": 8,
+          "type": "NARRATION",
+          "text": "진실이 확인되는 순간에도 통쾌함은 없었다. 내가 알고 있던 평범한 밤들이 낯선 사람들의 문장 속에서 오래 다른 얼굴로 살았다는 사실만 선명해졌다.",
+          "segment_id": "SEG-026",
+          "speaker_id": "CHAR-01",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        }
+      ]
+    },
+    {
+      "scene_id": "SCN-11",
+      "order": 11,
+      "title": "서로 다른 거짓말",
+      "time_layer": "PRESENT",
+      "location_id": "LOC-MANAGEMENT",
+      "segment_ids": [
+        "SEG-027",
+        "SEG-028",
+        "SEG-029"
+      ],
+      "context": {
+        "location_description": "세 사람의 진술과 예약 메시지 기록을 대조하는 관리실",
+        "time_description": "공동 가담이 확인된 뒤",
+        "previous_scene_id": "SCN-10",
+        "background_music_description": "짧은 단음 뒤에 침묵을 길게 두어 각 진술의 모순을 드러낸다.",
+        "sound_cues": [
+          {
+            "sound_cue_id": "SCUE-011",
+            "order": 1,
+            "description": "예약 메시지 상세 화면을 여는 클릭음"
+          }
+        ],
+        "opening_character_state": "서진은 부부 문제였다고 주장하고, 두 운영자는 자료와 현장 행동을 분리해 책임을 피하려 한다.",
+        "opening_emotional_state": "서로를 보호하던 침묵이 자기보존을 위한 폭로로 무너진다.",
+        "action_summary": "예약 메시지 생성 기록과 상충 진술을 대조해 서진의 보복 욕구, 운영자들의 은폐 동기, 감금과 외부 인식 통제의 결합을 밝힌다.",
+        "audience_information_gain": "세 사람의 서로 다른 동기와 역할이 하나의 감금 방법 및 공모 책임으로 이어졌음을 이해한다.",
+        "retrospective_meaning": "태균 명의의 부재 메시지는 자발적 침묵이 아니라 서진이 감금을 숨기기 위해 만든 외부용 위장이었다."
+      },
+      "units": [
+        {
+          "unit_id": "UNIT-067",
+          "order": 1,
+          "type": "SCREEN_TEXT",
+          "text": "예약 메시지 생성 기기 — 윤서진의 휴대전화와 연동 / 작성 시점 — 강태균의 휴대전화가 식탁에 놓인 뒤",
+          "segment_id": "SEG-027",
+          "references": {
+            "fact_ids": [
+              "FACT-05",
+              "FACT-12"
+            ],
+            "clue_ids": [
+              "CLUE-03",
+              "CLUE-07"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": [
+              "REVEAL-TARGET-32",
+              "REVEAL-TARGET-33"
+            ]
+          }
+        },
+        {
+          "unit_id": "UNIT-068",
+          "order": 2,
+          "type": "DIALOGUE",
+          "text": "나는 회사가 끼어들지 못하게 한 것뿐이야. 당신이 인정하면 끝낼 생각이었어.",
+          "segment_id": "SEG-027",
+          "speaker_id": "CHAR-02",
+          "references": {
+            "fact_ids": [
+              "FACT-05",
+              "FACT-12"
+            ],
+            "clue_ids": [
+              "CLUE-03",
+              "CLUE-07"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": [
+              "REVEAL-TARGET-32",
+              "REVEAL-TARGET-33"
+            ]
+          }
+        },
+        {
+          "unit_id": "UNIT-069",
+          "order": 3,
+          "type": "DIALOGUE",
+          "text": "서진 씨가 직접 보낸 겁니다. 우리는 게시물만 정리했고 현장 통제는 부탁받은 대로 잠깐 도운 겁니다.",
+          "segment_id": "SEG-027",
+          "speaker_id": "CHAR-04",
+          "references": {
+            "fact_ids": [
+              "FACT-05",
+              "FACT-12"
+            ],
+            "clue_ids": [
+              "CLUE-03",
+              "CLUE-07"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": [
+              "REVEAL-TARGET-32",
+              "REVEAL-TARGET-33"
+            ]
+          }
+        },
+        {
+          "unit_id": "UNIT-070",
+          "order": 4,
+          "type": "DIALOGUE",
+          "text": "자료가 거짓으로 드러나면 우리 방도 끝납니다. 그래서 당사자 자백이 필요했던 겁니다.",
+          "segment_id": "SEG-027",
+          "speaker_id": "CHAR-03",
+          "references": {
+            "fact_ids": [
+              "FACT-12"
+            ],
+            "clue_ids": [
+              "CLUE-07"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": [
+              "REVEAL-TARGET-32"
+            ]
+          }
+        },
+        {
+          "unit_id": "UNIT-071",
+          "order": 5,
+          "type": "ACTION",
+          "text": "도현의 반송표 사진과 문 앞 관찰 기록, 예약 메시지 생성 내역, 복구된 수정 이력 위로 세 사람의 진술이 순서대로 놓인다. 부부 대화, 자료 전달, 현장 비개입이라는 설명은 어느 기록과도 동시에 맞지 않는다.",
+          "segment_id": "SEG-027",
+          "references": {
+            "fact_ids": [
+              "FACT-05",
+              "FACT-12"
+            ],
+            "clue_ids": [
+              "CLUE-03",
+              "CLUE-07"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": [
+              "REVEAL-TARGET-32",
+              "REVEAL-TARGET-33"
+            ]
+          }
+        },
+        {
+          "unit_id": "UNIT-072",
+          "order": 6,
+          "type": "DIALOGUE",
+          "text": "제가 본 건 낙서 하나뿐이 아니었습니다. 비어 있다는 안내와 안쪽 소리, 갑자기 멎은 대화가 따로 맞물렸습니다.",
+          "segment_id": "SEG-027",
+          "speaker_id": "CHAR-05",
+          "references": {
+            "fact_ids": [
+              "FACT-05",
+              "FACT-12"
+            ],
+            "clue_ids": [
+              "CLUE-03",
+              "CLUE-07"
+            ],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": [
+              "REVEAL-TARGET-33"
+            ]
+          }
+        },
+        {
+          "unit_id": "UNIT-073",
+          "order": 7,
+          "type": "NARRATION",
+          "text": "그날 나를 가둔 것은 한 사람의 확신만이 아니었다. 틀렸음을 인정하지 않으려는 마음과 거짓을 지워 이익을 지키려는 선택이 서로 손을 잡고 있었다.",
+          "segment_id": "SEG-028",
+          "speaker_id": "CHAR-01",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        }
+      ]
+    },
+    {
+      "scene_id": "SCN-12",
+      "order": 12,
+      "title": "문밖에서 시작하는 말",
+      "time_layer": "PRESENT",
+      "location_id": "LOC-MANAGEMENT",
+      "segment_ids": [
+        "SEG-030",
+        "SEG-031",
+        "SEG-032"
+      ],
+      "context": {
+        "location_description": "사건 기록을 마무리하는 관리실과 비어 있는 아파트 복도 화면",
+        "time_description": "구조 이후 피해 기록을 정리하는 날",
+        "previous_scene_id": "SCN-11",
+        "background_music_description": "무거운 저음 대신 간격이 넓은 피아노 음이 천천히 이어진다.",
+        "sound_cues": [
+          {
+            "sound_cue_id": "SCUE-012",
+            "order": 1,
+            "description": "서류를 넘기는 소리와 멀리 닫히는 엘리베이터 문"
+          }
+        ],
+        "opening_character_state": "태균은 세 사람의 의심을 반박하는 위치에서 벗어나 자신이 입은 피해와 필요한 안전을 말하려 한다.",
+        "opening_emotional_state": "사건이 끝났다는 안도보다 회복을 스스로 정의하려는 단단한 의지가 남는다.",
+        "action_summary": "태균이 자유 박탈, 주거 안전감 붕괴, 대인 신뢰와 직장 평판 피해를 기록하고 즉시 귀가하지 않기로 선택한다.",
+        "audience_information_gain": "외도 의혹의 진위가 아니라 감금과 조작이 남긴 실제 피해와 가해 책임이 결말의 기준임을 확인한다.",
+        "retrospective_meaning": "사건의 핵심은 서진의 의심이 얼마나 강했는지가 아니라 세 사람이 의심과 이익을 타인의 자유를 빼앗는 행동으로 바꾼 데 있다."
+      },
+      "units": [
+        {
+          "unit_id": "UNIT-074",
+          "order": 1,
+          "type": "ACTION",
+          "text": "태균 앞에 피해 진술서가 놓인다. 그는 ‘외도 의혹 해명’이라고 적힌 첫 문장을 지우고 ‘퇴거와 연락을 거부당한 시간’이라는 문장으로 다시 시작한다.",
+          "segment_id": "SEG-030",
+          "references": {
+            "fact_ids": [
+              "FACT-11"
+            ],
+            "clue_ids": [],
+            "crime_event_ids": [
+              "EVENT-01"
+            ],
+            "harm_ids": [
+              "HARM-31",
+              "HARM-32"
+            ],
+            "development_function_ids": [
+              "CDEV-304"
+            ],
+            "reveal_target_ids": [
+              "REVEAL-TARGET-34"
+            ]
+          }
+        },
+        {
+          "unit_id": "UNIT-075",
+          "order": 2,
+          "type": "DIALOGUE",
+          "text": "외도가 없었다는 해명만 적고 싶지 않습니다. 나가겠다는 말을 무시하고 내 이름으로 바깥의 시선까지 막은 선택이 범죄였다고 기록해 주세요.",
+          "segment_id": "SEG-030",
+          "speaker_id": "CHAR-01",
+          "references": {
+            "fact_ids": [
+              "FACT-11"
+            ],
+            "clue_ids": [],
+            "crime_event_ids": [
+              "EVENT-01"
+            ],
+            "harm_ids": [
+              "HARM-31",
+              "HARM-32"
+            ],
+            "development_function_ids": [
+              "CDEV-304"
+            ],
+            "reveal_target_ids": [
+              "REVEAL-TARGET-34"
+            ]
+          }
+        },
+        {
+          "unit_id": "UNIT-076",
+          "order": 3,
+          "type": "DIALOGUE",
+          "text": "집에는 오늘도 돌아가지 않을 겁니다. 회사에 퍼진 말도 바로 지워지지 않겠지만, 어디서부터 다시 시작할지는 제가 정하겠습니다.",
+          "segment_id": "SEG-030",
+          "speaker_id": "CHAR-01",
+          "references": {
+            "fact_ids": [
+              "FACT-11"
+            ],
+            "clue_ids": [],
+            "crime_event_ids": [
+              "EVENT-01"
+            ],
+            "harm_ids": [
+              "HARM-31",
+              "HARM-32"
+            ],
+            "development_function_ids": [
+              "CDEV-304"
+            ],
+            "reveal_target_ids": [
+              "REVEAL-TARGET-34"
+            ]
+          }
+        },
+        {
+          "unit_id": "UNIT-077",
+          "order": 4,
+          "type": "ACTION",
+          "text": "태균은 서명한 진술서를 닫고 도현에게 고개 숙여 인사한다. 관리실 모니터 속 빈 복도를 한 번 바라본 뒤, 아파트 출입문 반대편으로 걸어간다.",
+          "segment_id": "SEG-030",
+          "references": {
+            "fact_ids": [
+              "FACT-11"
+            ],
+            "clue_ids": [],
+            "crime_event_ids": [
+              "EVENT-01"
+            ],
+            "harm_ids": [
+              "HARM-31",
+              "HARM-32"
+            ],
+            "development_function_ids": [
+              "CDEV-304"
+            ],
+            "reveal_target_ids": [
+              "REVEAL-TARGET-34"
+            ]
+          }
+        },
+        {
+          "unit_id": "UNIT-078",
+          "order": 5,
+          "type": "NARRATION",
+          "text": "안전은 문이 열렸다는 사실만으로 돌아오지 않았다. 그래도 이제 누구의 의심을 증명하는 대신, 내가 잃은 것과 되찾을 것을 내 말로 정할 수 있었다.",
+          "segment_id": "SEG-032",
+          "speaker_id": "CHAR-01",
+          "references": {
+            "fact_ids": [],
+            "clue_ids": [],
+            "crime_event_ids": [],
+            "harm_ids": [],
+            "development_function_ids": [],
+            "reveal_target_ids": []
+          }
+        }
+      ]
+    }
+  ]
+}

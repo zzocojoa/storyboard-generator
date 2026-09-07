@@ -1,0 +1,61 @@
+{
+  "project_id": "PRJ-007",
+  "characters": [
+    {
+      "character_id": "CHAR-01",
+      "name": "강태균",
+      "role": "감금 피해자이자 제한된 상황에서 외부 도움의 단서를 만드는 주인공",
+      "crime_role_slots": [
+        "VICTIM-01",
+        "PROTAGONIST-01"
+      ],
+      "production_role": "MAJOR",
+      "goal": "거짓 자백을 거부하면서 아파트 밖 누군가에게 감금 사실을 알리고 안전하게 빠져나간다.",
+      "secret": "동료 한지아의 사적인 곤란을 보호하려 긴급 교대의 구체 이유를 배우자에게 말하지 않았지만 외도는 없었다."
+    },
+    {
+      "character_id": "CHAR-02",
+      "name": "윤서진",
+      "role": "외도 의심을 감금과 보복으로 실행하는 배우자이자 주도 가해자",
+      "crime_role_slots": [
+        "OFFENDER-01"
+      ],
+      "production_role": "MAJOR",
+      "goal": "남편에게 자신이 구성한 외도 이야기를 인정시키고 의심이 옳았다는 공개 자백을 확보한다.",
+      "secret": "남편의 직장에 예약 메시지를 대신 보냈고, 감시방 자료의 원본을 한 번도 직접 확인하지 않았다."
+    },
+    {
+      "character_id": "CHAR-03",
+      "name": "백기철",
+      "role": "허위 목격담을 판매하고 현장 통제에 가담한 감시방 운영자",
+      "crime_role_slots": [
+        "OFFENDER-02"
+      ],
+      "production_role": "MAJOR",
+      "goal": "유료 감시방의 조작이 드러나기 전에 태균의 자백 영상을 만들어 자료의 진실성을 가장한다.",
+      "secret": "목격 시각을 서진이 알려준 야간 일정에 맞춰 수정했고 최초 게시본의 흔적을 지우려 했다."
+    },
+    {
+      "character_id": "CHAR-04",
+      "name": "오민주",
+      "role": "편집된 사진 설명과 허위 증언을 만든 뒤 감금에 가담한 공동 운영자",
+      "crime_role_slots": [
+        "OFFENDER-03"
+      ],
+      "production_role": "MAJOR",
+      "goal": "자신은 자료 전달자일 뿐이라는 거리를 유지하면서 감시방 수익과 익명성을 지킨다.",
+      "secret": "허위 목격담의 수정 이력을 별도 계정에 남겼고, 구조 직전 기철에게 책임을 넘기려 한다."
+    },
+    {
+      "character_id": "CHAR-05",
+      "name": "박도현",
+      "role": "반송표의 도움 표시와 아파트 인기척을 연결하는 수거 기사이자 외부 목격자",
+      "crime_role_slots": [
+        "WITNESS-01"
+      ],
+      "production_role": "MAJOR",
+      "goal": "불확실한 인기척을 단순 부부싸움으로 넘기지 않고 확인 가능한 신호를 관리실에 전달한다.",
+      "secret": "이전 방문 때 서진에게 과민한 오해라는 핀잔을 들은 적이 있어 이번에도 개입을 망설인다."
+    }
+  ]
+}

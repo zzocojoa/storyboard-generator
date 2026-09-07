@@ -1,0 +1,372 @@
+{
+  "$schema": "../../../STANDARD/schemas/reaction_segments.schema.json",
+  "schema_family": "reaction-segments",
+  "schema_version": "2.1.0",
+  "project_id": "PRJ-007",
+  "reaction_segments": [
+    {
+      "reaction_segment_id": "RSEG-001",
+      "after_scene_id": "SCN-02",
+      "order": 1,
+      "start_sec": 220,
+      "duration_sec": 20,
+      "segment_function": "EMOTIONAL_REACTION",
+      "hypothesis_before": "태균이 외도 의혹에 답하기 위해 집에 머물고 있을 수 있다.",
+      "hypothesis_after": "태균의 의사와 무관하게 자유가 제한됐으므로 현재의 핵심은 감금 위험이다.",
+      "tone": "ALARMED",
+      "turns": [
+        {
+          "turn_id": "TURN-001-01",
+          "panelist_id": "PANEL-02",
+          "function": "EMOTIONAL_REACTION",
+          "spoken_line": "나가겠다는 사람을 세 명이 막는 순간부터 이건 해명을 듣는 자리가 아니에요. 자기 집인데도 태균에게 선택권이 하나도 남지 않았습니다.",
+          "evidence_ids": [
+            "CLUE-02"
+          ],
+          "known_fact_ids": [
+            "FACT-04"
+          ],
+          "tone": "ALARMED"
+        },
+        {
+          "turn_id": "TURN-001-02",
+          "panelist_id": "PANEL-01",
+          "function": "ANOMALY_DETECTION",
+          "spoken_line": "맞습니다. 외도 주장과 별개로 확인된 사실은 퇴거와 연락의 제한입니다. 지금은 사진의 진위보다 누가 왜 이 상황을 만들었는지 봐야 합니다.",
+          "evidence_ids": [
+            "CLUE-01",
+            "CLUE-02"
+          ],
+          "known_fact_ids": [
+            "FACT-01",
+            "FACT-04"
+          ],
+          "tone": "FOCUSED",
+          "responds_to_turn_id": "TURN-001-01"
+        }
+      ]
+    },
+    {
+      "reaction_segment_id": "RSEG-002",
+      "after_scene_id": "SCN-04",
+      "order": 2,
+      "start_sec": 440,
+      "duration_sec": 25,
+      "segment_function": "HYPOTHESIS_GENERATION",
+      "hypothesis_before": "여러 목격이 같은 결론을 말하므로 자료가 실제일 가능성이 남아 있다.",
+      "hypothesis_after": "독립된 목격들이 아니라 같은 출처가 만든 주장들이 반복된 것일 수 있다.",
+      "tone": "SUSPICIOUS",
+      "turns": [
+        {
+          "turn_id": "TURN-002-01",
+          "panelist_id": "PANEL-03",
+          "function": "SUSPECT_DISCUSSION",
+          "spoken_line": "시간표와 사진 설명이 너무 정확히 한 방향만 가리키는 게 걸립니다. 다수의 목격처럼 보여도 실제로 서로 독립된 자료인지는 아직 확인되지 않았어요.",
+          "evidence_ids": [
+            "CLUE-01",
+            "CLUE-02"
+          ],
+          "known_fact_ids": [
+            "FACT-01",
+            "FACT-04"
+          ],
+          "tone": "SKEPTICAL"
+        },
+        {
+          "turn_id": "TURN-002-02",
+          "panelist_id": "PANEL-01",
+          "function": "HYPOTHESIS_GENERATION",
+          "spoken_line": "그렇다면 여러 사람이 같은 사실을 본 게 아니라 한 주장이 여러 계정으로 복제됐다는 가설도 가능합니다. 출처와 작성 시각이 다음 확인 지점입니다.",
+          "evidence_ids": [
+            "CLUE-01",
+            "CLUE-02"
+          ],
+          "known_fact_ids": [
+            "FACT-01",
+            "FACT-04"
+          ],
+          "tone": "ANALYTICAL",
+          "responds_to_turn_id": "TURN-002-01"
+        }
+      ]
+    },
+    {
+      "reaction_segment_id": "RSEG-003",
+      "after_scene_id": "SCN-05",
+      "order": 3,
+      "start_sec": 590,
+      "duration_sec": 20,
+      "segment_function": "RISK_SIGNAL_RECOGNITION",
+      "hypothesis_before": "태균에게 외부와 연결될 방법이 없어 감금이 계속될 가능성이 높다.",
+      "hypothesis_after": "반송표의 표시가 발견된다면 외부 확인을 촉발할 수 있다.",
+      "tone": "TENSE",
+      "turns": [
+        {
+          "turn_id": "TURN-003-01",
+          "panelist_id": "PANEL-03",
+          "function": "RISK_SIGNAL_RECOGNITION",
+          "spoken_line": "이 표시는 완전한 문장도 아니고 발견된다는 보장도 없습니다. 그래도 태균이 지금 만들 수 있는 유일한 외부 신호라는 점은 분명해요.",
+          "evidence_ids": [
+            "CLUE-04"
+          ],
+          "known_fact_ids": [
+            "FACT-04",
+            "FACT-06"
+          ],
+          "tone": "TENSE"
+        },
+        {
+          "turn_id": "TURN-003-02",
+          "panelist_id": "PANEL-02",
+          "function": "VICTIM_CONTEXTUALIZATION",
+          "spoken_line": "그래서 작은 표시의 무게가 더 큽니다. 자유를 빼앗긴 사람이 기다리기만 한 게 아니라 제한된 틈에서 스스로 구조 가능성을 만든 거예요.",
+          "evidence_ids": [
+            "CLUE-04"
+          ],
+          "known_fact_ids": [
+            "FACT-04",
+            "FACT-06"
+          ],
+          "tone": "HOPEFUL",
+          "responds_to_turn_id": "TURN-003-01"
+        }
+      ]
+    },
+    {
+      "reaction_segment_id": "RSEG-004",
+      "after_scene_id": "SCN-07",
+      "order": 4,
+      "start_sec": 805,
+      "duration_sec": 25,
+      "segment_function": "HYPOTHESIS_REVISION",
+      "hypothesis_before": "반송표의 표시는 낡은 배송 메모일 가능성도 있다.",
+      "hypothesis_after": "표시와 집 안 인기척이 독립적으로 맞물려 의도적인 도움 요청일 가능성이 높다.",
+      "tone": "URGENT",
+      "turns": [
+        {
+          "turn_id": "TURN-004-01",
+          "panelist_id": "PANEL-01",
+          "function": "HYPOTHESIS_REVISION",
+          "spoken_line": "표시 하나만 봤다면 낙서로 넘길 수 있었습니다. 하지만 비어 있다는 안내와 여러 사람의 인기척이 겹치면서 도움 요청이라는 해석이 훨씬 강해졌습니다.",
+          "evidence_ids": [
+            "CLUE-04",
+            "CLUE-05"
+          ],
+          "known_fact_ids": [
+            "FACT-06",
+            "FACT-07"
+          ],
+          "tone": "DECISIVE"
+        },
+        {
+          "turn_id": "TURN-004-02",
+          "panelist_id": "PANEL-03",
+          "function": "EXPECTATION_BUILDING",
+          "spoken_line": "도현이 범죄라고 단정하지 않고 관찰한 두 사실만 전달한 것도 중요합니다. 이제 관리실 확인이 실제 구조로 이어지는지를 지켜봐야 합니다.",
+          "evidence_ids": [
+            "CLUE-04",
+            "CLUE-05"
+          ],
+          "known_fact_ids": [
+            "FACT-04",
+            "FACT-06",
+            "FACT-07"
+          ],
+          "tone": "EXPECTANT",
+          "responds_to_turn_id": "TURN-004-01"
+        }
+      ]
+    },
+    {
+      "reaction_segment_id": "RSEG-005",
+      "after_scene_id": "SCN-09",
+      "order": 5,
+      "start_sec": 1055,
+      "duration_sec": 25,
+      "segment_function": "VICTIM_CONTEXTUALIZATION",
+      "hypothesis_before": "구조가 완료되면 사건의 핵심 문제도 대부분 해결된다.",
+      "hypothesis_after": "구조 뒤에도 허위 자료의 제작과 현장 가담 책임을 각각 입증해야 한다.",
+      "tone": "SOBER",
+      "turns": [
+        {
+          "turn_id": "TURN-005-01",
+          "panelist_id": "PANEL-02",
+          "function": "VICTIM_CONTEXTUALIZATION",
+          "spoken_line": "태균이 밖으로 나온 건 큰 안도지만 여기서 끝난 건 아닙니다. 세 사람이 서로 다른 말을 시작한 순간 피해자는 다시 자기 경험을 증명해야 해요.",
+          "evidence_ids": [
+            "CLUE-07"
+          ],
+          "known_fact_ids": [
+            "FACT-04",
+            "FACT-06",
+            "FACT-07",
+            "FACT-08"
+          ],
+          "tone": "SOBER"
+        },
+        {
+          "turn_id": "TURN-005-02",
+          "panelist_id": "PANEL-03",
+          "function": "SUSPECT_DISCUSSION",
+          "spoken_line": "특히 운영자들이 자료만 전달했는지 현장 통제에도 참여했는지가 남았습니다. 메시지와 수정 흔적, 각자의 진술을 따로 보지 말고 연결해야 합니다.",
+          "evidence_ids": [
+            "CLUE-03",
+            "CLUE-06",
+            "CLUE-07"
+          ],
+          "known_fact_ids": [
+            "FACT-01",
+            "FACT-04",
+            "FACT-08"
+          ],
+          "tone": "INVESTIGATIVE",
+          "responds_to_turn_id": "TURN-005-01"
+        }
+      ]
+    },
+    {
+      "reaction_segment_id": "RSEG-006",
+      "after_scene_id": "SCN-10",
+      "order": 6,
+      "start_sec": 1175,
+      "duration_sec": 30,
+      "segment_function": "BELIEF_CORRECTION",
+      "hypothesis_before": "운영자들은 허위 정보를 만들었지만 감금 현장과는 분리됐을 수 있다.",
+      "hypothesis_after": "조작 기록과 현장 증거가 세 사람의 공동 가담을 하나의 책임 사슬로 묶는다.",
+      "tone": "REVEALING",
+      "turns": [
+        {
+          "turn_id": "TURN-006-01",
+          "panelist_id": "PANEL-03",
+          "function": "BELIEF_CORRECTION",
+          "spoken_line": "이제 외도 가능성을 전제로 볼 이유가 없습니다. 근무 기록이 귀가 시각을 설명했고 수정 이력은 목격담이 나중에 맞춰졌다는 걸 보여 줍니다.",
+          "evidence_ids": [
+            "CLUE-01",
+            "CLUE-02",
+            "CLUE-06"
+          ],
+          "known_fact_ids": [
+            "FACT-02",
+            "FACT-03",
+            "FACT-09"
+          ],
+          "tone": "DECISIVE"
+        },
+        {
+          "turn_id": "TURN-006-02",
+          "panelist_id": "PANEL-01",
+          "function": "CONTRADICTION_DETECTION",
+          "spoken_line": "그리고 각자 현장과 무관하다는 말은 서로 충돌합니다. 예약 메시지, 반송표, 복구 기록을 시간순으로 놓으면 세 사람이 맡은 역할이 분리되지 않습니다.",
+          "evidence_ids": [
+            "CLUE-01",
+            "CLUE-02",
+            "CLUE-06",
+            "CLUE-07"
+          ],
+          "known_fact_ids": [
+            "FACT-04",
+            "FACT-06",
+            "FACT-08",
+            "FACT-10"
+          ],
+          "tone": "ANALYTICAL",
+          "responds_to_turn_id": "TURN-006-01"
+        }
+      ]
+    },
+    {
+      "reaction_segment_id": "RSEG-007",
+      "after_scene_id": "SCN-11",
+      "order": 7,
+      "start_sec": 1350,
+      "duration_sec": 30,
+      "segment_function": "MORAL_REACTION",
+      "hypothesis_before": "세 사람의 행동은 같은 의심에서 비롯된 하나의 충동적 선택일 수 있다.",
+      "hypothesis_after": "서로 다른 이익을 가진 세 사람이 감금과 은폐를 각자 선택해 공모가 성립했다.",
+      "tone": "GRAVE",
+      "turns": [
+        {
+          "turn_id": "TURN-007-01",
+          "panelist_id": "PANEL-01",
+          "function": "CONTRADICTION_DETECTION",
+          "spoken_line": "서진은 보복을 원했고 운영자들은 조작이 드러나는 걸 막으려 했습니다. 동기는 달라도 태균의 자유를 제한하고 부재를 꾸민 선택에서는 서로 협력했습니다.",
+          "evidence_ids": [
+            "CLUE-03",
+            "CLUE-07"
+          ],
+          "known_fact_ids": [
+            "FACT-05",
+            "FACT-10",
+            "FACT-12"
+          ],
+          "tone": "ANALYTICAL"
+        },
+        {
+          "turn_id": "TURN-007-02",
+          "panelist_id": "PANEL-02",
+          "function": "MORAL_REACTION",
+          "spoken_line": "의심이 컸다는 말은 책임을 줄이지 못합니다. 세 사람 모두 멈출 기회가 있었고, 각자의 이익을 위해 피해자의 의사보다 조작된 이야기를 택했습니다.",
+          "evidence_ids": [
+            "CLUE-03",
+            "CLUE-07"
+          ],
+          "known_fact_ids": [
+            "FACT-04",
+            "FACT-05",
+            "FACT-10",
+            "FACT-12"
+          ],
+          "tone": "GRAVE",
+          "responds_to_turn_id": "TURN-007-01"
+        }
+      ]
+    },
+    {
+      "reaction_segment_id": "RSEG-008",
+      "after_scene_id": "SCN-12",
+      "order": 8,
+      "start_sec": 1450,
+      "duration_sec": 25,
+      "segment_function": "TENSION_RELEASE",
+      "hypothesis_before": "감금이 끝났으므로 태균의 삶도 사건 이전 상태로 돌아갈 수 있다.",
+      "hypothesis_after": "즉시 자유는 회복됐지만 주거 안전과 신뢰, 직장 평판의 회복은 피해자 중심으로 계속돼야 한다.",
+      "tone": "REFLECTIVE",
+      "turns": [
+        {
+          "turn_id": "TURN-008-01",
+          "panelist_id": "PANEL-02",
+          "function": "TENSION_RELEASE",
+          "spoken_line": "태균이 자기 말로 사건의 기준을 다시 세운 점은 다행입니다. 하지만 집과 직장에서 잃은 안전은 문이 열렸다고 바로 돌아오지 않아요.",
+          "evidence_ids": [
+            "CLUE-04"
+          ],
+          "known_fact_ids": [
+            "FACT-08",
+            "FACT-11"
+          ],
+          "tone": "REFLECTIVE"
+        },
+        {
+          "turn_id": "TURN-008-02",
+          "panelist_id": "PANEL-03",
+          "function": "BELIEF_CORRECTION",
+          "spoken_line": "결국 질문은 외도가 있었느냐가 아니었습니다. 확인되지 않은 의심을 조작과 감금으로 바꾼 선택, 그리고 그 선택이 남긴 피해를 보는 사건이었습니다.",
+          "evidence_ids": [
+            "CLUE-01",
+            "CLUE-02",
+            "CLUE-07"
+          ],
+          "known_fact_ids": [
+            "FACT-02",
+            "FACT-03",
+            "FACT-10",
+            "FACT-11",
+            "FACT-12"
+          ],
+          "tone": "CONCLUSIVE",
+          "responds_to_turn_id": "TURN-008-01"
+        }
+      ]
+    }
+  ]
+}
