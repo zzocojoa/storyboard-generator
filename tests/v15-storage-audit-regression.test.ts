@@ -60,6 +60,15 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
+async function waitForCondition(predicate: () => Promise<boolean>, timeoutMs: number, errorMessage: string): Promise<void> {
+  const deadlineMs: number = Date.now() + timeoutMs;
+  while (Date.now() < deadlineMs) {
+    if (await predicate()) return;
+    await new Promise<void>((resolve): void => { setTimeout(resolve, 50); });
+  }
+  throw new Error(errorMessage);
+}
+
 function barrier(point: StorageFaultPoint): Barrier {
   let reached: (() => void) | null = null;
   let release: (() => void) | null = null;
@@ -116,7 +125,10 @@ describe('15차 주기 heartbeat와 상태 갱신', (): void => {
     const root: string = await temporaryRoot('storyboard-v15-heartbeat-'); const dataRoot: string = join(root, 'data'); const id: string = randomUUID();
     const store: ProjectStore = trackedStore(dataRoot, undefined, id); await store.initialize();
     const first = JSON.parse(await readFile(processRegistry(dataRoot, id), 'utf8')) as { heartbeatAt: string };
-    await new Promise<void>((resolve): void => { setTimeout(resolve, 1100); });
+    await waitForCondition(async (): Promise<boolean> => {
+      const current = JSON.parse(await readFile(processRegistry(dataRoot, id), 'utf8')) as { heartbeatAt: string };
+      return current.heartbeatAt !== first.heartbeatAt;
+    }, 5000, '주기 heartbeat가 제한 시간 안에 갱신되지 않았습니다.');
     const second = JSON.parse(await readFile(processRegistry(dataRoot, id), 'utf8')) as { heartbeatAt: string };
     expect(second.heartbeatAt).not.toBe(first.heartbeatAt);
   });
@@ -127,7 +139,10 @@ describe('15차 주기 heartbeat와 상태 갱신', (): void => {
     const gate: Barrier = barrier('after-update-current-read'); const writer: ProjectStore = trackedStore(dataRoot, gate.injector, id);
     const pending: Promise<Project> = writer.update(project.projectId, 0, (current: Project): Project => ({ ...current, title: '장시간 저장' }), []);
     await gate.reached; const first = JSON.parse(await readFile(processRegistry(dataRoot, id), 'utf8')) as { heartbeatAt: string };
-    await new Promise<void>((resolve): void => { setTimeout(resolve, 1100); });
+    await waitForCondition(async (): Promise<boolean> => {
+      const current = JSON.parse(await readFile(processRegistry(dataRoot, id), 'utf8')) as { heartbeatAt: string };
+      return current.heartbeatAt !== first.heartbeatAt;
+    }, 5000, '장시간 transaction 중 heartbeat가 제한 시간 안에 갱신되지 않았습니다.');
     const second = JSON.parse(await readFile(processRegistry(dataRoot, id), 'utf8')) as { heartbeatAt: string };
     expect(second.heartbeatAt).not.toBe(first.heartbeatAt); gate.release(); await pending;
   });
@@ -138,7 +153,10 @@ describe('15차 주기 heartbeat와 상태 갱신', (): void => {
     await Promise.all([first.initialize(), second.initialize()]); await first.close();
     expect(await exists(processRegistry(dataRoot, id))).toBe(true);
     const before = JSON.parse(await readFile(processRegistry(dataRoot, id), 'utf8')) as { heartbeatAt: string };
-    await new Promise<void>((resolve): void => { setTimeout(resolve, 1100); });
+    await waitForCondition(async (): Promise<boolean> => {
+      const current = JSON.parse(await readFile(processRegistry(dataRoot, id), 'utf8')) as { heartbeatAt: string };
+      return current.heartbeatAt !== before.heartbeatAt;
+    }, 5000, '공유 heartbeat가 제한 시간 안에 갱신되지 않았습니다.');
     const after = JSON.parse(await readFile(processRegistry(dataRoot, id), 'utf8')) as { heartbeatAt: string };
     expect(after.heartbeatAt).not.toBe(before.heartbeatAt);
   });
@@ -160,7 +178,8 @@ describe('15차 주기 heartbeat와 상태 갱신', (): void => {
     const store: ProjectStore = trackedStore(dataRoot, undefined, id); await store.initialize();
     await writeFile(processRegistry(dataRoot, id), JSON.stringify({ version: 1, processInstanceId: id, host: hostname(), pid: process.pid,
       startedAt: '2026-09-07T00:00:00.001Z', heartbeatAt: new Date().toISOString() }));
-    await new Promise<void>((resolve): void => { setTimeout(resolve, 1100); });
+    await waitForCondition(async (): Promise<boolean> => !store.processHeartbeat().healthy, 5000,
+      'Heartbeat 실패 상태가 제한 시간 안에 기록되지 않았습니다.');
     expect((await store.statusSnapshot()).processHeartbeat).toMatchObject({ healthy: false, lastError: { code: 'STORE_RECOVERY_REQUIRED' } });
   });
 
