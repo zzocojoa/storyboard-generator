@@ -25,11 +25,21 @@ npm start
 
 브라우저에서 `http://127.0.0.1:4317`을 연다. 프로젝트와 생성 자산은 `.local/data` 아래에 프로젝트별로 분리되며 Git에 포함되지 않는다. 각 변경은 현재본과 별개의 revision JSON으로 저장된다. 최초 Project는 Asset metadata와 Frame 이미지, Audio Cue, Generation Result, Shot 소품, 두 Continuity 목록의 Asset 참조가 모두 없는 경우만 받는다. Asset은 최초 Project 생성 뒤 revision update에서 신규 ID·경로와 실제 파일을 함께 등록한다. 이 조건을 어기면 data root를 만들기 전에 `UNSUPPORTED_INITIAL_PROJECT_ASSETS`로 거부한다. 과거에 정상 저장된 Asset-bearing Project의 읽기·복구·출력은 계속 지원한다.
 
+## 빠른 사용법
+
+1. 왼쪽 **IMPORT PACKAGE**에 `storyboard_handoff.json` 경로를 입력하고 가져온다. 동작 확인용 production 예시는 `/Users/beatlefeed/Documents/ChatGPT/콘티제작/.worktrees/storyboard-generator/tests/fixtures/production/storyboard_handoff.json`이다. 구조화 계약 파일이 없는 `09_PRODUCTION` 폴더 자체는 바로 가져올 수 없다.
+2. Scene과 Segment를 선택해 Shot의 시간, 행동, 카메라, Source Link, Frame, Audio Cue와 Text Cue를 검토한다. `sourced`는 확인된 직접 시각 Source가 컷 전체를 덮어야 하며, `black`은 검은 화면, `hold-previous`는 직전 안전 프레임을 유지한다.
+3. **CODEX CUT**, **IMAGE**, **CODEX VOICE**로 생성 요청을 쌓는다. 같은 저장소를 연 Codex App 작업에서 `$storyboard-workbench 대기 중인 콘티 생성 요청을 처리해 주세요.`를 실행한다.
+4. 결과가 반영되면 **REFRESH**를 누르고 **시간순 재생**으로 이미지, 음성, 자막과 공개 시점을 확인한다.
+5. 상단의 JSON·CSV·PDF 내보내기로 재편집 프로젝트, 제작 목록과 그림 콘티를 받는다.
+
+서버 상태와 저장 복구 상태는 `GET /api/status`, 현재 출력 자산 검사는 `GET /api/projects/:projectId/asset-integrity`, 생성 이력은 `GET /api/projects/:projectId/generation-audit`에서 확인한다.
+
 이후 저장은 journal version 3과 lock version 3을 사용한다. Lock에는 host·PID와 함께 한 Node.js process에서 공유하는 `processInstanceId`, process 시작 시각을 기록한다. `<dataRoot>/.process-instances`의 heartbeat가 같은 process임을 증명할 때만 live owner로 판정하며, PID가 살아 있어도 Registry가 없거나 오래됐거나 일치하지 않으면 lock을 자동 삭제하지 않는다. 협력하는 writer는 Project lock을 원자적으로 먼저 얻은 뒤 current와 같은 revision snapshot을 읽고, `expectedRevision`, transform, Asset catalog와 모든 Asset 외래 키의 존재·종류·대상을 검사한 다음 실제 파일을 검증한다. journal을 만들기 직전에 lock 소유권과 current revision·SHA-256·게시 경로를 다시 확인한다. 다른 writer가 lock을 보유하면 `PROJECT_BUSY`, 먼저 끝난 writer 때문에 revision이 바뀌었으면 `REVISION_CONFLICT`이며 둘 다 HTTP 409다. 자동 대기 queue는 두지 않는다.
 
 Initial Create는 transaction ID를 만든 직후 `<dataRoot>/.create-locks/<sha256(projectId)>.lock`을 `O_EXCL`로 획득하고, 그 뒤에만 final 위치를 다시 확인하고 staging과 journal을 만든다. 같은 Project ID의 다른 Create는 `PROJECT_BUSY`, 먼저 완료된 Project를 다시 불러오면 `PROJECT_ALREADY_EXISTS`이며 둘 다 HTTP 409다. 서로 다른 Project ID는 각자 다른 root lock을 사용한다. staging의 final `write.lock`은 root lock과 Project ID·transaction ID·host·PID를 공유한다. Current와 Version 0 검증, create journal 정리가 끝나면 final lock을 먼저 제거하고 root lock을 마지막으로 제거한다. 정상 경쟁은 staging이나 recovery marker를 남기지 않는다.
 
-시작 복구는 `.create-locks`도 검사한다. Root lock은 자신의 transaction ID 경로에 있는 journal만 직접 읽는다. 관련 없는 손상 journal은 Project ID를 증명할 수 있으면 그 Project에, 증명할 수 없으면 transaction ID 기반 unknown recovery entry에 격리한다. 같은 Host의 살아 있는 Initial Create와 일반 Update는 해당 Project의 `activeCreates` 또는 `activeUpdates`에만 기록하므로 다른 Project의 목록·읽기·수정·생성을 막지 않는다. 종료된 owner의 root lock은 matching create journal과 final lock을 검증해 commit 또는 rollback을 끝낸 뒤 제거한다. journal이 없는 pre-journal 중단과 완전한 final은 안전하게 정리하고, 다른 Host·손상된 lock·transaction 불일치는 lock을 보존한 채 해당 Project에 recovery marker를 남긴다. 기존 lock version 2와 journal version 2·3은 보수적으로 읽는다.
+시작 복구는 `.create-locks`도 검사한다. Root lock은 자신의 transaction ID 경로에 있는 journal만 직접 읽는다. 관련 없는 손상 journal은 Project ID를 증명할 수 있으면 그 Project에, 증명할 수 없으면 transaction ID 기반 unknown recovery entry에 격리한다. 같은 Host의 살아 있는 Initial Create와 일반 Update는 해당 Project의 `activeCreates` 또는 `activeUpdates`에만 기록하므로 다른 Project의 목록·읽기·수정·생성을 막지 않는다. 종료된 owner의 root lock은 matching create journal과 final lock을 검증해 commit 또는 rollback을 끝낸 뒤 제거한다. journal이 없는 pre-journal 중단과 완전한 final은 안전하게 정리하고, 다른 Host·손상된 lock·transaction 불일치는 lock을 보존한 채 해당 Project에 recovery marker를 남긴다. 기존 lock version 2와 journal version 2·3은 보수적으로 읽는다. 형식·파일명·내용이 잘못된 recovery marker는 `.recovery-blocks/.invalid`로 격리하고 `/api/status.invalidRecoveryMarkers`에 보고한다. 운영자는 상태 응답의 원인과 원래 파일명을 확인하고 저장본을 수리한 뒤 서버를 다시 시작해야 하며 marker를 수동 삭제해 차단을 우회하지 않는다.
 
 Asset catalog와 Generation Record는 append-only다. 같은 Asset ID의 metadata 전체는 revision 사이에서 바꿀 수 없고 기존 Asset을 제거하거나 기존 경로에 새 write를 제출할 수 없다. 기존 Generation Record도 삭제·재정렬하거나 provider·model·prompt·result asset·shot·생성 시각을 포함한 어떤 metadata도 바꿀 수 없으며 새 Record는 배열 끝에만 추가한다. 기존 Record의 `shotIds`는 생성 당시 revision의 Historical Reference이므로 병합·재제안·원본 갱신으로 현재 Shot이 사라져도 유효하다. 신규 Record만 같은 next revision에서 Shot과 result Asset이 실제로 존재하는지 검사한다. 내부 ID 배열과 non-null request ID의 중복도 신규 Record에서 거부하며, legacy 중복은 감사 warning으로 보고한다. `/api/projects/:projectId/generation-audit`는 version snapshot을 읽어 도입 revision과 current·historical·unresolved 상태를 반환한다.
 
@@ -87,7 +97,7 @@ npm run cli -- export-csv --project .local/plant-care.project.json --output .loc
 
 `outline`은 구간마다 편집 시작용 컷과 프레임을 만든다. 카메라·화면 위치·출연 인물을 임의로 확정하지 않는다. 음성 슬롯은 글자 수에 비례한 제안 시간이며 생성한 가이드 음성의 WAV 길이와 선언한 구간 관계를 검증한 뒤 `measured` 상태가 된다. `j-cut`은 바로 앞 구간부터 원본 구간 안까지, `l-cut`은 원본 구간부터 바로 다음 구간까지만 걸칠 수 있다. 두 관계는 정보 Gate를 앞당기는 증거로 사용하지 않는다. 원본에 화면 글자 종료점이 없으면 `--text-hold-ms` 값이 제안값으로 기록된다. 기존 출력 경로를 덮어쓰지 않는다.
 
-현재 프로젝트 형식은 `1.5.0`이다. 이전 저장본은 `1.0.0 → 1.1.0 → 1.2.0 → 1.3.0 → 1.4.0 → 1.5.0` 순서로 변환한다. 1.4의 독립 Placement에는 보수적으로 `unresolved` 정보 판정을 만들고 Canonical 관계에는 만들지 않는다. 기존 `sourceUnitIds`는 손실 없이 `context-only/mapping-required` Link로 바꾸고, 1.2 Link의 시간 Anchor는 자동 확정하지 않고 `unresolved/migration`으로 둔다. Canonical 연결이 없던 이전 자막 결정도 `standalone-placement/unresolved`로 보수적으로 변환한다. 1.3 Audio Cue는 `within-segment`로 이관하며 Text Cue 권한은 Placement, 정확한 Mapping, Source Unit 근거에서 복원한다. 근거를 유일하게 정할 수 없는 Text Cue는 `review-required`로 두어 화면·재생·내보내기에서 본문을 출력하지 않는다. 원문·컷 시간·자산·생성 기록은 유지된다.
+현재 프로젝트 형식은 `1.6.0`이다. 이전 저장본은 `1.0.0 → 1.1.0 → 1.2.0 → 1.3.0 → 1.4.0 → 1.5.0 → 1.6.0` 순서로 메모리에서 변환한다. 1.5 Shot은 데이터 추측 없이 `visualMode: sourced`로 이관하며 원문·ID·시간·Source Link·Frame·Text·Audio·Asset·Generation Record를 보존한다. 전체 시각 Source 범위를 증명하지 못하면 데이터를 바꾸지 않고 `SHOT_VISUAL_COVERAGE_GAP` 검토 이슈를 표시한다. 이전 단계의 보수적 Text Mapping, Source Anchor, Audio 관계와 Text Cue 권한 변환도 유지한다.
 
 Program Monitor는 상태를 다시 검사하는 `/output/frame/:frameId`와 `/output/audio/:cueId`만 사용한다. 서버는 매 요청에서 파일 존재, 프로젝트 내부 경로, SHA-256, 실제 MIME·디코딩, 대상 연결과 출력 인터록을 확인하며 응답에 `Cache-Control: no-store`를 붙인다. Raw Asset 경로는 검토용이다. `proposed` 음성, 자산·길이 불일치, 권한 미확정 Text Cue, 미해결 정보 규칙, Gate보다 이른 정보는 출력하지 않고 문제 코드와 대상 ID만 표시한다. 손상된 Frame은 PDF 전체를 실패시키지 않고 Frame ID·Asset ID·Issue code가 있는 placeholder로 바뀌며 CSV에는 현재 무결성과 출력 안전 상태가 기록된다.
 
@@ -107,6 +117,16 @@ CSV에서 같은 오디오 이벤트가 여러 컷 행에 나타나면 하나의
 npm run check
 ```
 
-이 명령은 서버·도메인 타입 검사, 웹 타입 검사, 자동 테스트, 생성 스키마 정합성, 운영 웹 빌드를 순서대로 실행한다. 현재 자동 검사는 29개 파일의 792개 테스트다. 지정된 144개 계약 이름은 Historical Generation Target, Shot topology, version audit, 저장 자산 HTTP 범위, Project별 UI·Create·Update 복구, Process Instance Registry, Project timecode, Proposal anchor, 기존 저장과 PRJ-007 회귀를 각각 한 번 실행한다. Promise barrier와 fault injector는 lock 획득, Create 공개, journal 정리와 Update 경쟁을 시간 지연 없이 고정한다. 기존의 동일 hash·다른 inode, 모든 version과 다른 transaction 참조, symlink 경로, 영속 recovery block, Worker queue와 큰 PCM24 업로드 중 status 응답도 계속 검증한다. PRJ-007 Golden은 12개 Scene, 32개 Segment, 79개 screenplay Source Unit, 16개 Panel Turn, 1,500,000ms 전체 시간과 원문 불변을 확인한다. 실제 `UNIT-045` fixture는 48,000Hz mono PCM16 WAV 2,000ms이며, 849,000–851,000ms J-cut으로 저장한 뒤 849,500ms 선택자·안전 HTTP bytes·JSON 재열기·Gate와 Generation Record 불변성을 검사한다. 전체 분량의 제작 품질은 별도 사람 검토 대상이다.
+이 명령은 서버·도메인 타입 검사, 웹 타입 검사, 자동 테스트, 필수 테스트 이름, 생성 스키마 정합성, 운영 웹 빌드를 순서대로 실행한다. 현재 단위·통합 검사는 32개 파일의 860개 테스트이며 Playwright Chromium 시나리오 7개를 별도로 실행한다. 지정된 75개 계약 이름은 Proposal Frame·Visual Mode, 주기 Heartbeat, Historical Audit, Recovery Marker Quarantine, Asset Integrity, 열린 Text Placement, Timecode, 상태 갱신과 브라우저 흐름을 각각 한 번 실행한다. PRJ-007 Golden은 12개 Scene, 32개 Segment, 79개 screenplay Source Unit, 16개 Panel Turn, Text Placement 25개, 1,500,000ms 전체 시간과 원문 불변을 확인한다. 실제 `UNIT-045` fixture는 48,000Hz mono PCM16 WAV 2,000ms이며 849,000–851,000ms J-cut, 안전 HTTP bytes, JSON 재열기, Gate와 Generation Record 불변성을 검사한다.
+
+브라우저와 실제 HTTP 검증은 다음 명령을 사용한다. `npm run smoke`는 임시 data/request root와 동적 포트를 만들고 종료 시 listener, Worker, timer와 임시 파일을 정리한다.
+
+```sh
+npx playwright install chromium
+npm run test:e2e
+npm run smoke
+```
+
+자산 수리 후 **REFRESH**를 누르면 웹이 `/asset-integrity`를 다시 조회해 해결된 항목을 제거한다. API 사용자는 같은 endpoint의 `issues`가 빈 배열인지 확인한다.
 
 스키마의 기준은 `src/domain/schema.ts`다. 타입 변경 후 `npm run schemas:write`로 JSON Schema를 갱신하고 `npm run schemas:check`로 일치 여부를 확인한다. 제품 범위와 구현 원칙은 [`AGENTS.md`](AGENTS.md), 데이터 흐름과 API 설계는 [Design](docs/02-design/features/storyboard-generator.design.md)을 따른다.

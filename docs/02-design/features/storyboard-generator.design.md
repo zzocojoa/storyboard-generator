@@ -1,6 +1,6 @@
 # 범용 콘티 도구 — Design
 
-상태: 1.5.0 도메인 계약, 독립 Placement 정보 판정, 실제 미디어 무결성·자원 검사, backpressure가 적용된 Worker WAV 정규화, 중앙 Asset reference closure, symlink-safe 파일 연산, file identity와 전체 참조 분석을 사용하는 journal version 3 저장·Initial Project 복구, Create 소유 lock에 의한 Create–Update 직렬화, 프로젝트별 recovery block, Cue 범위 Audio 수명주기, 안전 Frame·Audio 출력, 명시적 J/L-cut과 PRJ-007 실제 UNIT-045 WAV Golden을 반영한 현재 설계. 전체 분량의 제작 판단은 별도 검토가 필요하다.
+상태: 1.6.0 도메인 계약, Proposal Frame Plan·Visual Mode와 전체 Source Coverage, 열린 Placement의 유효 종료 시각, Absolute·Duration timecode, 전체 Version 합집합 Historical Generation Audit, 공유 주기 Process Heartbeat, Recovery Marker Quarantine, 현재 출력 참조 Asset Integrity, 실제 미디어 검사, journal version 3 저장·복구, Cue 범위 Audio 수명주기, 안전 Frame·Audio 출력, Playwright E2E와 PRJ-007 Golden을 반영한 현재 설계. 전체 분량의 제작 판단은 별도 검토가 필요하다.
 
 ## 1. 목표와 결정 근거
 
@@ -68,7 +68,8 @@ native 파일은 일반적인 프로젝트 원본을 표현한다. ID는 불투�
 - `AudioCue`와 `TextCue`는 영상 컷과 독립된 시작·종료를 가진다. 오디오는 발화·VO·패널·SFX·음악을 구분하고 원본 Segment와의 관계를 `within-segment`, `j-cut`, `l-cut`으로 명시한다. 실제 Audio Asset 등록은 모든 Cue 종류에 열려 있고 파일에서 측정한 길이로 Cue 종료점을 다시 정한다. Text Cue는 Placement, 확정 Mapping, Source Unit 또는 `review-required` 권한을 기록한다. Placement 출력은 정확히 하나의 확정 Mapping Decision을 요구하고, `separate-element` Placement는 Canonical 정보를 상속하지 않는다. Canonical Cue는 `mappingDecisionId`로 식별한다. 채팅·메모를 자동 낭독하지 않는다.
 - `TextMappingDecision`은 자막 Placement와 Canonical 원문의 관계를 `exact`, `abbreviation`, `separate-element`, `replacement`, `standalone-placement`로 기록한다. 명시적 `placement.unitId`, 허용 종류의 유일한 정확 일치, 유일한 휴리스틱 후보 순서로 찾는다. 중복 정확 일치는 자동 선택하지 않는다. 관계마다 Canonical 연결·별도 렌더링·시간 범위의 불변식을 검사한다. `separate-element`의 Placement Cue는 Canonical Unit을 소유하지 않고, 별도 Canonical Cue만 명시한 시각과 Unit을 가진다.
 - `TextPlacementInformationDecision`은 독립 관계의 Placement마다 최대 하나 존재한다. `unresolved`는 출력 차단, `non-informational`은 정보 없음의 사용자 확정, `informational`은 하나 이상의 Information ID와 Gate 검사를 뜻한다. Canonical 상속 관계에는 이 판정을 두지 않는다. 관계 변경은 판정 생성·제거를 같은 project mutation에서 처리한다.
-- `ShotSourceLink`는 컷과 원문 Unit의 권한 관계다. `primary-visual`, `continued-visual`, `audio-only`, `context-only` 용도와 `confirmed`, `mapping-required` 상태, `shot-offset`·`frame`·`unresolved` 시간 Anchor를 가진다. `SOUND`와 `MUSIC`은 직접 시각 근거가 될 수 없고 `continued-visual`은 앞선 `primary-visual`을 요구한다. `sourceUnitIds`는 1.5.0 프로젝트에 중복 저장하지 않는다.
+- `ShotSourceLink`는 컷과 원문 Unit의 권한 관계다. `primary-visual`, `continued-visual`, `audio-only`, `context-only` 용도와 `confirmed`, `mapping-required` 상태, `shot-offset`·`frame`·`unresolved` 시간 Anchor를 가진다. `SOUND`와 `MUSIC`은 직접 시각 근거가 될 수 없고 `continued-visual`은 앞선 `primary-visual`을 요구한다. `sourceUnitIds`는 1.6.0 프로젝트에 중복 저장하지 않는다.
+- `Shot.visualMode`는 `sourced`, `black`, `hold-previous` 중 하나다. `sourced`는 confirmed 직접 시각 Anchor의 반열린 합집합이 Shot 전체를 덮어야 하며 공백은 구조화된 검토 이슈다. Proposal Apply는 공백을 거부하고 Anchor 시작점마다 결정적 Key Frame을 만든다. `black`은 자산 없이 결정적 검은 화면을 출력하고, `hold-previous`는 시간상 인접한 직전 Shot의 안전 Frame을 참조한다. 두 비생성 Mode에는 직접 시각 Link를 둘 수 없다.
 - 인물의 역할·시각 기준과 컷의 실제 출연 형태를 분리한다. 출연 형태는 VISIBLE, HAND_ONLY, SILHOUETTE, OFFSCREEN_VOICE, VOICE_OVER, IMPLIED, ARCHIVE_IMAGE다. 목록에 없으면 그 컷의 출연이 선언되지 않은 상태다.
 - 장소는 이야기 장소와 화면 장소를 분리한다. 모호한 장소를 이야기 장소로 자동 확정하지 않는다.
 - `Asset`은 종류, 경로, SHA-256, 시각 설명, 원문과 독립된 버전을 가진다. 인물 의상·소품 상태·공간 축은 컷의 연속성 상태로 표현한다.
@@ -76,7 +77,9 @@ native 파일은 일반적인 프로젝트 원본을 표현한다. ID는 불투�
 
 ## 5. 시간과 정보 공개
 
-내부 시간은 프로젝트 시작에 대한 정수 밀리초와 반열린 구간 `[startMs, endMs)`로 저장한다. FPS는 유리수, drop-frame 여부, 오디오 sample rate, 시작 timecode는 프로젝트 설정으로 둔다. 밀리초↔프레임 변환의 반올림 정책을 명시하고 저장 시간표를 표시 문자열로 역산하지 않는다. Drop-frame 지원 범위는 검증된 조합으로 제한한다.
+내부 시간은 프로젝트 시작에 대한 정수 밀리초와 반열린 구간 `[startMs, endMs)`로 저장한다. FPS는 유리수, drop-frame 여부, 오디오 sample rate, 시작 timecode는 프로젝트 설정으로 둔다. Absolute timecode는 시작 timecode를 한 번 더하고 Duration은 0에서 시작하는 별도 formatter로 계산한다. 모든 변환은 BigInt 정수 프레임 산술을 사용하고 저장 시간표를 표시 문자열로 역산하지 않는다. 29.97·59.94 drop-frame의 분 경계와 24시간 wrap을 검사한다.
+
+종료가 없는 Text Placement는 같은 Placement의 명시적 Text Cue 종료, 유일한 confirmed Mapping의 canonical 종료 순으로 유효 범위를 정한다. 두 근거가 없거나 후보가 모호하면 종료를 추측하지 않고 검토 이슈를 내며, Frame Context·Program Monitor·PDF·CSV는 같은 유효 범위를 사용한다.
 
 구간에는 fixed/proposed 시간 상태가 있다. 미정 시간은 임의의 25분으로 채우지 않는다. 음성은 proposed/measured 상태를 별도로 가지며, 실제 가이드 음성 길이와 Audio Cue의 명시적 관계를 검증하기 전 낭독 가능성을 통과로 판정하지 않는다. `j-cut`은 바로 앞 Segment에서 시작해 원본 Segment 안에서 끝나고, `l-cut`은 원본 Segment에서 시작해 바로 다음 Segment 안에서 끝난다. J/L-cut은 Information Gate 증거가 아니다. 시간이나 관계를 바꾸면 measured 상태와 Audio 기반 Anchor를 무효화한다.
 
@@ -112,6 +115,8 @@ Information Emission Interlock은 이미지, 글자 오버레이, 음성 재생�
 | POST /api/projects/:id/text/:cueId/authority | review-required Text Cue를 Placement·Mapping Decision·Source Unit 권한에서 재구성 |
 | DELETE /api/projects/:id/text/:cueId | expected revision과 필수 커버리지를 검사한 review-required Cue 삭제 |
 | GET /api/projects/:id/mapping-review | unresolved Text Mapping, mapping-required Source Link, 정보 조기 공개 항목 조회 |
+| GET /api/projects/:id/generation-audit | 모든 Version의 Record 합집합과 도입 revision, current·historical·unresolved Target 감사 |
+| GET /api/projects/:id/asset-integrity | 현재 출력이 참조하는 Frame·Audio·Reference·Prop·Continuity 자산 재검증 |
 | PATCH /api/projects/:id/text-mappings/:decisionId | expected revision으로 자막 관계·상태·별도 표시 시각 수정 |
 | PATCH /api/projects/:id/shots/:shotId/source-links | expected revision으로 현재 컷 Source Link 전체 수정 |
 | POST /api/projects/:id/shots/:shotId/source-links/move | expected revision으로 같은 구간의 다른 컷으로 Link 이동 |
@@ -125,7 +130,7 @@ Information Emission Interlock은 이미지, 글자 오버레이, 음성 재생�
 | PATCH /api/projects/:id/text-placements/:placementId/information | 독립 Placement의 정보성·비정보성·미해결 판정 변경 |
 | GET /api/projects/:id/output/frame/:frameId | 현재 프로젝트와 실제 파일을 다시 검사한 안전 Frame bytes |
 | GET /api/projects/:id/output/audio/:cueId | 현재 프로젝트와 실제 파일을 다시 검사한 안전 Audio bytes |
-| GET /api/status, /api/codex/requests/:id | 영속 생성 요청 지표·오류·결과 revision, 시작 시 저장 복구 결과와 `storageRecoveryBlocks` |
+| GET /api/status, /api/codex/requests/:id | 생성 요청 지표, recovery block·invalid marker, active create/update, process heartbeat |
 | GET /api/projects/:id/export.json, .csv, .pdf | 검토 상태를 포함한 결과 출력 |
 
 서버는 로컬 주소에 바인딩한다. 업로드 파일명은 저장 경로에 사용하지 않고 프로젝트 디렉터리 밖의 경로를 거부한다. PCM WAV는 최대 50MB·1시간, mono/stereo, 16/24-bit만 지원하며 입력 sample rate·WAV chunk 수와 출력 Frame·Byte·Sample 연산량을 먼저 제한한다. Sample 변환은 설정된 수의 Worker Thread에서 실행한다. 기본 queue 계약은 Worker 2개, 대기 job 4개, 실행·대기 입력 100MB, queue 대기 30초, 실행 30초이며 V8 메모리도 제한한다. job 수나 byte 한도를 넘으면 `AUDIO_NORMALIZATION_QUEUE_FULL`, 대기 시간을 넘으면 `AUDIO_NORMALIZATION_QUEUE_TIMEOUT`으로 끝낸다. 완료·실패·timeout과 Worker 시작 실패에서 예약 byte와 active 수를 반환하고 다음 job을 drain한다. `close()`는 queue timer를 취소하고 대기 job을 거부하며 active Worker를 종료하고 Fastify `onClose`가 이를 호출한다. 큰 PCM24 multipart 정규화와 동시 `/api/status` 요청으로 Event Loop 진행을 검증한다. 프로젝트 샘플레이트의 PCM16 WAV로 정규화한 결과는 다시 검사한다. 저장 WAV의 실제 duration·sample rate·channel·codec은 Asset metadata 및 Cue 길이와 연결된다. 유효하지만 프로젝트 형식과 다른 이전 WAV는 `AUDIO_ASSET_NORMALIZATION_REQUIRED`로 구분하며 복구할 때 기존 Asset을 보존한다. AIFF·MP3는 명시적으로 거부한다.
@@ -136,7 +141,7 @@ ProjectStore update는 Project 존재와 recovery marker만 먼저 확인하고 
 
 Asset catalog는 revision 사이에서 append-only다. current의 모든 Asset ID는 next에도 같은 Asset Schema 전체 metadata로 남아야 한다. 기존 ID를 제거하거나 kind·subject·path·MIME·hash·description·duration·version·audioMetadata를 바꾸거나 기존 경로에 write하면 거부한다. 교체는 신규 ID·신규 경로·신규 version과 정확히 하나의 실제 write를 추가하고 Frame·Audio Cue 참조만 새 ID로 옮긴다. 이전 Asset metadata와 파일은 감사용으로 보존한다. 신규 metadata 경로 집합과 write 경로 집합이 1:1이고 실제 hash·MIME·decode와 final 부재가 확인될 때만 journal version 3을 만든다. Asset과 revision은 기존 파일을 덮어쓰지 않는 hard link로 게시하고 staging link를 commit cleanup까지 유지한다. current의 원자 교체가 commit point다.
 
-Generation Record도 revision 사이에서 append-only다. 기존 배열 항목의 삭제·재정렬·삽입과 provider·model·prompt·resultAssetIds·shotIds·createdAt을 포함한 전체 metadata 변경을 거부한다. 기존 Record의 `shotIds`는 도입 revision의 Historical Reference이므로 현재 Shot 외래 키로 다시 검사하거나 병합·재제안·Source Update 때 새 ID로 옮기지 않는다. 신규 Record만 배열 끝에 추가할 수 있고 Next Project의 실제 Shot과 Next catalog의 Asset을 검사하므로 같은 revision에서 새 Shot·Asset·Record를 함께 추가할 수 있다. 내부 Shot·Result Asset·Reference Hash와 non-null Request ID 중복은 신규 입력에서 오류이고 legacy 중복은 구조 감사 warning이다. Version snapshot 감사는 도입 revision의 Shot·Asset을 증명하고 현재 target을 `current`, `historical`, `unresolved`로 파생하며 Project Schema 1.5.0에는 파생 필드를 저장하지 않는다.
+Generation Record도 revision 사이에서 append-only다. 기존 배열 항목의 삭제·재정렬·삽입과 provider·model·prompt·resultAssetIds·shotIds·createdAt을 포함한 전체 metadata 변경을 거부한다. 기존 Record의 `shotIds`는 도입 revision의 Historical Reference이므로 현재 Shot 외래 키로 다시 검사하거나 병합·재제안·Source Update 때 새 ID로 옮기지 않는다. 신규 Record만 배열 끝에 추가할 수 있고 Next Project의 실제 Shot과 Next catalog의 Asset을 검사하므로 같은 revision에서 새 Shot·Asset·Record를 함께 추가할 수 있다. 내부 Shot·Result Asset·Reference Hash와 non-null Request ID 중복은 신규 입력에서 오류이고 legacy 중복은 구조 감사 warning이다. Version snapshot 감사는 Record ID의 전체 합집합을 읽어 제거·재등장·중간 metadata 변경도 보고한다. Current와 version 목록의 revision·SHA-256 snapshot이 바뀌면 한 번 재시도하고 계속 바뀌면 `AUDIT_SNAPSHOT_CHANGED` 409로 끝낸다. 감사 결과는 Project Schema 1.6.0에 저장하지 않는다.
 
 Rollback은 staged와 final의 SHA-256 및 `stat.dev`·`stat.ino`가 모두 일치할 때만 해당 transaction의 게시물로 판정한다. 먼저 transaction-owned version을 제거한 뒤 current, version 0을 포함한 모든 `versions/*.json`, 다른 transaction의 previous·next Project에서 Asset ID와 경로 참조를 수집한다. parse 실패, Project ID·revision·파일명 불일치, symlink나 다른 inode는 참조 없음으로 추정하지 않고 파일·journal·lock을 보존한다. current가 next인데 commit이 불완전하면 current를 previous로 먼저 원자 복원한 뒤 version과 Asset을 같은 규칙으로 처리한다. 기존 version 2 journal은 게시 파일이 없거나 current·version·Asset이 완전한 commit으로 증명될 때만 자동 처리하며 inode 소유권이 없는 rollback 파일은 삭제하지 않는다.
 
@@ -146,13 +151,13 @@ Create recovery는 `.create-locks`의 root lock을 먼저 읽고 `<rootLock.tran
 
 `SafeStoreFilesystem`은 초기화한 data root의 canonical path를 기준으로 모든 관리 경로를 제한한다. 기존 component는 `lstat`과 `realpath`, file은 regular-file 검사와 `O_NOFOLLOW` read/write, hard link는 source identity와 target parent를 확인한다. Lock의 원자 생성은 `O_EXCL` 원본 `EEXIST`를 보존하고 생성된 file identity를 반환한다. `EEXIST`는 뒤이어 파일이 사라져도 `PROJECT_BUSY`다. 생성 뒤 sync나 검증이 실패하면 생성 metadata와 current JSON, Project·transaction·host·PID, `dev`·`ino`가 모두 같은 lock만 제거하고 directory를 sync한다. 소유권을 증명하거나 정리할 수 없으면 lock을 보존하고 recovery block을 쓴다. Project 하위의 assets, versions, transaction, create staging symlink를 거부하고 unlink 직전 identity를 다시 검사한다. 대상은 macOS와 Ubuntu의 로컬 파일 시스템이며 SMB·NFS 분산 lock 의미를 보장하지 않는다.
 
-복구 실패는 `.recovery-blocks`의 프로젝트별 marker에 저장한다. 같은 instance와 다음 process의 mutation은 `STORE_RECOVERY_BLOCKED`로 거부하고 read-only와 안전 출력은 current를 읽을 수 있을 때 유지한다. `/api/status.storageRecoveryBlocks`가 원인과 transaction을 표시한다. 재시작에서 복구 증명이 성공한 경우에만 marker와 lock을 지운다. 복구 결과는 구조화 로그와 `/api/status.storageRecovery`에도 기록한다.
+복구 실패는 `.recovery-blocks`의 프로젝트별 marker에 저장한다. 파일명·JSON·Schema·identity가 잘못된 marker는 항목별로 `.recovery-blocks/.invalid`에 격리하고 증명 가능한 Project 또는 hash 기반 unknown block을 만든다. 하나의 잘못된 항목이 다른 marker와 Project 초기화를 막지 않는다. 같은 instance와 다음 process의 mutation은 해당 Project만 `STORE_RECOVERY_BLOCKED`로 거부하고 read-only와 안전 출력은 current를 읽을 수 있을 때 유지한다. `/api/status`는 recovery block, invalid marker, active 작업과 공유 주기 heartbeat 건강 상태를 매번 갱신한다. 실제 lock이나 transaction 증거가 있는 재시작 복구가 성공한 경우에만 marker와 lock을 지운다.
 
 HTTP 오류 응답은 기존 `code`, `message`, `issues`에 `category`, `scope`, `projectId`, `resourceId`, `mutationBlocked`, `retryable`, `operatorActionRequired`를 추가한다. 명시적인 코드 집합만 404로 분류하고 suffix만 같은 unknown 오류는 500이다. 신규 Generation Shot·Asset 참조 실패는 400, Busy·Revision Conflict·Already Exists는 409, Project 복구와 저장된 Asset 무결성 오류는 423, 일시적인 lock 획득 실패는 503이다. Project scope의 recovery 423만 해당 Project mutation을 잠근다. Asset scope 423은 자산 수리 안내와 해당 출력 차단으로 제한하고 Import와 다른 Project를 잠그지 않는다.
 
 API는 생성 버튼을 누른 시점의 최소 문맥 해시와 대상을 영속 요청으로 저장하며 외부 생성 서비스를 직접 호출하지 않는다. 웹 편집과 생성 실행은 서로 막지 않는다. Codex App 결과를 적용할 때 현재 대상 문맥 해시가 다르면 오래된 요청으로 거부한다. 빈 자산이나 다른 제공자로 자동 대체하지 않는다.
 
-Segment Proposal의 Source Link는 선택적 `{ startPermille, endPermille }` anchor를 받는다. 범위는 `0 ≤ start < end ≤ 1000`이고 생략 시 전체 Shot을 뜻한다. Weight로 Shot duration을 배분한 뒤 시작은 내림, 끝은 올림해 1ms 이상의 `shot-offset/proposal/confirmed` anchor로 바꾼다. Information Gate와 Source Unit 순서는 실제 anchor 시작 시각으로 검사한다. Frame Image Context는 평가 시각에 아직 시작하지 않은 Source Unit·Information을 포함하지 않는다. Project timecode는 공통 formatter가 timebase numerator·denominator·drop-frame·start timecode를 정수 산술로 적용하고 Web·CSV·PDF가 이를 공유한다.
+Segment Proposal의 Source Link는 선택적 `{ startPermille, endPermille }` anchor를 받고 Shot은 선택적 `visualMode`와 `frames[]` 계획을 받는다. 범위는 `0 ≤ start < end ≤ 1000`이고 생략 시 전체 Shot을 뜻한다. Frame은 start 0‰, key 0–1000‰ 내부, end 1000‰ 규칙과 중복 위치 금지를 적용한다. Weight로 Shot duration을 배분한 뒤 Anchor 시작은 내림, 끝은 올림해 1ms 이상의 `shot-offset/proposal/confirmed` 범위로 바꾼다. 직접 시각 Anchor 시작점의 Key Frame을 자동 파생하고 같은 millisecond의 명시 Frame과 합친다. Information Gate와 Source Unit 순서는 실제 anchor 시작 시각으로 검사하며 Frame Image Context는 평가 시각에 아직 시작하지 않은 Source Unit·Information을 포함하지 않는다.
 
 `sharp` 0.35.4(Apache-2.0)는 macOS·Linux에서 PNG·JPEG·WebP 전체 디코딩과 픽셀 상한 검사에 사용한다. `@fastify/multipart` 10.1.1(MIT)은 Node.js에서 파일 수와 크기를 제한한다. 안전 출력과 Raw Asset fetch는 저장 파일의 존재·프로젝트 내부 경로·SHA-256·실제 MIME·구조와 대상 연결을 다시 검사한다. 안전 Frame·Audio 응답은 `no-store`이고, PDF는 손상된 Frame을 ID와 오류 코드가 있는 placeholder로 대체한다. 무결성 및 Ready 지표는 영속하지 않고 현재 프로젝트와 파일에서 계산한다.
 
@@ -160,12 +165,12 @@ Segment Proposal의 Source Link는 선택적 `{ startPermille, endPermille }` an
 
 ## 8. 검증 계획과 구현 순서
 
-1. 버전 고정 패키지, 1.5.0 스키마·타입, 1.0.0→1.1.0→1.2.0→1.3.0→1.4.0→1.5.0 Migration, 파일 해시·경로·권한 검사, native 입력: 구현 및 자동 검증됨.
+1. 버전 고정 패키지, 1.6.0 스키마·타입, 1.0.0→1.1.0→1.2.0→1.3.0→1.4.0→1.5.0→1.6.0 Migration, 파일 해시·경로·권한 검사, native 입력: 구현 및 자동 검증됨.
 2. 실제 제작 자료의 production 어댑터, 최소 합성 native 프로젝트, 원문·시간·선택 요소 검증: 구현 및 자동 검증됨.
 3. 컷·시작/키/끝 프레임·독립 트랙·전환 생성과 편집·잠금, Text Mapping 상태 기계·Source Temporal Anchor·동적 Information Gate, JSON/CSV/PDF 보존: 구현 및 자동 검증됨.
 4. 로컬 저장/API·Mapping 편집 UI, 프로젝트 분리·재열기·원본 차이: 구현 및 자동 검증됨.
 5. 시각 기준, Codex App 컷·이미지·음성 요청과 결과 반영, 재생, PDF 출력: 구현 및 자동 검증됨. 합성 범용 사례와 PRJ-007 `SEG-008`의 실제 생성 흐름을 확인했다.
-6. 두 가지 이상의 구성으로 회귀·브라우저 검증, 전체 요구사항 감사: 29개 파일의 792개 자동 테스트로 합성 자료와 초기 회귀 자료의 가져오기·편집·출력을 검증했다. 정확한 이름의 계약 144개는 Historical Generation Target, topology, audit, HTTP와 UI scope, Project별 recovery, Process Instance Registry, timecode, Proposal anchor, 기존 저장과 PRJ-007 Golden을 포함한다. 기존의 동일 hash·다른 inode, 모든 version·다른 transaction 참조, symlink, 영속 recovery block과 큰 PCM24 업로드 중 status 응답도 유지한다. PRJ-007 Golden은 실제 48,000Hz 2초 WAV를 `UNIT-045`의 849,000–851,000ms J-cut에 연결하고 Generation Record 불변성도 확인한다. 전체 분량의 시각·낭독 검토는 남아 있다.
+6. 두 가지 이상의 구성으로 회귀·브라우저 검증, 전체 요구사항 감사: 32개 파일의 860개 단위·통합 테스트와 Chromium E2E 7개로 합성 자료와 초기 회귀 자료의 가져오기·편집·출력을 검증한다. 정확한 이름의 필수 계약 75개는 Proposal Frame·Visual Mode, 주기 Heartbeat, Historical Audit, Marker Quarantine, Asset Integrity, 열린 Placement, Timecode, Status Refresh와 브라우저 흐름을 포함한다. 격리된 실제 HTTP smoke는 동적 포트에서 정상 출력과 409·423·503을 검증하고 모든 임시 자원을 정리한다. PRJ-007 Golden은 실제 48,000Hz 2초 WAV를 `UNIT-045`의 849,000–851,000ms J-cut에 연결하고 Generation Record 불변성도 확인한다. 전체 분량의 시각·낭독 검토는 남아 있다.
 
 필수 자동 검증은 원문 100% 보존과 단위 연결, 영상 시간 공백·중복, 잘못된 ID·구간 소유권, 미지원 버전·손상 해시, 공개 시점 위반, 잠근 필드 변경, 프로젝트 혼입, 저장·출력 정합성이다. 실제 제작 사례 수치는 fixture에만 둔다. 패널·반전이 없는 다른 분량의 프로젝트와 원본 ID가 겹치는 프로젝트도 검증한다.
 
