@@ -6,6 +6,7 @@ import { applyCodexImage, applyCodexProposal, applyCodexSpeech } from '../src/co
 import { CodexRequestStore } from '../src/codex/requests.js';
 import type { CodexRequest } from '../src/codex/schema.js';
 import { codexRequestBasis } from '../src/codex/work.js';
+import { addReferenceAsset } from '../src/domain/media.js';
 import { importPackage } from '../src/importers/import-package.js';
 import type { Project } from '../src/domain/schema.js';
 import { createSourceOutline } from '../src/proposal/outline.js';
@@ -58,6 +59,30 @@ describe('Codex App 생성 브리지', (): void => {
     expect(result.frames[0]?.imageAssetId).toBe(`codex:${request.id}:image`);
     expect(result.generationRecords[0]).toEqual(expect.objectContaining({ provider: 'codex-app', model: 'codex-imagegen', requestId: request.id }));
     expect((await requests.read(request.id)).resultRevision).toBe(1);
+  });
+
+  it('같은 기준 이미지가 여러 자산으로 연결돼도 참조 해시는 최초 순서로 중복 제거한다', async (): Promise<void> => {
+    const { root, project, store, requests } = await fixture();
+    const bytes: Buffer = await png(2, 2);
+    const first = await addReferenceAsset(project, { id: 'prop-reference-1', kind: 'prop', subjectId: null,
+      description: '동일 기준 이미지 첫 자산', mimeType: 'image/png', bytes });
+    if (first.relativePath === null || first.content === null) throw new Error('첫 기준 이미지 파일이 없습니다.');
+    const withFirst: Project = await store.update(project.projectId, project.revision, (): Project => first.project,
+      [{ relativePath: first.relativePath, content: first.content }]);
+    const second = await addReferenceAsset(withFirst, { id: 'prop-reference-2', kind: 'prop', subjectId: null,
+      description: '동일 기준 이미지 둘째 자산', mimeType: 'image/png', bytes });
+    if (second.relativePath === null || second.content === null) throw new Error('둘째 기준 이미지 파일이 없습니다.');
+    const withSecond: Project = await store.update(project.projectId, withFirst.revision, (): Project => second.project,
+      [{ relativePath: second.relativePath, content: second.content }]);
+    const prepared: Project = await store.update(project.projectId, withSecond.revision, (current: Project): Project => ({ ...current,
+      shots: current.shots.map((shot) => shot.id === 'shot-1' ? { ...shot, propIds: ['prop-reference-1', 'prop-reference-2'] } : shot) }), []);
+    const request: CodexRequest = await requests.create('image', prepared.projectId, 'frame-1', codexRequestBasis(prepared, 'image', 'frame-1'), '2026-09-06T00:00:00.000Z');
+    const input: string = join(root, 'duplicate-reference-result.png');
+    await writeFile(input, await png(1, 1));
+
+    const result: Project = await applyCodexImage(request.id, input, store, requests, '2026-09-06T00:00:01.000Z');
+
+    expect(result.generationRecords.at(-1)?.referenceHashes).toEqual([first.project.assets.at(-1)?.sha256]);
   });
 
   it('요청 뒤 대상이 바뀌면 오래된 결과 적용을 거부한다', async (): Promise<void> => {
