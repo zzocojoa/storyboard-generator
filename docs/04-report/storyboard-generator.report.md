@@ -111,21 +111,23 @@
 - 임시 App, Worker, timer, listener, process registry와 data/request root를 모두 정리했다.
 - 샌드박스 안의 최초 실행은 macOS local listen 권한 `EPERM`으로 막혔고 동일 명령을 격리 환경 그대로 실행해 통과했다.
 - 기존 사용자 서버 `127.0.0.1:4317`은 종료하거나 재시작하지 않았다.
+- 최종 코드 확인용 서버는 별도 data/request root와 `127.0.0.1:4319`에서 실행했고 `/api/status`의 heartbeat health와 HTTP 200을 확인했다.
 
 ## 12. CI
 
 - Workflow `CI`는 Ubuntu, Node.js 24에서 `check`와 `e2e`를 별도 Job으로 실행한다.
 - `check`는 `npm ci`와 `npm run check`, `e2e`는 check 성공 뒤 Chromium을 설치하고 `npm run check:e2e`를 실행한다.
-- 구현·문서 Head `048e132b9b857d95aecce991fc0e939fd5a2cf75`의 Push Run [34069003322](https://github.com/zzocojoa/storyboard-generator/actions/runs/34069003322)와 PR Run [34069005365](https://github.com/zzocojoa/storyboard-generator/actions/runs/34069005365)을 확인했다.
+- 구현 검증 Head `8efdba9628255080e032b6d59ef7557b389f1e3e`의 Push Run [34069508784](https://github.com/zzocojoa/storyboard-generator/actions/runs/34069508784)와 PR Run [34069510604](https://github.com/zzocojoa/storyboard-generator/actions/runs/34069510604)을 확인했다.
 - 두 Run 모두 `check`와 `e2e`가 성공해 최종 conclusion은 `success`다.
 
 ## 13. GitHub·PR·Branch Protection
 
 - Remote: `origin`, repository `zzocojoa/storyboard-generator`
 - PR: [#1](https://github.com/zzocojoa/storyboard-generator/pull/1), base `master`, head `codex/storyboard-generator`, Open 상태 유지
-- 구현 commit `5a5c859`, 문서 commit `048e132`를 원격 Branch와 PR에 push했다.
-- `master` 보호 PUT은 자동 승인 검토가 지속적 원격 설정에 대한 명시적 승인 증거 부족을 이유로 실행 전에 거부했다. 우회하지 않았다.
-- 읽기 전용 API 확인 결과 `gh: Branch not protected (HTTP 404)`이므로 PR 필수, strict `check`·`e2e`, admin 적용, force push·delete 금지는 아직 적용되지 않았다.
+- 구현 commit `5a5c859`, 문서 commit `048e132`·`eaf69af`, heartbeat 회귀 안정화 commit `8efdba9`를 원격 Branch와 PR에 push했다.
+- 사용자 재승인 뒤 `master` 보호를 적용했으며 GitHub API 재조회에서 `protected=true`를 확인했다.
+- Pull Request와 승인 1개가 필수이고, required status checks는 strict `check`·`e2e`, admin 적용은 enabled다.
+- force push와 branch delete는 disabled다. `master` SHA `f66e46a98f657785cb68601c6c0c3eb219cf9884`는 설정 전후 동일하다.
 - `master`는 병합하지 않는다.
 
 ## 14. 변경 파일
