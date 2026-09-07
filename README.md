@@ -28,7 +28,7 @@ npm start
 ## 빠른 사용법
 
 1. 왼쪽 **IMPORT PACKAGE**에 `storyboard_handoff.json` 경로를 입력하고 가져온다. 동작 확인용 production 예시는 `/Users/beatlefeed/Documents/ChatGPT/콘티제작/.worktrees/storyboard-generator/tests/fixtures/production/storyboard_handoff.json`이다. 구조화 계약 파일이 없는 `09_PRODUCTION` 폴더 자체는 바로 가져올 수 없다.
-2. Scene과 Segment를 선택해 Shot의 시간, 행동, 카메라, Source Link, Frame, Audio Cue와 Text Cue를 검토한다. `sourced`는 확인된 직접 시각 Source가 컷 전체를 덮어야 하며, `black`은 검은 화면, `hold-previous`는 직전 안전 프레임을 유지한다.
+2. Scene과 Segment를 선택해 Shot의 시간, 행동, 카메라, Source Link, Frame, Audio Cue와 Text Cue를 검토한다. 종료가 없는 원본 Text Placement는 시작 시각을 유지한 채 종료 시각을 편집하고 **시각 확정**으로 검토를 마친다. `sourced`는 확인된 직접 시각 Source가 컷 전체를 덮어야 하며, `black`은 검은 화면, `hold-previous`는 직전 안전 프레임을 유지한다.
 3. **CODEX CUT**, **IMAGE**, **CODEX VOICE**로 생성 요청을 쌓는다. 같은 저장소를 연 Codex App 작업에서 `$storyboard-workbench 대기 중인 콘티 생성 요청을 처리해 주세요.`를 실행한다.
 4. 결과가 반영되면 **REFRESH**를 누르고 **시간순 재생**으로 이미지, 음성, 자막과 공개 시점을 확인한다.
 5. 상단의 JSON·CSV·PDF 내보내기로 재편집 프로젝트, 제작 목록과 그림 콘티를 받는다.
@@ -95,7 +95,7 @@ npm run cli -- validate --project .local/plant-care.project.json
 npm run cli -- export-csv --project .local/plant-care.project.json --output .local/plant-care.shots.csv
 ```
 
-`outline`은 구간마다 편집 시작용 컷과 프레임을 만든다. 카메라·화면 위치·출연 인물을 임의로 확정하지 않는다. 음성 슬롯은 글자 수에 비례한 제안 시간이며 생성한 가이드 음성의 WAV 길이와 선언한 구간 관계를 검증한 뒤 `measured` 상태가 된다. `j-cut`은 바로 앞 구간부터 원본 구간 안까지, `l-cut`은 원본 구간부터 바로 다음 구간까지만 걸칠 수 있다. 두 관계는 정보 Gate를 앞당기는 증거로 사용하지 않는다. 원본에 화면 글자 종료점이 없으면 `--text-hold-ms` 값이 제안값으로 기록된다. 기존 출력 경로를 덮어쓰지 않는다.
+`outline`은 구간마다 편집 시작용 컷과 프레임을 만든다. 카메라·화면 위치·출연 인물을 임의로 확정하지 않는다. 음성 슬롯은 글자 수에 비례한 제안 시간이며 생성한 가이드 음성의 WAV 길이와 선언한 구간 관계를 검증한 뒤 `measured` 상태가 된다. `j-cut`은 바로 앞 구간부터 원본 구간 안까지, `l-cut`은 원본 구간부터 바로 다음 구간까지만 걸칠 수 있다. 두 관계는 정보 Gate를 앞당기는 증거로 사용하지 않는다. 원본에 화면 글자 종료점이 없으면 `--text-hold-ms` 값이 제안값으로 기록된다. `proposed` 글자 큐는 안전 미리보기와 초안 내보내기에 포함되며, 최종 편집 완료 전에는 Inspector에서 종료 시각을 검토하고 `confirmed`로 확정한다. 기존 출력 경로를 덮어쓰지 않는다.
 
 현재 프로젝트 형식은 `1.6.0`이다. 이전 저장본은 `1.0.0 → 1.1.0 → 1.2.0 → 1.3.0 → 1.4.0 → 1.5.0 → 1.6.0` 순서로 메모리에서 변환한다. 1.5 Shot은 데이터 추측 없이 `visualMode: sourced`로 이관하며 원문·ID·시간·Source Link·Frame·Text·Audio·Asset·Generation Record를 보존한다. 전체 시각 Source 범위를 증명하지 못하면 데이터를 바꾸지 않고 `SHOT_VISUAL_COVERAGE_GAP` 검토 이슈를 표시한다. 이전 단계의 보수적 Text Mapping, Source Anchor, Audio 관계와 Text Cue 권한 변환도 유지한다.
 
@@ -117,7 +117,7 @@ CSV에서 같은 오디오 이벤트가 여러 컷 행에 나타나면 하나의
 npm run check
 ```
 
-이 명령은 서버·도메인 타입 검사, 웹 타입 검사, 자동 테스트, 필수 테스트 이름, 생성 스키마 정합성, 운영 웹 빌드를 순서대로 실행한다. 현재 단위·통합 검사는 32개 파일의 860개 테스트이며 Playwright Chromium 시나리오 7개를 별도로 실행한다. 지정된 75개 계약 이름은 Proposal Frame·Visual Mode, 주기 Heartbeat, Historical Audit, Recovery Marker Quarantine, Asset Integrity, 열린 Text Placement, Timecode, 상태 갱신과 브라우저 흐름을 각각 한 번 실행한다. PRJ-007 Golden은 12개 Scene, 32개 Segment, 79개 screenplay Source Unit, 16개 Panel Turn, Text Placement 25개, 1,500,000ms 전체 시간과 원문 불변을 확인한다. 실제 `UNIT-045` fixture는 48,000Hz mono PCM16 WAV 2,000ms이며 849,000–851,000ms J-cut, 안전 HTTP bytes, JSON 재열기, Gate와 Generation Record 불변성을 검사한다.
+이 명령은 서버·도메인 타입 검사, 웹 타입 검사, 자동 테스트, 필수 테스트 이름, 생성 스키마 정합성, 운영 웹 빌드를 순서대로 실행한다. 현재 단위·통합 검사는 32개 파일의 863개 테스트이며 Playwright Chromium 시나리오 8개를 별도로 실행한다. 지정된 75개 계약 이름은 Proposal Frame·Visual Mode, 주기 Heartbeat, Historical Audit, Recovery Marker Quarantine, Asset Integrity, 열린 Text Placement, Timecode, 상태 갱신과 브라우저 흐름을 각각 한 번 실행한다. PRJ-007 Golden은 12개 Scene, 32개 Segment, 79개 screenplay Source Unit, 16개 Panel Turn, Text Placement 25개, 1,500,000ms 전체 시간과 원문 불변을 확인한다. 실제 `UNIT-045` fixture는 48,000Hz mono PCM16 WAV 2,000ms이며 849,000–851,000ms J-cut, 안전 HTTP bytes, JSON 재열기, Gate와 Generation Record 불변성을 검사한다.
 
 브라우저와 실제 HTTP 검증은 다음 명령을 사용한다. `npm run smoke`는 임시 data/request root와 동적 포트를 만들고 종료 시 listener, Worker, timer와 임시 파일을 정리한다.
 

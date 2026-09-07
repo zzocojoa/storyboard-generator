@@ -46,6 +46,28 @@ describe('로컬 작업 API', (): void => {
     } finally { await app.close(); }
   });
 
+  it('글자 큐 종료 시각을 저장하고 명시적으로 확정한다', async (): Promise<void> => {
+    const { app } = await fixtureApp();
+    try {
+      const imported = await app.inject({ method: 'POST', url: '/api/projects/import', payload: { handoffPath: 'tests/fixtures/production/storyboard_handoff.json', proposedTextHoldMs: 2000 } });
+      const importedProject = imported.json<{ project: { projectId: string; revision: number; textCues: Array<{ id: string; startMs: number; endMs: number; kind: 'overlay' | 'prop-text' | 'dialogue-subtitle' }> } }>().project;
+      const cue = importedProject.textCues[0];
+      if (cue === undefined) throw new Error('검증용 글자 큐가 없습니다.');
+      const projectUrl: string = `/api/projects/${encodeURIComponent(importedProject.projectId)}`;
+      const changed = await app.inject({ method: 'PATCH', url: `${projectUrl}/text/${encodeURIComponent(cue.id)}`,
+        payload: { expectedRevision: 0, timing: { startMs: cue.startMs, endMs: cue.endMs + 500, kind: cue.kind } } });
+      expect(changed.statusCode).toBe(200);
+      expect(changed.json().project.textCues[0]).toEqual(expect.objectContaining({ endMs: cue.endMs + 500, timingStatus: 'proposed' }));
+      const confirmed = await app.inject({ method: 'POST', url: `${projectUrl}/text/${encodeURIComponent(cue.id)}/confirm`, payload: { expectedRevision: 1 } });
+      expect(confirmed.statusCode).toBe(200);
+      expect(confirmed.json().project).toEqual(expect.objectContaining({ revision: 2 }));
+      expect(confirmed.json().project.textCues[0]).toEqual(expect.objectContaining({ timingStatus: 'confirmed' }));
+      const stale = await app.inject({ method: 'POST', url: `${projectUrl}/text/${encodeURIComponent(cue.id)}/confirm`, payload: { expectedRevision: 1 } });
+      expect(stale.statusCode).toBe(409);
+      expect(stale.json().error.code).toBe('REVISION_CONFLICT');
+    } finally { await app.close(); }
+  });
+
   it('정적 자산·가져오기·리비전 충돌·PDF 내보내기를 함께 처리한다', async (): Promise<void> => {
     const { app } = await fixtureApp();
     try {
@@ -100,7 +122,7 @@ describe('로컬 작업 API', (): void => {
     } finally { await app.close(); }
   });
 
-  it('프레임 추가와 독립 오디오·글자 트랙 편집을 revision 순서로 저장한다', async (): Promise<void> => {
+  it('프레임 추가와 독립 오디오 편집을 저장하고 원본 글자 종류 변경을 거부한다', async (): Promise<void> => {
     const { app } = await fixtureApp();
     try {
       const imported = await app.inject({ method: 'POST', url: '/api/projects/import', payload: { handoffPath: 'tests/fixtures/native/storyboard_handoff.json', proposedTextHoldMs: 2000 } });
@@ -118,8 +140,8 @@ describe('로컬 작업 API', (): void => {
       expect(frameAdd.json().project.frames.filter((frame: { shotId: string }) => frame.shotId === 'shot-1')).toHaveLength(2);
       const textEdit = await app.inject({ method: 'PATCH', url: `/api/projects/plant-care-demo/text/${encodeURIComponent(text.id)}`,
         payload: { expectedRevision: 2, timing: { startMs: text.startMs, endMs: text.endMs, kind: 'dialogue-subtitle' } } });
-      expect(textEdit.statusCode).toBe(200);
-      expect(textEdit.json().project).toEqual(expect.objectContaining({ revision: 3, schemaVersion: '1.6.0' }));
+      expect(textEdit.statusCode).toBe(400);
+      expect(textEdit.json().error).toEqual(expect.objectContaining({ code: 'AUTHORITATIVE_TEXT_CUE_READ_ONLY', category: 'validation' }));
     } finally { await app.close(); }
   });
 

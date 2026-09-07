@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { expect, test } from '@playwright/test';
 import type { FastifyInstance } from 'fastify';
 import { CodexRequestStore } from '../../src/codex/requests.js';
-import type { Asset, AudioCue, Project, Shot, StoryboardFrame } from '../../src/domain/schema.js';
+import type { Asset, AudioCue, NativeDataset, PackagePayload, Project, Shot, StoryboardFrame, TextCue } from '../../src/domain/schema.js';
 import { importPackage } from '../../src/importers/import-package.js';
 import { sha256Bytes, sha256Text } from '../../src/importers/integrity.js';
 import { createSourceOutline } from '../../src/proposal/outline.js';
@@ -18,6 +18,7 @@ import { nativeData, nativePackage, pcmWav, png, TEST_AUDIO_NORMALIZATION_OPTION
 
 type RunningApp = { app: FastifyInstance; dataRoot: string; root: string; store: ProjectStore; url: string };
 type MutableFault = { enabled: boolean; injector: StorageFaultInjector };
+type NativeTextPlacement = NativeDataset['textPlacements'][number];
 
 async function outline(projectId: string, title: string): Promise<Project> {
   const payload = await nativePackage();
@@ -54,6 +55,37 @@ function nonSourcedShot(shot: Shot, visualMode: 'black' | 'hold-previous'): Shot
   return { ...shot, visualMode, sourceLinks: shot.sourceLinks.map((link) => ({ ...link,
     usage: link.usage === 'primary-visual' || link.usage === 'continued-visual' ? 'context-only' as const : link.usage })) };
 }
+
+test('e2e_open_text_placement_end_is_edited_and_confirmed', async ({ page }): Promise<void> => {
+  const rootPath: string = await root('storyboard-e2e-text-confirm-'); const dataRoot: string = join(rootPath, 'data'); const store = new ProjectStore(dataRoot);
+  const payload: PackagePayload = await nativePackage(); const data: NativeDataset = nativeData(payload);
+  const firstSegmentId: string | undefined = data.segments[0]?.id;
+  const placement: NativeTextPlacement | undefined = data.textPlacements.find((candidate: NativeTextPlacement): boolean => candidate.segmentId === firstSegmentId);
+  if (placement === undefined) throw new Error('첫 구간의 Text Placement가 없습니다.');
+  const openData: NativeDataset = { ...data, projectId: 'e2e-text-confirm',
+    textPlacements: data.textPlacements.map((candidate: NativeTextPlacement): NativeTextPlacement => candidate.id === placement.id ? { ...candidate, endMs: null } : candidate) };
+  const base: Project = createSourceOutline(importPackage(withNativeData(payload, openData)), { proposedTextHoldMs: 2000 });
+  const cue: TextCue | undefined = base.textCues.find((candidate: TextCue): boolean => candidate.placementId === placement.id);
+  if (cue === undefined) throw new Error('열린 Placement 글자 큐가 없습니다.');
+  const open: Project = { ...base, title: 'Text Timing Confirmation' };
+  await store.create(open); const running: RunningApp = await startApp(rootPath, store);
+  try {
+    await page.goto(running.url); await expect(page.getByRole('heading', { name: 'Text Timing Confirmation' })).toBeVisible();
+    const editor = page.locator('.inspector-section.text-block .track-editor').filter({ hasText: cue.text }).first();
+    const type = editor.locator('label.field').filter({ hasText: /^TYPE/ }).locator('select');
+    const start = editor.locator('label.field').filter({ hasText: /^START MS/ }).locator('input');
+    const end = editor.locator('label.field').filter({ hasText: /^END MS/ }).locator('input');
+    await expect(editor).toBeVisible(); await expect(editor.locator('header span')).toHaveText('PROPOSED');
+    await expect(type).toBeDisabled(); await expect(start).toBeDisabled(); await expect(end).toBeEnabled();
+    const changedEndMs: number = cue.endMs + 500;
+    await end.fill(String(changedEndMs)); await expect(editor.getByRole('button', { name: '변경 저장 후 확정' })).toBeDisabled();
+    await editor.getByRole('button', { name: '종료 시각 저장' }).click();
+    await expect(editor.locator('header span')).toHaveText('PROPOSED'); await expect(end).toHaveValue(String(changedEndMs));
+    await expect(editor.getByRole('button', { name: '시각 확정', exact: true })).toBeEnabled();
+    await editor.getByRole('button', { name: '시각 확정', exact: true }).click();
+    await expect(editor.locator('header span')).toHaveText('CONFIRMED'); await expect(editor.getByRole('button', { name: '시각 확정됨' })).toBeDisabled();
+  } finally { await stopApp(running); }
+});
 
 test('e2e_late_anchor_key_frame_is_visible', async ({ page }): Promise<void> => {
   const rootPath: string = await root('storyboard-e2e-anchor-'); const dataRoot: string = join(rootPath, 'data'); const store = new ProjectStore(dataRoot);

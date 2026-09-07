@@ -22,7 +22,7 @@ import { IdSchema, LockedFieldSchema, ProfileSchema, ShotContentSchema } from '.
 import type { Project } from '../domain/schema.js';
 import { deleteReviewTextCue, resolveTextCueAuthority, TextCueAuthorityResolutionInputSchema } from '../domain/text.js';
 import { applySourceUpdate, sourceImpact } from '../domain/source-update.js';
-import { AudioCueTimingInputSchema, TextCueTimingInputSchema, updateAudioCueTiming, updateTextCueTiming } from '../domain/tracks.js';
+import { AudioCueTimingInputSchema, confirmTextCueTiming, TextCueTimingInputSchema, updateAudioCueTiming, updateTextCueTiming } from '../domain/tracks.js';
 import { exportShotCsvWithIntegrity } from '../exporters/csv.js';
 import { exportProjectJson } from '../exporters/json.js';
 import { exportProjectPdf } from '../exporters/pdf.js';
@@ -106,7 +106,7 @@ function isValidationError(error: Error, code: string): boolean {
     || code.startsWith('DUPLICATE_') || code.startsWith('UNSAFE_') || code.startsWith('UNKNOWN_') || code.startsWith('FORBIDDEN_')
     || code.startsWith('TEXT_') || code.startsWith('AUDIO_') || code.startsWith('ASSET_') || code.startsWith('GENERATION_RECORD_')
     || code.startsWith('UNSUPPORTED_') || code.endsWith('_LOCKED') || code.endsWith('_REQUIRED') || code.endsWith('_BLOCKED')
-    || code.endsWith('_DELETED');
+    || code.endsWith('_DELETED') || code.endsWith('_READ_ONLY');
 }
 
 /** 서버 오류 코드를 사용자 입력, 충돌, 복구 잠금과 일시 장애로 명시적으로 분류한다. */
@@ -394,6 +394,11 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
     const { projectId, cueId } = CueParamsSchema.parse(request.params);
     const body = TextCueBodySchema.parse(request.body);
     return { project: await store.update(projectId, body.expectedRevision, (project: Project): Project => updateTextCueTiming(project, cueId, body.timing), []) };
+  });
+  app.post('/api/projects/:projectId/text/:cueId/confirm', async (request: FastifyRequest): Promise<object> => {
+    const { projectId, cueId } = CueParamsSchema.parse(request.params);
+    const body = RevisionSchema.parse(request.body);
+    return { project: await store.update(projectId, body.expectedRevision, (project: Project): Project => confirmTextCueTiming(project, cueId), []) };
   });
   app.post('/api/projects/:projectId/text/:cueId/authority', async (request: FastifyRequest): Promise<object> => {
     const { projectId, cueId } = CueParamsSchema.parse(request.params);

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { assertAudioTimingRelation } from './audio.js';
 import { reviewIssuesForTextCue } from './emission.js';
 import { assertNoErrors, contractError } from './errors.js';
-import type { Asset, AudioCue, InformationRule, Project, Shot, ShotSourceLink, SourceUnit, StoryboardFrame, TextCue } from './schema.js';
+import type { Asset, AudioCue, InformationRule, Issue, Project, Shot, ShotSourceLink, SourceUnit, StoryboardFrame, TextCue, TextPlacement } from './schema.js';
 import { AudioTimingRelationSchema, MillisecondsSchema, ProjectSchema } from './schema.js';
 import { validateProject } from './validation.js';
 
@@ -89,7 +89,11 @@ export function updateTextCueTiming(project: Project, cueId: string, input: Text
   if (current.authority === 'mapping-decision') throw contractError('DERIVED_TEXT_CUE_READ_ONLY', `${cueId}: Canonical Text Cue 시각은 TextMappingDecision에서 수정하세요.`, []);
   if (current.startMs === timing.startMs && current.endMs === timing.endMs && current.kind === timing.kind) return project;
   const timingChanged: boolean = current.startMs !== timing.startMs || current.endMs !== timing.endMs;
-  if (timingChanged && current.authority === 'placement') throw contractError('AUTHORITATIVE_TEXT_CUE_READ_ONLY', `${cueId}: Placement 시각은 원본 TextPlacement에서 관리합니다.`, []);
+  const placement: TextPlacement | undefined = current.placementId === null ? undefined
+    : project.dataset.textPlacements.find((candidate: TextPlacement): boolean => candidate.id === current.placementId);
+  const blockedPlacementEdit: boolean = current.authority === 'placement' && (current.startMs !== timing.startMs
+    || current.kind !== timing.kind || (current.endMs !== timing.endMs && placement?.endMs !== null));
+  if (blockedPlacementEdit) throw contractError('AUTHORITATIVE_TEXT_CUE_READ_ONLY', `${cueId}: Placement는 열린 종료 시각만 변경할 수 있습니다.`, []);
   const affectedShotIds: Set<string> = new Set<string>();
   const shots: Shot[] = project.shots.map((shot: Shot): Shot => {
     const affected: boolean = timingChanged && current.unitId !== null && shot.sourceLinks.some((link: ShotSourceLink): boolean =>
@@ -108,4 +112,15 @@ export function updateTextCueTiming(project: Project, cueId: string, input: Text
   const outputIssues = reviewIssuesForTextCue(candidate, cueId);
   if (outputIssues.length > 0) throw contractError('TEXT_OUTPUT_GATE_BLOCKED', outputIssues.map((value): string => `${value.code}: ${value.message}`).join('\n'), outputIssues);
   return finishTrackEdit(project, candidate);
+}
+
+/** 검토를 통과한 현재 글자 큐의 시각을 최종 확정한다. */
+export function confirmTextCueTiming(project: Project, cueId: string): Project {
+  const current: TextCue = requireTextCue(project, cueId);
+  const issues: Issue[] = reviewIssuesForTextCue(project, cueId);
+  if (issues.length > 0) throw contractError('TEXT_TIMING_CONFIRMATION_BLOCKED', issues.map((value): string => `${value.code}: ${value.message}`).join('\n'), issues);
+  if (current.timingStatus === 'confirmed') return project;
+  return finishTrackEdit(project, { ...project,
+    textCues: project.textCues.map((cue: TextCue): TextCue => cue.id === cueId ? { ...cue, timingStatus: 'confirmed' } : cue),
+  });
 }
