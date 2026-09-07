@@ -67,7 +67,8 @@ export async function applyCodexImage(
   if (work.kind !== 'image') throw contractError('CODEX_REQUEST_KIND_MISMATCH', `${request.id}: 이미지 작업이 아닙니다.`, []);
   const imageWork: ImageWork = work;
   const result: GeneratedImage = { bytes: await readFile(inputPath), provider: 'codex-app', prompt: imageWork.prompt,
-    model: 'codex-imagegen', requestId: request.id, mimeType: 'image/png', referenceHashes: imageWork.references.map((reference): string => reference.sha256) };
+    model: 'codex-imagegen', requestId: request.id, mimeType: 'image/png',
+    referenceHashes: [...new Set(imageWork.references.map((reference): string => reference.sha256))] };
   const mutation: GeneratedMutation = await applyGeneratedImage(project, request.targetId, generationId(request.id), request.createdAt, result);
   return applyMutation(request, mutation, store, requests, project.revision, now);
 }
