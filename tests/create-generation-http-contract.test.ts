@@ -26,14 +26,24 @@ import { importButtonState, mutationControlsDisabled } from '../web/src/ui-polic
 import { nativeData, nativePackage, pcmWav, png, productionPackage, TEST_AUDIO_NORMALIZATION_OPTIONS, testAudioNormalizer, withNativeData } from './helpers.js';
 
 const roots: string[] = [];
+const stores: ProjectStore[] = [];
+const apps: FastifyInstance[] = [];
 const DEAD_PROCESS_ID: number = 2_147_483_647;
 
 type Barrier = { injector: StorageFaultInjector; reached: Promise<void>; release(): void };
 type ActiveCreate = { root: string; dataRoot: string; project: Project; pending: Promise<Project>; gate: Barrier };
 
 afterEach(async (): Promise<void> => {
+  for (const app of apps.splice(0)) await app.close();
+  for (const store of stores.splice(0)) await store.close();
   await Promise.all(roots.splice(0).map((root: string): Promise<void> => rm(root, { recursive: true, force: true })));
 });
+
+function trackedStore(dataRoot: string, injector?: StorageFaultInjector): ProjectStore {
+  const store: ProjectStore = new ProjectStore(dataRoot, injector);
+  stores.push(store);
+  return store;
+}
 
 async function temporaryRoot(prefix: string): Promise<string> {
   const root: string = await mkdtemp(join(tmpdir(), prefix));
@@ -81,7 +91,7 @@ async function activeCreate(point: StorageFaultPoint, projectId: string): Promis
   const dataRoot: string = join(root, 'data');
   const project: Project = await outline(projectId);
   const gate: Barrier = barrier(point, process.pid);
-  const store: ProjectStore = new ProjectStore(dataRoot, gate.injector);
+  const store: ProjectStore = trackedStore(dataRoot, gate.injector);
   const pending: Promise<Project> = store.create(project);
   await gate.reached;
   return { root, dataRoot, project, pending, gate };
@@ -94,18 +104,18 @@ async function crashedCreate(point: StorageFaultPoint, projectId: string): Promi
   const injector: StorageFaultInjector = { ownerPid: DEAD_PROCESS_ID, trigger(candidate: StorageFaultPoint): void {
     if (candidate === point) throw new SimulatedStorageCrash(candidate);
   } };
-  await expect(new ProjectStore(dataRoot, injector).create(project)).rejects.toMatchObject({ code: 'SIMULATED_STORAGE_CRASH' });
+  await expect(trackedStore(dataRoot, injector).create(project)).rejects.toMatchObject({ code: 'SIMULATED_STORAGE_CRASH' });
   return { root, dataRoot, project };
 }
 
 async function concurrentCreate(projectId: string): Promise<{ dataRoot: string; project: Project; loserCode: string }> {
   const root: string = await temporaryRoot('storyboard-concurrent-create-');
   const dataRoot: string = join(root, 'data');
-  const second: ProjectStore = new ProjectStore(dataRoot);
+  const second: ProjectStore = trackedStore(dataRoot);
   await second.initialize();
   const project: Project = await outline(projectId);
   const gate: Barrier = barrier('after-root-create-lock-acquired', process.pid);
-  const pending: Promise<Project> = new ProjectStore(dataRoot, gate.injector).create(project);
+  const pending: Promise<Project> = trackedStore(dataRoot, gate.injector).create(project);
   await gate.reached;
   const loserCode: string = await errorCode(second.create(project));
   gate.release();
@@ -119,7 +129,9 @@ async function appForRoot(root: string, dataRoot: string): Promise<FastifyInstan
   const config: AppConfig = { host: '127.0.0.1', port: 4317, dataRoot, webRoot,
     pdfFontPath: resolve('assets/fonts/NanumGothic-Regular.ttf'), audioNormalization: TEST_AUDIO_NORMALIZATION_OPTIONS,
     codex: { requestRoot: join(root, 'requests'), speechVoice: 'Yuna' } };
-  return createApp(config, new ProjectStore(dataRoot), new CodexRequestStore(config.codex.requestRoot));
+  const app: FastifyInstance = await createApp(config, trackedStore(dataRoot), new CodexRequestStore(config.codex.requestRoot));
+  apps.push(app);
+  return app;
 }
 
 function record(id: string, shotIds: readonly string[], resultAssetIds: readonly string[]): GenerationRecord {
@@ -145,12 +157,12 @@ describe('A. Project-scoped root create lock', (): void => {
   });
   it('root_create_lock_is_acquired_before_target_check', async (): Promise<void> => {
     const points: StorageFaultPoint[] = []; const root = await temporaryRoot('storyboard-order-');
-    await new ProjectStore(join(root, 'data'), { ownerPid: process.pid, trigger(point: StorageFaultPoint): void { points.push(point); } }).create(await outline('root-order'));
+    await trackedStore(join(root, 'data'), { ownerPid: process.pid, trigger(point: StorageFaultPoint): void { points.push(point); } }).create(await outline('root-order'));
     expect(points.indexOf('after-root-create-lock-acquired')).toBeLessThan(points.indexOf('after-create-target-rechecked'));
   });
   it('root_create_lock_uses_exclusive_create', async (): Promise<void> => {
     const scenario = await activeCreate('after-root-create-lock-acquired', 'root-exclusive');
-    expect(await errorCode(new ProjectStore(scenario.dataRoot).create(scenario.project))).toBe('PROJECT_BUSY');
+    expect(await errorCode(trackedStore(scenario.dataRoot).create(scenario.project))).toBe('PROJECT_BUSY');
     scenario.gate.release(); await scenario.pending;
   });
   it('root_create_lock_records_project_and_transaction', async (): Promise<void> => {
@@ -161,18 +173,18 @@ describe('A. Project-scoped root create lock', (): void => {
   });
   it('root_create_lock_is_removed_after_success', async (): Promise<void> => {
     const root = await temporaryRoot('storyboard-root-clean-'); const dataRoot = join(root, 'data'); const project = await outline('root-clean');
-    await new ProjectStore(dataRoot).create(project); expect(await exists(rootLockPath(dataRoot, project.projectId))).toBe(false);
+    await trackedStore(dataRoot).create(project); expect(await exists(rootLockPath(dataRoot, project.projectId))).toBe(false);
   });
   it('different_projects_use_different_create_locks', async (): Promise<void> => {
     expect(rootLockPath('/tmp/data', 'first')).not.toBe(rootLockPath('/tmp/data', 'second'));
   });
   it('different_project_creates_can_run_concurrently', async (): Promise<void> => {
     const root = await temporaryRoot('storyboard-different-create-'); const dataRoot = join(root, 'data'); const first = await outline('different-a'); const second = await outline('different-b');
-    const values = await Promise.all([new ProjectStore(dataRoot).create(first), new ProjectStore(dataRoot).create(second)]);
+    const values = await Promise.all([trackedStore(dataRoot).create(first), trackedStore(dataRoot).create(second)]);
     expect(values.map((project: Project): string => project.projectId).sort()).toEqual(['different-a', 'different-b']);
   });
   it('create_internal_lock_directory_is_not_listed_as_project', async (): Promise<void> => {
-    const root = await temporaryRoot('storyboard-lock-list-'); const store = new ProjectStore(join(root, 'data')); await store.initialize(); expect(await store.list()).toEqual([]);
+    const root = await temporaryRoot('storyboard-lock-list-'); const store = trackedStore(join(root, 'data')); await store.initialize(); expect(await store.list()).toEqual([]);
   });
 });
 
@@ -180,7 +192,7 @@ describe('B. Concurrent create', (): void => {
   it('concurrent_create_commits_exactly_once', async (): Promise<void> => { expect((await concurrentCreate('create-once')).loserCode).toBe('PROJECT_BUSY'); });
   it('concurrent_create_loser_returns_project_busy', async (): Promise<void> => { expect((await concurrentCreate('create-busy')).loserCode).toBe('PROJECT_BUSY'); });
   it('concurrent_create_retry_returns_project_already_exists', async (): Promise<void> => {
-    const result = await concurrentCreate('create-retry'); expect(await errorCode(new ProjectStore(result.dataRoot).create(result.project))).toBe('PROJECT_ALREADY_EXISTS');
+    const result = await concurrentCreate('create-retry'); expect(await errorCode(trackedStore(result.dataRoot).create(result.project))).toBe('PROJECT_ALREADY_EXISTS');
   });
   it('concurrent_create_leaves_one_final_project', async (): Promise<void> => {
     const result = await concurrentCreate('create-final'); expect((await readdir(result.dataRoot)).filter((name: string): boolean => /^[a-f0-9]{64}$/.test(name))).toHaveLength(1);
@@ -200,10 +212,10 @@ describe('B. Concurrent create', (): void => {
   it('concurrent_create_does_not_return_raw_eexist', async (): Promise<void> => { expect((await concurrentCreate('create-eexist')).loserCode).not.toBe('EEXIST'); });
   it('concurrent_create_does_not_return_raw_enotempty', async (): Promise<void> => { expect((await concurrentCreate('create-enotempty')).loserCode).not.toBe('ENOTEMPTY'); });
   it('concurrent_create_preserves_winner_project_hash', async (): Promise<void> => {
-    const result = await concurrentCreate('create-hash'); expect(exportProjectJson(await new ProjectStore(result.dataRoot).read(result.project.projectId))).toBe(exportProjectJson(result.project));
+    const result = await concurrentCreate('create-hash'); expect(exportProjectJson(await trackedStore(result.dataRoot).read(result.project.projectId))).toBe(exportProjectJson(result.project));
   });
   it('concurrent_create_preserves_source_snapshot', async (): Promise<void> => {
-    const result = await concurrentCreate('create-source'); expect((await new ProjectStore(result.dataRoot).read(result.project.projectId)).sources).toEqual(result.project.sources);
+    const result = await concurrentCreate('create-source'); expect((await trackedStore(result.dataRoot).read(result.project.projectId)).sources).toEqual(result.project.sources);
   });
   it('concurrent_create_http_returns_one_201_and_one_409', async (): Promise<void> => {
     const root = await temporaryRoot('storyboard-http-create-'); const app = await appForRoot(root, join(root, 'data'));
@@ -215,64 +227,64 @@ describe('B. Concurrent create', (): void => {
     const root = await temporaryRoot('storyboard-http-duplicate-'); const dataRoot = join(root, 'data'); const app = await appForRoot(root, dataRoot);
     const payload = { handoffPath: resolve('tests/fixtures/native/storyboard_handoff.json'), proposedTextHoldMs: 2000 };
     await Promise.all([app.inject({ method: 'POST', url: '/api/projects/import', payload }), app.inject({ method: 'POST', url: '/api/projects/import', payload })]);
-    expect((await new ProjectStore(dataRoot).list())).toHaveLength(1); await app.close();
+    expect((await trackedStore(dataRoot).list())).toHaveLength(1); await app.close();
   });
 });
 
 describe('C. Root create lock recovery', (): void => {
   it('crash_after_root_lock_before_journal_is_recovered', async (): Promise<void> => {
-    const fixture = await crashedCreate('after-root-create-lock-acquired', 'crash-root'); const recovered = new ProjectStore(fixture.dataRoot); await recovered.initialize();
+    const fixture = await crashedCreate('after-root-create-lock-acquired', 'crash-root'); const recovered = trackedStore(fixture.dataRoot); await recovered.initialize();
     expect(await exists(rootLockPath(fixture.dataRoot, fixture.project.projectId))).toBe(false); await expect(recovered.create(fixture.project)).resolves.toMatchObject({ revision: 0 });
   });
   it('dead_root_lock_without_journal_is_removed', async (): Promise<void> => {
-    const fixture = await crashedCreate('after-root-create-lock-acquired', 'dead-root'); await new ProjectStore(fixture.dataRoot).initialize(); expect(await readdir(join(fixture.dataRoot, '.create-locks'))).toEqual([]);
+    const fixture = await crashedCreate('after-root-create-lock-acquired', 'dead-root'); await trackedStore(fixture.dataRoot).initialize(); expect(await readdir(join(fixture.dataRoot, '.create-locks'))).toEqual([]);
   });
   it('dead_root_lock_with_matching_journal_is_recovered', async (): Promise<void> => {
-    const fixture = await crashedCreate('after-create-staging-complete', 'matching-root'); const store = new ProjectStore(fixture.dataRoot); await store.initialize();
+    const fixture = await crashedCreate('after-create-staging-complete', 'matching-root'); const store = trackedStore(fixture.dataRoot); await store.initialize();
     expect(await readdir(join(fixture.dataRoot, '.create-locks'))).toEqual([]); expect(await readdir(join(fixture.dataRoot, '.create-transactions'))).toEqual([]);
   });
   it('dead_root_lock_with_complete_final_is_removed', async (): Promise<void> => {
-    const fixture = await crashedCreate('before-root-create-lock-removal', 'complete-final'); const store = new ProjectStore(fixture.dataRoot); await store.initialize();
+    const fixture = await crashedCreate('before-root-create-lock-removal', 'complete-final'); const store = trackedStore(fixture.dataRoot); await store.initialize();
     expect((await store.read(fixture.project.projectId)).revision).toBe(0); expect(await exists(rootLockPath(fixture.dataRoot, fixture.project.projectId))).toBe(false);
   });
   it('live_root_create_lock_is_preserved', async (): Promise<void> => {
-    const scenario = await activeCreate('after-root-create-lock-acquired', 'live-root'); const observer = new ProjectStore(scenario.dataRoot); await observer.initialize();
+    const scenario = await activeCreate('after-root-create-lock-acquired', 'live-root'); const observer = trackedStore(scenario.dataRoot); await observer.initialize();
     expect(observer.activeCreates()).toContainEqual(expect.objectContaining({ projectId: scenario.project.projectId })); expect(await exists(rootLockPath(scenario.dataRoot, scenario.project.projectId))).toBe(true); scenario.gate.release(); await scenario.pending;
   });
   it('foreign_host_root_create_lock_is_preserved', async (): Promise<void> => {
     const fixture = await crashedCreate('after-root-create-lock-acquired', 'foreign-root'); const path = rootLockPath(fixture.dataRoot, fixture.project.projectId);
     const metadata = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>; await writeFile(path, JSON.stringify({ ...metadata, host: 'foreign.example' }));
-    const observer = new ProjectStore(fixture.dataRoot); await observer.initialize(); expect(observer.recoveryBlocks()).toContainEqual(expect.objectContaining({ projectId: fixture.project.projectId, code: 'STORE_CREATE_RECOVERY_REQUIRED' })); expect(await exists(path)).toBe(true);
+    const observer = trackedStore(fixture.dataRoot); await observer.initialize(); expect(observer.recoveryBlocks()).toContainEqual(expect.objectContaining({ projectId: fixture.project.projectId, code: 'STORE_CREATE_RECOVERY_REQUIRED' })); expect(await exists(path)).toBe(true);
   });
   it('malformed_root_create_lock_creates_recovery_block', async (): Promise<void> => {
-    const root = await temporaryRoot('storyboard-malformed-root-'); const dataRoot = join(root, 'data'); const store = new ProjectStore(dataRoot); await store.initialize();
-    const projectId = 'malformed-root'; await writeFile(rootLockPath(dataRoot, projectId), '{}'); const observer = new ProjectStore(dataRoot); await observer.initialize();
+    const root = await temporaryRoot('storyboard-malformed-root-'); const dataRoot = join(root, 'data'); const store = trackedStore(dataRoot); await store.initialize();
+    const projectId = 'malformed-root'; await writeFile(rootLockPath(dataRoot, projectId), '{}'); const observer = trackedStore(dataRoot); await observer.initialize();
     expect(observer.recoveryBlocks()).toContainEqual(expect.objectContaining({ directoryName: projectStoreKey(projectId), code: 'STORE_CREATE_RECOVERY_REQUIRED' })); expect(await exists(rootLockPath(dataRoot, projectId))).toBe(true);
   });
   it('root_lock_journal_transaction_mismatch_is_isolated', async (): Promise<void> => {
     const fixture = await crashedCreate('after-create-journal-prepared', 'mismatch-root'); const path = rootLockPath(fixture.dataRoot, fixture.project.projectId);
     const metadata = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>; await writeFile(path, JSON.stringify({ ...metadata, transactionId: randomUUID() }));
-    const observer = new ProjectStore(fixture.dataRoot); await observer.initialize(); expect(observer.recoveryBlocks()).toEqual([]); expect(await readdir(join(fixture.dataRoot, '.create-locks'))).toEqual([]);
+    const observer = trackedStore(fixture.dataRoot); await observer.initialize(); expect(observer.recoveryBlocks()).toEqual([]); expect(await readdir(join(fixture.dataRoot, '.create-locks'))).toEqual([]);
   });
   it('root_create_recovery_is_idempotent', async (): Promise<void> => {
-    const fixture = await crashedCreate('after-root-create-lock-acquired', 'idempotent-root'); await new ProjectStore(fixture.dataRoot).initialize(); await new ProjectStore(fixture.dataRoot).initialize();
+    const fixture = await crashedCreate('after-root-create-lock-acquired', 'idempotent-root'); await trackedStore(fixture.dataRoot).initialize(); await trackedStore(fixture.dataRoot).initialize();
     expect(await readdir(join(fixture.dataRoot, '.create-locks'))).toEqual([]);
   });
   it('create_recovery_removes_root_and_final_lock', async (): Promise<void> => {
-    const fixture = await crashedCreate('after-create-directory-publish', 'remove-both-locks'); await new ProjectStore(fixture.dataRoot).initialize();
+    const fixture = await crashedCreate('after-create-directory-publish', 'remove-both-locks'); await trackedStore(fixture.dataRoot).initialize();
     expect(await exists(rootLockPath(fixture.dataRoot, fixture.project.projectId))).toBe(false); expect(await exists(join(projectDirectory(fixture.dataRoot, fixture.project.projectId), 'write.lock'))).toBe(false);
   });
   it('create_recovery_does_not_delete_complete_project', async (): Promise<void> => {
-    const fixture = await crashedCreate('before-root-create-lock-removal', 'preserve-complete'); const observer = new ProjectStore(fixture.dataRoot); await observer.initialize();
+    const fixture = await crashedCreate('before-root-create-lock-removal', 'preserve-complete'); const observer = trackedStore(fixture.dataRoot); await observer.initialize();
     expect(exportProjectJson(await observer.read(fixture.project.projectId))).toBe(exportProjectJson(fixture.project));
   });
 });
 
 describe('D. Project-scoped active create', (): void => {
   async function activeWithExisting(): Promise<{ scenario: ActiveCreate; observer: ProjectStore; existing: Project }> {
-    const root = await temporaryRoot('storyboard-active-scope-'); const dataRoot = join(root, 'data'); const normal = new ProjectStore(dataRoot); const existing = await normal.create(await outline(`existing-${randomUUID()}`));
-    const project = await outline(`active-${randomUUID()}`); const gate = barrier('after-root-create-lock-acquired', process.pid); const pending = new ProjectStore(dataRoot, gate.injector).create(project); await gate.reached;
-    const observer = new ProjectStore(dataRoot); await observer.initialize(); return { scenario: { root, dataRoot, project, pending, gate }, observer, existing };
+    const root = await temporaryRoot('storyboard-active-scope-'); const dataRoot = join(root, 'data'); const normal = trackedStore(dataRoot); const existing = await normal.create(await outline(`existing-${randomUUID()}`));
+    const project = await outline(`active-${randomUUID()}`); const gate = barrier('after-root-create-lock-acquired', process.pid); const pending = trackedStore(dataRoot, gate.injector).create(project); await gate.reached;
+    const observer = trackedStore(dataRoot); await observer.initialize(); return { scenario: { root, dataRoot, project, pending, gate }, observer, existing };
   }
   it('live_create_does_not_block_unrelated_project_read', async (): Promise<void> => {
     const value = await activeWithExisting(); expect((await value.observer.read(value.existing.projectId)).revision).toBe(0); value.scenario.gate.release(); await value.scenario.pending;
@@ -284,18 +296,18 @@ describe('D. Project-scoped active create', (): void => {
     const value = await activeWithExisting(); expect((await value.observer.create(await outline(`third-${randomUUID()}`))).revision).toBe(0); value.scenario.gate.release(); await value.scenario.pending;
   });
   it('active_project_create_returns_busy', async (): Promise<void> => {
-    const scenario = await activeCreate('after-root-create-lock-acquired', 'active-create-busy'); expect(await errorCode(new ProjectStore(scenario.dataRoot).create(scenario.project))).toBe('PROJECT_BUSY'); scenario.gate.release(); await scenario.pending;
+    const scenario = await activeCreate('after-root-create-lock-acquired', 'active-create-busy'); expect(await errorCode(trackedStore(scenario.dataRoot).create(scenario.project))).toBe('PROJECT_BUSY'); scenario.gate.release(); await scenario.pending;
   });
   it('active_project_update_returns_busy', async (): Promise<void> => {
-    const scenario = await activeCreate('after-create-directory-publish', 'active-update-busy'); const observer = new ProjectStore(scenario.dataRoot); await observer.initialize();
+    const scenario = await activeCreate('after-create-directory-publish', 'active-update-busy'); const observer = trackedStore(scenario.dataRoot); await observer.initialize();
     expect(await errorCode(observer.update(scenario.project.projectId, 0, (project: Project): Project => project, []))).toBe('PROJECT_BUSY'); scenario.gate.release(); await scenario.pending;
   });
   it('active_create_state_is_cleared_after_completion', async (): Promise<void> => {
-    const scenario = await activeCreate('after-root-create-lock-acquired', 'active-cleared'); const observer = new ProjectStore(scenario.dataRoot); await observer.initialize(); scenario.gate.release(); await scenario.pending;
+    const scenario = await activeCreate('after-root-create-lock-acquired', 'active-cleared'); const observer = trackedStore(scenario.dataRoot); await observer.initialize(); scenario.gate.release(); await scenario.pending;
     await observer.update(scenario.project.projectId, 0, (project: Project): Project => ({ ...project, title: 'complete' }), []); expect(observer.activeCreates()).toEqual([]);
   });
   it('active_create_does_not_create_global_recovery_block', async (): Promise<void> => {
-    const scenario = await activeCreate('after-root-create-lock-acquired', 'active-no-block'); const observer = new ProjectStore(scenario.dataRoot); await observer.initialize(); expect(observer.recoveryBlocks()).toEqual([]); scenario.gate.release(); await scenario.pending;
+    const scenario = await activeCreate('after-root-create-lock-acquired', 'active-no-block'); const observer = trackedStore(scenario.dataRoot); await observer.initialize(); expect(observer.recoveryBlocks()).toEqual([]); scenario.gate.release(); await scenario.pending;
   });
 });
 
@@ -349,16 +361,16 @@ describe('E. Generation Record transition', (): void => {
     expect(generationRecordIssues(next)).not.toContainEqual(expect.objectContaining({ code: 'GENERATION_RECORD_SHOT_NOT_FOUND' })); expect(() => assertGenerationRecordTransition(current, next)).toThrowError(expect.objectContaining({ code: 'GENERATION_RECORD_SHOT_NOT_FOUND' }));
   });
   it('new_generation_record_result_assets_must_exist', async (): Promise<void> => {
-    const root = await temporaryRoot('storyboard-generation-asset-'); const store = new ProjectStore(join(root, 'data')); const project = await store.create(await outline('generation-missing-asset'));
+    const root = await temporaryRoot('storyboard-generation-asset-'); const store = trackedStore(join(root, 'data')); const project = await store.create(await outline('generation-missing-asset'));
     await expect(store.update(project.projectId, 0, (current: Project): Project => ({ ...current, generationRecords: [record('record-1', [], ['missing-asset'])] }), [])).rejects.toMatchObject({ code: 'ASSET_REFERENCE_NOT_FOUND' });
   });
   it('new_generation_record_can_reference_new_asset_in_same_revision', async (): Promise<void> => {
-    const root = await temporaryRoot('storyboard-generation-new-asset-'); const store = new ProjectStore(join(root, 'data')); const project = await store.create(await outline('generation-new-asset')); const bytes = await png(1, 1);
+    const root = await temporaryRoot('storyboard-generation-new-asset-'); const store = trackedStore(join(root, 'data')); const project = await store.create(await outline('generation-new-asset')); const bytes = await png(1, 1);
     const asset: Asset = { id: 'new-prop', kind: 'prop', subjectId: null, path: 'assets/new-prop.png', mimeType: 'image/png', sha256: sha256Bytes(bytes), description: '새 자산', durationMs: null, version: 1 };
     const updated = await store.update(project.projectId, 0, (current: Project): Project => ({ ...current, assets: [asset], generationRecords: [record('record-1', [], [asset.id])] }), [{ relativePath: asset.path, content: bytes }]); expect(updated.generationRecords[0]?.resultAssetIds).toEqual([asset.id]);
   });
   async function failedTransition(projectId: string): Promise<{ dataRoot: string; store: ProjectStore; current: Project }> {
-    const root = await temporaryRoot('storyboard-generation-failure-'); const dataRoot = join(root, 'data'); const store = new ProjectStore(dataRoot); const base = await store.create(await outline(projectId));
+    const root = await temporaryRoot('storyboard-generation-failure-'); const dataRoot = join(root, 'data'); const store = trackedStore(dataRoot); const base = await store.create(await outline(projectId));
     const current = await store.update(base.projectId, 0, (project: Project): Project => withRecord(project, 'record-1'), []); const existing = current.generationRecords[0] as GenerationRecord;
     await expect(store.update(current.projectId, current.revision, (project: Project): Project => ({ ...project, generationRecords: [{ ...existing, provider: 'changed' }] }), [])).rejects.toMatchObject({ code: 'GENERATION_RECORD_IMMUTABLE' });
     return { dataRoot, store, current };
@@ -404,9 +416,9 @@ describe('F. Codex and source update audit', (): void => {
     const project = withRecord(withRecord(await outline('generation-roundtrip'), 'record-1'), 'record-2'); expect(parseProject(JSON.parse(exportProjectJson(project)) as unknown).generationRecords).toEqual(project.generationRecords);
   });
   it('generation_records_survive_storage_recovery', async (): Promise<void> => {
-    const root = await temporaryRoot('storyboard-generation-recovery-'); const dataRoot = join(root, 'data'); const store = new ProjectStore(dataRoot); const base = await store.create(await outline('generation-recovery')); const current = await store.update(base.projectId, 0, (project: Project): Project => withRecord(project, 'record-1'), []);
-    const crashing = new ProjectStore(dataRoot, { ownerPid: DEAD_PROCESS_ID, trigger(point: StorageFaultPoint): void { if (point === 'after-update-current-published') throw new SimulatedStorageCrash(point); } }); await crashing.initialize();
-    await expect(crashing.update(current.projectId, current.revision, (project: Project): Project => ({ ...project, title: 'recovered' }), [])).rejects.toMatchObject({ code: 'SIMULATED_STORAGE_CRASH' }); const recovered = new ProjectStore(dataRoot); await recovered.initialize(); expect((await recovered.read(current.projectId)).generationRecords).toEqual(current.generationRecords);
+    const root = await temporaryRoot('storyboard-generation-recovery-'); const dataRoot = join(root, 'data'); const store = trackedStore(dataRoot); const base = await store.create(await outline('generation-recovery')); const current = await store.update(base.projectId, 0, (project: Project): Project => withRecord(project, 'record-1'), []);
+    const crashing = trackedStore(dataRoot, { ownerPid: DEAD_PROCESS_ID, trigger(point: StorageFaultPoint): void { if (point === 'after-update-current-published') throw new SimulatedStorageCrash(point); } }); await crashing.initialize();
+    await expect(crashing.update(current.projectId, current.revision, (project: Project): Project => ({ ...project, title: 'recovered' }), [])).rejects.toMatchObject({ code: 'SIMULATED_STORAGE_CRASH' }); const recovered = trackedStore(dataRoot); await recovered.initialize(); expect((await recovered.read(current.projectId)).generationRecords).toEqual(current.generationRecords);
   });
 });
 
@@ -457,21 +469,21 @@ describe('I. Web UI error states', (): void => {
 
 describe('J. Existing storage regression', (): void => {
   it('create_update_serialization_still_passes', async (): Promise<void> => {
-    const root = await temporaryRoot('storyboard-create-update-'); const dataRoot = join(root, 'data'); const store = new ProjectStore(dataRoot); const project = await store.create(await outline('create-update'));
+    const root = await temporaryRoot('storyboard-create-update-'); const dataRoot = join(root, 'data'); const store = trackedStore(dataRoot); const project = await store.create(await outline('create-update'));
     const updated = await store.update(project.projectId, 0, (current: Project): Project => ({ ...current, title: 'revision one' }), []); expect(updated.revision).toBe(1); expect(await readdir(join(projectDirectory(dataRoot, project.projectId), 'versions'))).toEqual(['000000.json', '000001.json']);
   });
   it('asset_reference_closure_still_passes', async (): Promise<void> => {
-    const root = await temporaryRoot('storyboard-asset-closure-'); const store = new ProjectStore(join(root, 'data')); const project = await store.create(await outline('asset-closure'));
+    const root = await temporaryRoot('storyboard-asset-closure-'); const store = trackedStore(join(root, 'data')); const project = await store.create(await outline('asset-closure'));
     await expect(store.update(project.projectId, 0, (current: Project): Project => ({ ...current, generationRecords: [record('missing-result', [], ['missing'])] }), [])).rejects.toMatchObject({ code: 'ASSET_REFERENCE_NOT_FOUND' });
   });
   it('asset_metadata_immutability_still_passes', async (): Promise<void> => {
-    const root = await temporaryRoot('storyboard-asset-immutable-'); const store = new ProjectStore(join(root, 'data')); const project = await store.create(await outline('asset-immutable')); const bytes = await png(1, 1);
+    const root = await temporaryRoot('storyboard-asset-immutable-'); const store = trackedStore(join(root, 'data')); const project = await store.create(await outline('asset-immutable')); const bytes = await png(1, 1);
     const asset: Asset = { id: 'prop', kind: 'prop', subjectId: null, path: 'assets/prop.png', mimeType: 'image/png', sha256: sha256Bytes(bytes), description: 'prop', durationMs: null, version: 1 };
     const current = await store.update(project.projectId, 0, (value: Project): Project => ({ ...value, assets: [asset] }), [{ relativePath: asset.path, content: bytes }]);
     await expect(store.update(current.projectId, current.revision, (value: Project): Project => ({ ...value, assets: [{ ...asset, description: 'changed' }] }), [])).rejects.toMatchObject({ code: 'ASSET_METADATA_IMMUTABLE' });
   });
   it('safe_frame_and_audio_output_still_pass', async (): Promise<void> => {
-    const root = await temporaryRoot('storyboard-safe-output-'); const store = new ProjectStore(join(root, 'data')); const base = await store.create(await outline('safe-output')); const frame = base.frames[0]; const cue = base.audioCues.find((value): boolean => ['dialogue', 'voiceover', 'panel'].includes(value.kind)); if (frame === undefined || cue === undefined) throw new Error('검증용 Frame 또는 Cue가 없습니다.');
+    const root = await temporaryRoot('storyboard-safe-output-'); const store = trackedStore(join(root, 'data')); const base = await store.create(await outline('safe-output')); const frame = base.frames[0]; const cue = base.audioCues.find((value): boolean => ['dialogue', 'voiceover', 'panel'].includes(value.kind)); if (frame === undefined || cue === undefined) throw new Error('검증용 Frame 또는 Cue가 없습니다.');
     const image = await applyGeneratedImage(base, frame.id, 'safe-image', '2026-09-06T00:00:00.000Z', { bytes: await png(1, 1), generatorBuild: testGeneratorBuild(), provider: 'codex-app', prompt: 'safe', model: 'image', requestId: 'safe-image', mimeType: 'image/png', referenceHashes: [] });
     let current = await store.update(base.projectId, 0, (): Project => image.project, [{ relativePath: image.relativePath as string, content: image.content as Buffer }]); current = await store.update(current.projectId, current.revision, (value: Project): Project => setFrameReview(value, frame.id, 'accepted'), []);
     const normalizer = testAudioNormalizer(); const speech = await applyGeneratedSpeech(current, cue.id, 'safe-speech', '2026-09-06T00:00:01.000Z', { bytes: pcmWav(500, 48000, 1, 16), generatorBuild: testGeneratorBuild(), provider: 'codex-app', prompt: 'safe', model: 'speech', requestId: 'safe-speech', mimeType: 'audio/wav' }, normalizer); await normalizer.close();

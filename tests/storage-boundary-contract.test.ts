@@ -20,6 +20,8 @@ import type { StorageFaultInjector, StorageFaultPoint } from '../src/server/stor
 import { nativeData, nativePackage, pcmWav, png, TEST_AUDIO_NORMALIZATION_OPTIONS, withNativeData } from './helpers.js';
 
 const roots: string[] = [];
+const stores: ProjectStore[] = [];
+const apps: FastifyInstance[] = [];
 const DEAD_PROCESS_ID: number = 2_147_483_647;
 
 type StoreFixture = { root: string; dataRoot: string; store: ProjectStore; project: Project };
@@ -28,8 +30,16 @@ type ActiveCreate = StoreFixture & { pending: Promise<Project>; gate: Barrier; s
 type CapturedError = { code: string; issues: readonly Issue[] };
 
 afterEach(async (): Promise<void> => {
+  for (const app of apps.splice(0)) await app.close();
+  for (const store of stores.splice(0)) await store.close();
   await Promise.all(roots.splice(0).map((root: string): Promise<void> => rm(root, { recursive: true, force: true })));
 });
+
+function trackedStore(dataRoot: string, injector?: StorageFaultInjector): ProjectStore {
+  const store: ProjectStore = new ProjectStore(dataRoot, injector);
+  stores.push(store);
+  return store;
+}
 
 async function temporaryRoot(prefix: string): Promise<string> {
   const root: string = await mkdtemp(join(tmpdir(), prefix));
@@ -69,7 +79,7 @@ async function captureError(action: Promise<unknown>): Promise<CapturedError> {
 async function createFixture(projectId: string): Promise<StoreFixture> {
   const root: string = await temporaryRoot('storyboard-storage-boundary-');
   const dataRoot: string = join(root, 'data');
-  const store: ProjectStore = new ProjectStore(dataRoot);
+  const store: ProjectStore = trackedStore(dataRoot);
   const project: Project = await store.create(await outline(projectId));
   return { root, dataRoot, store, project };
 }
@@ -140,7 +150,7 @@ async function createTransactionNames(dataRoot: string): Promise<string[]> {
 }
 
 async function faultStore(fixture: StoreFixture, injector: StorageFaultInjector): Promise<ProjectStore> {
-  const store: ProjectStore = new ProjectStore(fixture.dataRoot, injector);
+  const store: ProjectStore = trackedStore(fixture.dataRoot, injector);
   await store.initialize();
   return store;
 }
@@ -152,17 +162,19 @@ async function appForStore(root: string, dataRoot: string, store: ProjectStore):
   const config: AppConfig = { host: '127.0.0.1', port: 4317, dataRoot, webRoot,
     pdfFontPath: resolve('assets/fonts/NanumGothic-Regular.ttf'), audioNormalization: TEST_AUDIO_NORMALIZATION_OPTIONS,
     codex: { requestRoot: join(root, `requests-${randomUUID()}`), speechVoice: 'Yuna' } };
-  return createApp(config, store, new CodexRequestStore(config.codex.requestRoot));
+  const app: FastifyInstance = await createApp(config, store, new CodexRequestStore(config.codex.requestRoot));
+  apps.push(app);
+  return app;
 }
 
 async function activeCreate(point: StorageFaultPoint, initializeSecond: boolean): Promise<ActiveCreate> {
   const root: string = await temporaryRoot('storyboard-active-create-');
   const dataRoot: string = join(root, 'data');
   const project: Project = await outline(`active-create-${roots.length}-${randomUUID()}`);
-  const second: ProjectStore = new ProjectStore(dataRoot);
+  const second: ProjectStore = trackedStore(dataRoot);
   if (initializeSecond) await second.initialize();
   const gate: Barrier = barrier(point, process.pid);
-  const store: ProjectStore = new ProjectStore(dataRoot, gate.injector);
+  const store: ProjectStore = trackedStore(dataRoot, gate.injector);
   const pending: Promise<Project> = store.create(project);
   await gate.reached;
   return { root, dataRoot, store, project, pending, gate, second };
@@ -175,7 +187,7 @@ async function crashedCreate(point: StorageFaultPoint): Promise<StoreFixture> {
   const injector: StorageFaultInjector = { ownerPid: DEAD_PROCESS_ID, trigger(candidate: StorageFaultPoint): void {
     if (candidate === point) throw new SimulatedStorageCrash(candidate);
   } };
-  const store: ProjectStore = new ProjectStore(dataRoot, injector);
+  const store: ProjectStore = trackedStore(dataRoot, injector);
   await expect(store.create(project)).rejects.toMatchObject({ code: 'SIMULATED_STORAGE_CRASH' });
   return { root, dataRoot, store, project };
 }
@@ -238,7 +250,7 @@ describe('B. Initial create asset references', (): void => {
   async function rejected(project: Project): Promise<{ error: CapturedError; dataRoot: string; store: ProjectStore }> {
     const root: string = await temporaryRoot('storyboard-rejected-create-');
     const dataRoot: string = join(root, 'data');
-    const store: ProjectStore = new ProjectStore(dataRoot);
+    const store: ProjectStore = trackedStore(dataRoot);
     return { error: await captureError(store.create(project)), dataRoot, store };
   }
 
@@ -428,8 +440,8 @@ describe('E. Lock acquisition failure', (): void => {
     await captureError(store.update(fixture.project.projectId, 0, (project: Project): Project => project, [])); expect(await recoveryBlockCount(fixture.dataRoot)).toBe(1);
   });
   it('acquire_lock_failure_does_not_poison_unrelated_project', async (): Promise<void> => {
-    const root = await temporaryRoot('storyboard-lock-scope-'); const dataRoot = join(root, 'data'); const normal = new ProjectStore(dataRoot); const first = await normal.create(await outline('lock-blocked')); const second = await normal.create(await outline('lock-healthy')); const firstLock = join(projectDirectory(dataRoot, first.projectId), 'write.lock'); let changed = false;
-    const failing = new ProjectStore(dataRoot, { ownerPid: process.pid, async trigger(point: StorageFaultPoint): Promise<void> { if (point === 'after-lock-file-created' && !changed) { changed = true; const value = JSON.parse(await readFile(firstLock, 'utf8')) as Record<string, unknown>; await writeFile(firstLock, JSON.stringify({ ...value, transactionId: randomUUID() })); } } }); await failing.initialize();
+    const root = await temporaryRoot('storyboard-lock-scope-'); const dataRoot = join(root, 'data'); const normal = trackedStore(dataRoot); const first = await normal.create(await outline('lock-blocked')); const second = await normal.create(await outline('lock-healthy')); const firstLock = join(projectDirectory(dataRoot, first.projectId), 'write.lock'); let changed = false;
+    const failing = trackedStore(dataRoot, { ownerPid: process.pid, async trigger(point: StorageFaultPoint): Promise<void> { if (point === 'after-lock-file-created' && !changed) { changed = true; const value = JSON.parse(await readFile(firstLock, 'utf8')) as Record<string, unknown>; await writeFile(firstLock, JSON.stringify({ ...value, transactionId: randomUUID() })); } } }); await failing.initialize();
     await captureError(failing.update(first.projectId, 0, (project: Project): Project => project, [])); const updated = await failing.update(second.projectId, 0, (project: Project): Project => ({ ...project, title: '정상' }), []); expect(updated.revision).toBe(1);
   });
   it('successful_lock_path_remains_compatible', async (): Promise<void> => {
@@ -455,20 +467,20 @@ describe('F. Create owned lock', (): void => {
     const fixture = await createFixture('create-return'); expect(await exists(join(projectDirectory(fixture.dataRoot, fixture.project.projectId), 'write.lock'))).toBe(false); expect(await createTransactionNames(fixture.dataRoot)).toEqual([]);
   });
   it('create_cleanup_failure_preserves_lock_and_journal', async (): Promise<void> => {
-    const root = await temporaryRoot('storyboard-create-cleanup-'); const dataRoot = join(root, 'data'); const project = await outline('create-cleanup'); const store = new ProjectStore(dataRoot, { ownerPid: process.pid, trigger(point: StorageFaultPoint): void { if (point === 'before-create-journal-cleanup') throw new Error('cleanup failure'); } });
+    const root = await temporaryRoot('storyboard-create-cleanup-'); const dataRoot = join(root, 'data'); const project = await outline('create-cleanup'); const store = trackedStore(dataRoot, { ownerPid: process.pid, trigger(point: StorageFaultPoint): void { if (point === 'before-create-journal-cleanup') throw new Error('cleanup failure'); } });
     await expect(store.create(project)).rejects.toThrow('cleanup failure'); expect(await createTransactionNames(dataRoot)).toHaveLength(1); expect(await exists(join(projectDirectory(dataRoot, project.projectId), 'write.lock'))).toBe(true);
   });
   it('create_crash_after_publish_preserves_owned_lock', async (): Promise<void> => {
     const fixture = await crashedCreate('after-create-directory-publish'); expect(await exists(join(projectDirectory(fixture.dataRoot, fixture.project.projectId), 'write.lock'))).toBe(true); expect(await createTransactionNames(fixture.dataRoot)).toHaveLength(1);
   });
   it('startup_recovers_dead_create_lock', async (): Promise<void> => {
-    const fixture = await crashedCreate('after-create-directory-publish'); const recovered = new ProjectStore(fixture.dataRoot); await recovered.initialize(); expect((await recovered.read(fixture.project.projectId)).revision).toBe(0); expect(await exists(join(projectDirectory(fixture.dataRoot, fixture.project.projectId), 'write.lock'))).toBe(false);
+    const fixture = await crashedCreate('after-create-directory-publish'); const recovered = trackedStore(fixture.dataRoot); await recovered.initialize(); expect((await recovered.read(fixture.project.projectId)).revision).toBe(0); expect(await exists(join(projectDirectory(fixture.dataRoot, fixture.project.projectId), 'write.lock'))).toBe(false);
   });
   it('startup_does_not_remove_live_create_lock', async (): Promise<void> => {
-    const scenario = await activeCreate('after-create-directory-publish', false); const observer = new ProjectStore(scenario.dataRoot); await expect(observer.initialize()).resolves.toBeUndefined(); expect(observer.activeCreates()).toContainEqual(expect.objectContaining({ projectId: scenario.project.projectId })); expect(await exists(join(projectDirectory(scenario.dataRoot, scenario.project.projectId), 'write.lock'))).toBe(true); scenario.gate.release(); await scenario.pending;
+    const scenario = await activeCreate('after-create-directory-publish', false); const observer = trackedStore(scenario.dataRoot); await expect(observer.initialize()).resolves.toBeUndefined(); expect(observer.activeCreates()).toContainEqual(expect.objectContaining({ projectId: scenario.project.projectId })); expect(await exists(join(projectDirectory(scenario.dataRoot, scenario.project.projectId), 'write.lock'))).toBe(true); scenario.gate.release(); await scenario.pending;
   });
   it('mismatched_create_lock_requires_recovery', async (): Promise<void> => {
-    const fixture = await crashedCreate('after-create-directory-publish'); const path = join(projectDirectory(fixture.dataRoot, fixture.project.projectId), 'write.lock'); const lock = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>; await writeFile(path, JSON.stringify({ ...lock, transactionId: randomUUID() })); const recovered = new ProjectStore(fixture.dataRoot); await recovered.initialize(); expect(recovered.recoveryBlocks()[0]?.code).toBe('STORE_CREATE_RECOVERY_REQUIRED'); expect(await exists(path)).toBe(true);
+    const fixture = await crashedCreate('after-create-directory-publish'); const path = join(projectDirectory(fixture.dataRoot, fixture.project.projectId), 'write.lock'); const lock = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>; await writeFile(path, JSON.stringify({ ...lock, transactionId: randomUUID() })); const recovered = trackedStore(fixture.dataRoot); await recovered.initialize(); expect(recovered.recoveryBlocks()[0]?.code).toBe('STORE_CREATE_RECOVERY_REQUIRED'); expect(await exists(path)).toBe(true);
   });
 });
 
@@ -530,7 +542,7 @@ describe('H. Transient initialization', (): void => {
 
 describe('I. Existing storage regression', (): void => {
   it('concurrent_updates_still_commit_exactly_once', async (): Promise<void> => {
-    const fixture = await createFixture('concurrent-once'); const gate = barrier('after-update-current-read', process.pid); const firstStore = await faultStore(fixture, gate.injector); const second = new ProjectStore(fixture.dataRoot); await second.initialize(); const first = firstStore.update(fixture.project.projectId, 0, (project: Project): Project => ({ ...project, title: 'first' }), []); await gate.reached; await expect(second.update(fixture.project.projectId, 0, (project: Project): Project => ({ ...project, title: 'second' }), [])).rejects.toMatchObject({ code: 'PROJECT_BUSY' }); gate.release(); await first; expect(await readdir(join(projectDirectory(fixture.dataRoot, fixture.project.projectId), 'versions'))).toHaveLength(2);
+    const fixture = await createFixture('concurrent-once'); const gate = barrier('after-update-current-read', process.pid); const firstStore = await faultStore(fixture, gate.injector); const second = trackedStore(fixture.dataRoot); await second.initialize(); const first = firstStore.update(fixture.project.projectId, 0, (project: Project): Project => ({ ...project, title: 'first' }), []); await gate.reached; await expect(second.update(fixture.project.projectId, 0, (project: Project): Project => ({ ...project, title: 'second' }), [])).rejects.toMatchObject({ code: 'PROJECT_BUSY' }); gate.release(); await first; expect(await readdir(join(projectDirectory(fixture.dataRoot, fixture.project.projectId), 'versions'))).toHaveLength(2);
   });
   it('revision_conflict_still_returns_409', async (): Promise<void> => {
     const fixture = await createFixture('revision-http'); const app = await appForStore(fixture.root, fixture.dataRoot, fixture.store); const response = await app.inject({ method: 'PATCH', url: `/api/projects/${fixture.project.projectId}/profile`, payload: { expectedRevision: 9, profile: fixture.project.profile } }); expect(response.statusCode).toBe(409); expect(response.json()).toMatchObject({ error: { code: 'REVISION_CONFLICT' } }); await app.close();
@@ -542,10 +554,10 @@ describe('I. Existing storage regression', (): void => {
     const fixture = await createFixture('asset-removal'); const bytes = await png(1, 1); const asset = imageAsset('image', null, bytes); const current = await addAsset(fixture, asset, bytes); await expect(fixture.store.update(current.projectId, current.revision, (project: Project): Project => ({ ...project, assets: [] }), [])).rejects.toMatchObject({ code: 'ASSET_REMOVAL_FORBIDDEN' });
   });
   it('journal_v3_recovery_still_passes', async (): Promise<void> => {
-    const fixture = await createFixture('journal-v3'); const injector: StorageFaultInjector = { ownerPid: DEAD_PROCESS_ID, trigger(point: StorageFaultPoint): void { if (point === 'after-update-journal-prepared') throw new SimulatedStorageCrash(point); } }; const crashing = await faultStore(fixture, injector); await expect(crashing.update(fixture.project.projectId, 0, (project: Project): Project => ({ ...project, title: 'crash' }), [])).rejects.toMatchObject({ code: 'SIMULATED_STORAGE_CRASH' }); const recovered = new ProjectStore(fixture.dataRoot); await recovered.initialize(); expect((await recovered.read(fixture.project.projectId)).revision).toBe(0); expect(recovered.recoveryBlocks()).toEqual([]);
+    const fixture = await createFixture('journal-v3'); const injector: StorageFaultInjector = { ownerPid: DEAD_PROCESS_ID, trigger(point: StorageFaultPoint): void { if (point === 'after-update-journal-prepared') throw new SimulatedStorageCrash(point); } }; const crashing = await faultStore(fixture, injector); await expect(crashing.update(fixture.project.projectId, 0, (project: Project): Project => ({ ...project, title: 'crash' }), [])).rejects.toMatchObject({ code: 'SIMULATED_STORAGE_CRASH' }); const recovered = trackedStore(fixture.dataRoot); await recovered.initialize(); expect((await recovered.read(fixture.project.projectId)).revision).toBe(0); expect(recovered.recoveryBlocks()).toEqual([]);
   });
   it('legacy_journal_v2_remains_conservative', async (): Promise<void> => {
-    const fixture = await createFixture('journal-v2'); const injector: StorageFaultInjector = { ownerPid: DEAD_PROCESS_ID, trigger(point: StorageFaultPoint): void { if (point === 'after-update-journal-prepared') throw new SimulatedStorageCrash(point); } }; const crashing = await faultStore(fixture, injector); await expect(crashing.update(fixture.project.projectId, 0, (project: Project): Project => ({ ...project, title: 'legacy' }), [])).rejects.toMatchObject({ code: 'SIMULATED_STORAGE_CRASH' }); const names = await transactionNames(fixture.dataRoot, fixture.project.projectId); const journalPath = join(projectDirectory(fixture.dataRoot, fixture.project.projectId), '.transactions', names[0] as string, 'journal.json'); const v3 = JSON.parse(await readFile(journalPath, 'utf8')) as Record<string, unknown>; const previousProject = v3.previousProject as { sha256: string }; const nextProject = v3.nextProject as { sha256: string }; const versionFile = v3.versionFile as { finalRelativePath: string; sha256: string }; await writeFile(journalPath, JSON.stringify({ version: 2, operation: 'update', transactionId: v3.transactionId, projectId: v3.projectId, owner: v3.owner, expectedRevision: v3.expectedRevision, nextRevision: v3.nextRevision, previousProjectSha256: previousProject.sha256, nextProjectSha256: nextProject.sha256, versionFile: { relativePath: versionFile.finalRelativePath, sha256: versionFile.sha256 }, assets: [] })); const recovered = new ProjectStore(fixture.dataRoot); await recovered.initialize(); expect((await recovered.read(fixture.project.projectId)).revision).toBe(0);
+    const fixture = await createFixture('journal-v2'); const injector: StorageFaultInjector = { ownerPid: DEAD_PROCESS_ID, trigger(point: StorageFaultPoint): void { if (point === 'after-update-journal-prepared') throw new SimulatedStorageCrash(point); } }; const crashing = await faultStore(fixture, injector); await expect(crashing.update(fixture.project.projectId, 0, (project: Project): Project => ({ ...project, title: 'legacy' }), [])).rejects.toMatchObject({ code: 'SIMULATED_STORAGE_CRASH' }); const names = await transactionNames(fixture.dataRoot, fixture.project.projectId); const journalPath = join(projectDirectory(fixture.dataRoot, fixture.project.projectId), '.transactions', names[0] as string, 'journal.json'); const v3 = JSON.parse(await readFile(journalPath, 'utf8')) as Record<string, unknown>; const previousProject = v3.previousProject as { sha256: string }; const nextProject = v3.nextProject as { sha256: string }; const versionFile = v3.versionFile as { finalRelativePath: string; sha256: string }; await writeFile(journalPath, JSON.stringify({ version: 2, operation: 'update', transactionId: v3.transactionId, projectId: v3.projectId, owner: v3.owner, expectedRevision: v3.expectedRevision, nextRevision: v3.nextRevision, previousProjectSha256: previousProject.sha256, nextProjectSha256: nextProject.sha256, versionFile: { relativePath: versionFile.finalRelativePath, sha256: versionFile.sha256 }, assets: [] })); const recovered = trackedStore(fixture.dataRoot); await recovered.initialize(); expect((await recovered.read(fixture.project.projectId)).revision).toBe(0);
   });
   it('worker_queue_limits_remain_valid', (): void => {
     expect(AudioNormalizationWorkerOptionsSchema.parse(TEST_AUDIO_NORMALIZATION_OPTIONS)).toEqual(TEST_AUDIO_NORMALIZATION_OPTIONS); expect(STORAGE_TRANSACTION_JOURNAL_VERSION).toBe(3);

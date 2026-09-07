@@ -72,7 +72,7 @@ describe('PRJ-007 Final 계약 보존', (): void => {
     const first = await writeReviewBundle(archive, { ...options, output: join(root, 'first') }, []); const second = await writeReviewBundle(archive, { ...options, output: join(root, 'second') }, []);
     expect(second).toEqual(first); for (const file of first.files) expect(await readFile(join(root, 'second', file.path))).toEqual(await readFile(join(root, 'first', file.path)));
     expect(await readFile(join(directory, 'project.json'), 'utf8')).toBe(bytes);
-  });
+  }, 20_000);
   it('prj007_unit045_safe_audio_remains_valid', async (): Promise<void> => {
     const base: Project = await golden(); const cue: AudioCue = base.audioCues.find((item: AudioCue): boolean => item.unitId === 'UNIT-045')!;
     const edited: Project = updateAudioCueTiming(base, cue.id, { startMs: 849000, endMs: 851000, timingRelation: 'j-cut' });

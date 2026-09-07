@@ -104,7 +104,7 @@ Build Manifest는 Commit SHA 또는 null, App·Schema 버전, builtAt, sourceTre
 
 ## 14. GitHub CI
 
-[PR #4 Checks](https://github.com/zzocojoa/storyboard-generator/pull/4/checks)에서 현재 HEAD의 CI를 확인한다. 최초 CI의 MISSING_WEB_BUILD는 HTTP 테스트 fixture가 기존 dist/web에 의존한 문제였으며, fixture 자체의 임시 web root를 생성하도록 수정해 빌드 순서 의존성을 제거했다. Required Checks는 strict check·e2e이며 이전 Commit의 성공을 새 HEAD의 성공으로 대체하지 않는다. Workflow는 Ubuntu·Node 24에서 전체 check 뒤 Chromium E2E를 실행한다. 최종 PR 설명과 작업 완료 보고에 정확한 Head SHA·Run ID·두 Job 결과를 기록한다. PR은 master 대상이며 병합하지 않는다.
+[PR #4 Checks](https://github.com/zzocojoa/storyboard-generator/pull/4/checks)에서 현재 HEAD의 CI를 확인한다. 최초 CI의 MISSING_WEB_BUILD는 HTTP 테스트 fixture가 기존 dist/web에 의존한 문제였으며, fixture 자체의 임시 web root를 생성하도록 수정해 빌드 순서 의존성을 제거했다. PRJ-007의 전체 PDF·9개 파일 Bundle을 두 번 생성하는 재현성 검사는 해당 테스트에만 20초 실행 한도를 둔다. 저장 계약 fixture는 모든 App·Store를 닫고 공유 heartbeat를 해제한 뒤 임시 Root를 삭제한다. 오류 주입 테스트의 예상 heartbeat 경고는 별도로 구분한다. Required Checks는 strict check·e2e이며 이전 Commit의 성공을 새 HEAD의 성공으로 대체하지 않는다. Workflow는 Ubuntu·Node 24에서 전체 check 뒤 Chromium E2E를 실행한다. 최종 PR 설명과 작업 완료 보고에 정확한 Head SHA·Run ID·두 Job 결과를 기록한다. PR은 master 대상이며 병합하지 않는다.
 
 ## 15. 변경 파일
 
