@@ -1,145 +1,115 @@
-# 범용 콘티 도구 — 1.6.0 통합 구현 보고서
+# 범용 콘티 도구 — Final Readiness 검증 보고서
 
-## 1. 작업 기준
+## 1. 판정
 
-- Branch: `codex/storyboard-generator`
-- 시작 HEAD: `8d7bd743a29cec0591cf1b9d14bd044a1345e67e`
-- Working Tree: `/Users/beatlefeed/Documents/ChatGPT/콘티제작/.worktrees/storyboard-generator`
-- Project Schema: `1.6.0`
-- Storage Journal 3, Store Lock 3, Process Instance Registry 1 유지
-- 생성 실행 환경: Codex App 현재 모델, 내장 `image_gen`, macOS 가이드 음성
-- `OPENAI_API_KEY`, OpenAI SDK, 외부 제공자 fallback을 사용하지 않음
-- 사용자 서버와 미추적 `README 2.md`, `storyboard-generator.report 2.md`, `generation-records 2.ts`, `ui-policy 2.ts`를 변경하지 않음
+로컬 구현·검증 GO. 생성 완료와 최종 출력 가능 상태를 분리한다. 제품의 Final Ready는 현재 제작 데이터의 기계적 출력 계약이며 작품의 연출 완성도 승인을 대신하지 않는다. 최종 인수에는 기능 PR의 동일 HEAD에서 `check`와 `e2e` 성공이 필요하다. master에는 병합하지 않는다.
 
-## 2. 최초 재현 결함
+## 2. 작업 기준
 
-| 계약군 | 최초 상태 | 구현 결과 |
-|---|---|---|
-| Proposal Frame | 모델의 시작 Frame 하나만 저장해 후반 Source Anchor의 시각 전환을 표현하지 못함 | 선택적 Frame Plan과 Anchor 시작 기반 Key Frame을 생성함 |
-| Visual Mode | Source가 없는 Shot을 암묵적으로 처리해 검은 화면과 직전 화면 유지의 의도를 구분하지 못함 | `sourced`, `black`, `hold-previous`를 영속 계약과 출력 판정에 추가함 |
-| Visual Coverage | Direct Visual Source가 Shot 일부만 덮어도 전체 시각 근거처럼 처리할 수 있음 | confirmed 반열린 범위의 합집합에서 시작·중간·끝 Gap을 검사함 |
-| Heartbeat | Registry 갱신이 transaction 경계에 의존해 긴 작업 중 live owner를 stale로 오인할 수 있음 | root와 process instance별 공유 주기 timer를 추가함 |
-| Historical Audit | current에 남은 Record 중심이라 과거에 제거·변경·재등장한 ID를 빠뜨릴 수 있음 | 모든 version의 Record ID 합집합과 일관된 snapshot을 감사함 |
-| Recovery Marker | 손상된 marker 하나가 초기화 전체를 실패시킬 수 있음 | 항목별 격리와 known·unknown recovery block을 구현함 |
-| Stored Asset Path | 저장 후 symlink·경로 변조가 일반 검증 오류로 분류될 수 있음 | `STORED_ASSET_PATH_UNSAFE` asset scope 423으로 분류함 |
-| Open-ended Text | Placement 종료가 null이면 현재 시각의 활성 여부를 일관되게 판정하지 못함 | 명시 Cue 종료, canonical 종료, 검토 필요 순서의 유효 범위를 공유함 |
-| Timecode | 시작 timecode를 Duration에도 더하거나 화면별 formatter가 달랐음 | Absolute와 Duration formatter를 분리하고 BigInt 정수 산술을 공유함 |
-| Program Monitor | `requestAnimationFrame`의 소수 millisecond가 정수 시간 계약을 위반함 | 재생 위치를 정수 millisecond로 정규화함 |
+- 시작 master: `98fea61c75c454078118234078597a801a2a074d`; 기준 CI Run `34094714674` 성공.
+- 새 Branch: `codex/storyboard-final-readiness`; 이전 작업 Branch는 재사용하지 않는다.
+- Project Schema 1.7.0, Storage Journal 3, Store Lock 3, Process Registry 1, App 0.1.0.
+- 최종 Commit과 CI 결과는 기능 PR의 Head·Checks를 기준으로 확인한다. 수정 중인 로컬 Build의 commitSha는 null이며 sourceTreeSha256으로 구분한다.
+- 기존 서버 4317/PID 89219, 4318/PID 2286, 4319/PID 17388은 종료·재시작하거나 검증 서버로 사용하지 않았다.
+- 사용자 미추적 파일과 다른 worktree는 변경하지 않는다. 실제 `.local` 저장본은 읽기 전용으로 검사하고 결과만 현재 worktree의 별도 review 디렉터리에 작성한다.
+- Codex App·내장 image_gen·로컬 macOS 음성 계약을 유지한다. OpenAI API Key·SDK·외부 AI fallback은 추가하지 않는다.
 
-## 3. Proposal Frame·Visual Mode
+## 3. 최초 재현 결함
 
-- Proposal은 기존 `frameDescription`과 함께 선택적 `visualMode`, `frames[]`를 받는다.
-- `start=0‰`, `key=1..999‰`, `end=1000‰`와 위치 중복 금지를 검사한다.
-- 직접 시각 Anchor의 서로 다른 시작점마다 Key Frame을 파생하고 같은 millisecond의 명시 Frame과 결정적으로 합친다.
-- `sourced`는 confirmed direct anchor가 Shot 전체 `[startMs, endMs)`를 덮어야 한다. unresolved와 mapping-required는 Coverage 근거가 아니다.
-- 기존·수동 Project의 Gap은 데이터를 바꾸지 않고 `SHOT_VISUAL_COVERAGE_GAP` 검토 이슈로 남기며 Proposal Apply의 Gap은 `PROPOSAL_VISUAL_COVERAGE_GAP`으로 거부한다.
-- `black`은 별도 Asset 없이 결정적 검은 PNG를 출력하고 이미지 생성 요청을 거부한다.
-- `hold-previous`는 시간상 인접한 직전 Shot의 안전 Frame을 재사용하며 없으면 식별 가능한 이슈를 낸다.
+| 결함 | 기존 결과 | 실패 재현 | 수정 결과 |
+|---|---|---|---|
+| 수동 Source 공백 | 새 공백 저장 가능 | manual_source_edit_cannot_introduce_visual_coverage_gap | 신규·확대 Gap 거부 |
+| Gap 컷 승인 | 승인 가능 | sourced_gap_blocks_shot_approval | 승인 차단 |
+| Frame Point | 1ms Coverage로 해석 | frame_anchor_reveal_does_not_create_one_millisecond_visual | 공개 시점과 표시 구간 분리 |
+| Hold의 늦은 공백 | 이전 초반 Frame으로 통과 | hold_previous_source_gap_predecessor_is_not_output_ready | predecessor endMs - 1 검사 |
+| 실제 Audio Seek | Range 없는 WAV 응답에서 seek가 0으로 돌아감 | e2e_real_audio_seek_uses_html_media_element | 전체 무결성 검사 뒤 206 byte range 제공 |
 
-## 4. Process Heartbeat
+초기 전체 863개 실행은 862개 성공과 Codex I/O timeout 1개였으며 해당 파일의 독립 재실행은 5/5 성공했다. I/O 경쟁을 제한하도록 Vitest worker 수를 4개로 설정했다. 최초 네 안전 결함의 실패를 확인한 뒤 구현했고 현재 전체 940개가 성공한다.
 
-- 같은 canonical data root와 process instance의 Store들은 registry와 timer 하나를 공유한다.
-- initialize 뒤 heartbeat를 시작하며 긴 transaction 중에도 주기적으로 갱신한다.
-- timer는 `unref()` 상태이고 마지막 Store close에서 멈추며 registry 파일을 제거한다.
-- 갱신 실패는 숨기지 않고 `/api/status.processHeartbeat`의 code와 message로 보고한다.
-- `/api/status`는 active create/update owner를 다시 확인해 끝난 작업을 응답에서 제거한다.
+## 4. Draft·Final Text
 
-## 5. Historical Generation Audit
+Draft proposed는 DRAFT·TIMING UNCONFIRMED로 표시하며 Final Safe로 세지 않는다. Final proposed는 Cue·Placement·시작/종료·상태·해결 방법을 포함한 TEXT_TIMING_CONFIRMATION_REQUIRED다. Confirm은 개별 Cue 시간 검토이며 Mapping·권한·Gate·다른 출력의 안전성을 보증하지 않는다.
 
-- `versions/*.json` 전체의 Generation Record ID 합집합을 감사해 current 전에 제거된 Record도 보고한다.
-- 최초 도입 revision의 Shot·Asset과 current target을 비교해 `current`, `historical`, `unresolved`를 구분한다.
-- 중간 metadata 변경, 제거 뒤 재등장, 혼합 current/historical Shot과 historical Asset target을 보고한다.
-- 감사 시작의 current revision·SHA-256과 version 목록을 끝에서 다시 확인한다. 한 번 재시도해도 바뀌면 `AUDIT_SNAPSHOT_CHANGED` 409다.
-- 감사 과정은 current와 version 파일을 수정하지 않는다.
+Final Readiness API는 generated, reviewed, text-confirmed, visual-timeline-safe, final-ready 단계와 수치·차단 Issue를 파생한다. Final PDF·CSV·Bundle은 FINAL_OUTPUT_NOT_READY 409일 때 성공 파일을 만들지 않는다. Query 생략은 Draft이며 UI는 Preview·PDF·CSV 각각 Draft와 Final을 구분한다.
 
-## 6. Recovery·Asset Integrity
+## 5. 실제 Playhead 출력
 
-- marker 파일명·JSON·Schema·identity를 항목별로 검사하고 잘못된 항목은 `.recovery-blocks/.invalid`에 격리한다.
-- 격리 항목은 증명 가능한 Project 또는 `unknown:<file>`의 hash key block으로 보고하며 다른 Project의 list·read·update·create를 유지한다.
-- 유효한 Project marker는 자기 Project mutation만 423으로 차단한다. 실제 lock이나 transaction 증거가 있는 재시작 복구가 성공한 경우에만 지운다.
-- 저장 Asset의 path traversal과 symlink는 `STORED_ASSET_PATH_UNSAFE`, scope `asset`, HTTP 423이며 Project mutation은 차단하지 않는다.
-- `/api/projects/:id/asset-integrity`는 현재 Frame·Audio·Reference·Prop·Continuity 출력 참조만 검사한다. 사용하지 않는 historical Asset 손상은 현재 UI banner에 남기지 않는다.
-- 웹은 Project load, refresh, revision 변경과 오류 뒤 integrity 결과를 다시 조정해 수리된 알림을 제거한다.
+공통 Resolver는 반열린 활성 Source, Playhead 이전의 최신 Frame, 대상 Asset·검토·정보 Gate를 검사한다. 과거 생성 시점의 안전성이 현재 Gap을 덮지 못한다. 전환 미리보기는 실제 선행 노출 시점의 Gate를 추가로 검사한다. Black은 자산 없는 결정적 출력이다. Hold는 인접 이전 Shot의 종료 직전 안전 원본까지 방문 Set으로 추적하며 Gap·Pending·Rejected·파일 오류를 우회하지 못한다.
 
-## 7. Text Placement·Timecode
+Safe Visual HTTP는 정수·범위를 검증하고 no-store bytes 또는 구조화된 차단 오류를 반환한다. Asset 오류는 Asset scope 423을 유지한다. 기존 Safe Frame Endpoint는 유지한다. Monitor·PDF·CSV·Summary·Final Readiness에 같은 핵심 판정을 적용한다.
 
-- Open-ended Placement는 같은 Placement의 명시적 Text Cue end, 유일한 confirmed Mapping의 canonical end 순서로 종료를 정한다.
-- 종료 근거가 없거나 모호하면 `TEXT_PLACEMENT_END_REVIEW_REQUIRED`를 내고 Frame Context와 안전 출력을 차단한다.
-- 만료된 Placement와 Text Mapping은 이후 Frame Context에 포함하지 않는다.
-- `formatAbsoluteTimecode`는 start timecode를 한 번 적용하고 `formatDurationTimecode`는 0에서 시작한다.
-- 24·25·30fps와 검증된 29.97·59.94 drop-frame 분 경계, 10분 경계와 24시간 wrap을 정수 프레임으로 계산한다.
-- Web·CSV·PDF는 같은 formatter를 사용한다.
+## 6. 수동 편집·승인
 
-## 8. Browser E2E
+Source 수정은 변경 전후 Gap을 비교해 새 Gap과 확대를 차단하며 기존 Gap 축소·제거는 허용한다. 이동은 양쪽 Shot을 검사하고 불확실한 Anchor를 Coverage로 세지 않는다. sourced 전환은 전체 Coverage, Black·Hold는 direct Source 부재를 요구한다. 승인에도 Source·Mapping·Gate·Coverage·Frame·Hold 구조를 포함한다. 생성 수치와 현재 출력 안전 수치는 별도다.
 
-- Playwright `1.55.0`, Chromium `140.0.7339.16`을 고정했다.
-- Late Anchor Key Frame DOM, Project별 recovery 차단, Asset notice 재조정, 24fps Absolute·Duration 구분을 검사한다.
-- 실제 안전 WAV HTTP 응답과 Audio seek·cue end·monitor cleanup을 검사한다.
-- 409·503이 영속 recovery banner를 만들지 않는지 확인한다.
-- black의 결정적 화면·생성 버튼 비활성화, hold-previous의 직전 안전 Frame과 source 부재 placeholder를 확인한다.
+## 7. Anchor·Proposal·Migration
 
-## 9. PRJ-007
+Frame Point는 공개 증거이며 시각 표시 범위가 아니다. frame-range는 명시적 endOffsetMs를 가진다. 모호한 Legacy 범위는 SOURCE_VISUAL_INTERVAL_REQUIRED로 남기고 추측하지 않는다. 명시 Frame끼리 같은 ms에 충돌하면 거부하고, 같은 위치의 파생 Frame만 명시 Frame으로 대체한다. Unit 순서는 최초 공개로 판정하며 continuation이 순서를 되돌리지 않는다.
 
-- Scene 12, Segment 32, screenplay Source Unit 79, Panel Turn 16, Text Placement 25, 전체 Timeline 1,500,000ms를 유지한다.
-- 원문 변경과 영상 Gap·Overlap은 0이다.
-- `UNIT-045`는 849,000–851,000ms J-cut, PCM16 mono 48,000Hz, 2,000ms와 Safe Audio RIFF를 유지한다.
-- Import 뒤 Late Anchor Proposal, Key Frame과 시점별 Image Context, Generation Record, Shot Merge, 같은 Segment 재제안, Source Update와 Historical Audit을 한 저장 이력에서 검사한다.
-- Black·Hold Mode가 Information Gate를 앞당기지 않으며 JSON round-trip, CSV, PDF가 성공한다.
+1.6→1.7 메모리 Migration은 기존 Generation Record의 generatorBuild를 null로 추가한다. 기존 원문·ID·Shot·Frame·Text·Audio·Anchor·Asset을 보존하며 Version 파일을 재작성하지 않는다. 이전 전체 Migration 체인과 멱등성을 검사한다.
 
-## 10. 테스트 결과
+## 8. Generation Audit·Status
 
-| 명령 | 결과 | Test File | Test Count | 비고 |
+Revision별 Canonical Snapshot은 하나다. Current와 같은 Version이 안정적으로 불일치하면 AUDIT_CURRENT_VERSION_MISMATCH 423으로 해당 Project mutation만 차단한다. 제거·metadata 변경·재등장을 보고하고 absent→present만 재등장 revision으로 기록한다. Target History는 도입 revision부터 계산하며 도입 시 없는 Target은 나중에 나타나도 unresolved다.
+
+Active Update 검증 실패는 activeUpdateErrors·기존 active 상태·Project 복구 상태에서 사라지지 않는다. 다른 Project는 계속 수정할 수 있고 실제 복구 뒤 반복 Status 조회에서도 오류·작업이 재등장하지 않는다.
+
+## 9. 실제 Chromium Audio
+
+Playwright 1.55.0, Chromium 140.0.7339.16의 실제 HTMLAudioElement를 사용한다. Audio와 HTMLMediaElement API를 대체하지 않는 6개 시나리오에서 PCM16 mono 48,000Hz 3초 WAV 디코딩, loadedmetadata duration=3, 약 1.5초 Seek, Cue 종료, Monitor 종료와 Project 전환 정리를 확인했다. 3회 연속 18/18 성공했다. 종료 뒤 paused=true, src 비움, DOM 분리, media error 0을 확인한다. 단위 테스트의 포트 대역은 별도 검증이다.
+
+## 10. Build·Review Bundle
+
+Build Manifest는 Commit SHA 또는 null, App·Schema 버전, builtAt, sourceTreeSha256과 저장 계약 버전을 기록한다. 런타임은 시작 시 읽은 Build를 고정하고 신규 요청·생성 Record에 실제 Build를 연결한다. 기존 생성 Commit은 증명할 수 없어 null로 보존한다.
+
+읽기 전용 번들의 9개 기본 파일은 project.json, shots.csv, storyboard.pdf, final-readiness.json, generation-audit.json, asset-integrity.json, asset-manifest.json, build-manifest.json, bundle-manifest.json이다. 기본값에서 별도 원본 미디어 파일은 제외하고 명시적인 include-media에서만 추가한다. PDF는 콘티 이미지를 포함한다. Manifest의 파일 SHA-256·크기와 원본 Snapshot 해시, Asset 사용처·생성 Record·Build·감사 파일 연결을 검사한다. 고정 시각·같은 Build와 Snapshot에서 PRJ-007 번들 체크섬 재현을 확인한다.
+
+검증 결과는 현재 worktree의 `.local/reviews/final-readiness/verified-current/`에 있으며 최종 Commit Build의 별도 재출력은 `verified-head/`를 사용한다. 원본 저장 영역 안의 출력과 기존 Bundle 덮어쓰기를 거부한다. PDF의 Final 10개 페이지와 Draft 차단 페이지를 렌더링해 검토했다. 긴 Draft Issue 표시는 카드 영역 안에서 생략 기호로 제한하고 전체 Issue는 동봉 JSON·CSV에서 제공한다.
+
+## 11. 기존 생성 콘티 읽기 전용 검사
+
+| Data Root 하위 이름 | Project | Revision | Text proposed / confirmed | Final | 시각 Gap | 실제 Asset 검사 | 감사 Record | 대기 요청 |
+|---|---|---:|---:|---|---:|---|---:|---:|
+| data | plant-care-demo | 9 | 0 / 2 | 차단, 45 Issues | 4 | 이미지 1 정상, 오디오 1 metadata 불일치 | 3, historical mixed 경고 1 | 0 |
+| data | PRJ-007 | 11 | 29 / 0 | 차단, 686 Issues | 37 | 이미지 2 정상, 오디오 1 metadata 불일치 | 4, 감사 Issue 0 | 0 |
+| data-1.6 | PRJ-007 | 283 | 0 / 26 | 통과 | 0 | 107개 정상 | 94, 감사 Issue 0 | 0 |
+| data-4318 | PRJ-007 | 0 | 26 / 0 | 차단, 444 Issues | 26 | 자산 없음 | 0 | 0 |
+
+원본 root는 기존 `.worktrees/storyboard-generator/.local` 아래다. Current·모든 Version·읽을 수 있는 자산·요청 파일의 전후 SHA-256을 비교했으며 변경 0이다. 자동 Confirm·Frame Accept·Asset 교체는 수행하지 않았다. revision 283은 컷 40/40 승인, 필요한 sourced Frame 33/33 accepted, Audio 63/63 playable, Hold 6개 안전이다. 나머지 Frame 7개는 Black·Hold의 비생성 Frame이며 pending 상태를 그대로 보존한다.
+
+회귀 fixture의 PRJ-007은 12 Scene, 32 Segment, screenplay Unit 79, Panel Turn 16, Placement 25와 1,500,000ms를 보존한다. UNIT-045의 회귀 계약은 849,000–851,000ms J-cut, PCM16 mono 48,000Hz 2초다. 실제 로컬 revision 283에는 기존 850,000–855,000ms, 5초 within-segment SFX가 저장돼 있다. 이 차이는 기존 제작 데이터이며 자동으로 회귀 fixture 값에 맞추지 않았다. Final 판정은 해당 저장본의 현재 시간표·명시적 Cue 관계를 기준으로 한다.
+
+## 12. 테스트 결과
+
+| 명령 | 결과 | 파일 | 개수 | 비고 |
 |---|---|---:|---:|---|
-| `npm run schemas:write` | 성공 | - | - | 1.6.0 JSON Schema 갱신 |
-| `npm run typecheck` | 성공 | - | - | Domain·Server·Script·Test |
-| `npm run typecheck:web` | 성공 | - | - | React Web |
-| `npm test` | 성공 | 32 | 860 | 단위·통합 |
-| `npm run schemas:check` | 성공 | - | - | Zod와 생성 Schema 일치 |
-| `npm run build:web` | 성공 | - | - | Vite production build |
-| `npm run test:e2e` | 성공 | 1 | 7 | Chromium 실제 DOM·Audio |
-| `npm run check` | 성공 | 32 | 860 | 이름 검사와 build 포함 |
-| `git diff --check` | 성공 | - | - | 공백 오류 없음 |
+| npm run schemas:write | 성공 | - | - | 1.7 JSON Schema |
+| npm run typecheck | 성공 | - | - | Domain·Server·Script·Test |
+| npm run typecheck:web | 성공 | - | - | Web |
+| npm test | 성공 | 39 | 940 | 단위·통합 |
+| npm run schemas:check | 성공 | - | - | Schema 일치 |
+| npm run build:web | 성공 | - | - | Vite |
+| npm run test:e2e | 성공 | 2 | 14 | 전체 Chromium |
+| 실제 Audio 반복 | 성공 | 1 | 18 | 6개 × 3회 |
+| 주기 Heartbeat 반복 | 성공 | 1 | 15 | 5개 × 3회 |
+| npm run smoke | 성공 | - | - | 실제 HTTP·cleanup |
+| npm run check | 성공 | 39 | 940 | 타입·이름·Schema·빌드 포함 |
+| git diff --check | 성공 | - | - | 공백 오류 0 |
 
-필수 테스트 이름: 누락 0, 중복 0, skip 0, only 0, 전체 75개.
+필수 이름 153개: missing 0, duplicates 0, skip 0, only 0. 의도하지 않은 Heartbeat failure log 0. fault injection 테스트의 의도된 오류와 구분한다. 테스트 프로세스가 종료되고 임시 Store·App·Worker·Timer·Listener·Root를 정리했다. E2E의 Text 상태 Header와 Draft 설명 문구를 각각 검사하도록 잘못된 locator 기대값을 수정한 뒤 전체 14개가 통과했다.
 
-## 11. Runtime Smoke
+## 13. Runtime Smoke
 
-- 사용자 서버와 다른 동적 포트 `57985`, `57989`, `57994`, `57998`을 사용했다.
-- `/`, status, import, project read, Late Anchor Apply, Key Frame과 생성 context, Black·Hold, Generation Audit, Asset Integrity, Safe Frame·Audio, Source Update, JSON·CSV·PDF가 성공했다.
-- 실제 HTTP로 revision 409, Asset 423, Project 423, service 503을 확인했다.
-- malformed marker quarantine, periodic heartbeat health, active update 표시와 완료 뒤 refresh를 확인했다.
-- 임시 App, Worker, timer, listener, process registry와 data/request root를 모두 정리했다.
-- 샌드박스 안의 최초 실행은 macOS local listen 권한 `EPERM`으로 막혔고 동일 명령을 격리 환경 그대로 실행해 통과했다.
-- 기존 사용자 서버 `127.0.0.1:4317`은 종료하거나 재시작하지 않았다.
-- 최종 코드 확인용 서버는 별도 data/request root와 `127.0.0.1:4319`에서 실행했고 `/api/status`의 heartbeat health와 HTTP 200을 확인했다.
+최종 통합 실행의 동적 포트는 50853, 50857, 50862, 50866, 50868이다. 기본 화면·Status·Import·Project·Final Readiness·Visual·Audit·Integrity·Confirm·Draft/Final PDF·CSV·Safe Audio를 실제 HTTP로 확인했다. 정상 200/201/202, revision·Final 불가·Visual Gap 409, Project·Asset·감사 불일치 423, 일시적 Store 503을 검사한다. Black·Hold·안전 원본 없는 Hold·Build·Bundle과 cleanup=true를 확인했다. 테스트용 프로세스만 종료했고 기존 서버 PID는 유지한다.
 
-## 12. CI
+## 14. GitHub CI
 
-- Workflow `CI`는 Ubuntu, Node.js 24에서 `check`와 `e2e`를 별도 Job으로 실행한다.
-- `check`는 `npm ci`와 `npm run check`, `e2e`는 check 성공 뒤 Chromium을 설치하고 `npm run check:e2e`를 실행한다.
-- 구현 검증 Head `8efdba9628255080e032b6d59ef7557b389f1e3e`의 Push Run [34069508784](https://github.com/zzocojoa/storyboard-generator/actions/runs/34069508784)와 PR Run [34069510604](https://github.com/zzocojoa/storyboard-generator/actions/runs/34069510604)을 확인했다.
-- 두 Run 모두 `check`와 `e2e`가 성공해 최종 conclusion은 `success`다.
+[기능 Branch의 CI](https://github.com/zzocojoa/storyboard-generator/actions?query=branch%3Acodex%2Fstoryboard-final-readiness)를 확인한다. Required Checks는 strict check·e2e이며 이전 Commit의 성공을 새 HEAD의 성공으로 대체하지 않는다. Workflow는 Ubuntu·Node 24에서 전체 check 뒤 Chromium E2E를 실행한다. 최종 PR 설명과 작업 완료 보고에 정확한 Head SHA·Run ID·두 Job 결과를 기록한다. PR은 master 대상이며 병합하지 않는다.
 
-## 13. GitHub·PR·Branch Protection
+## 15. 변경 파일
 
-- Remote: `origin`, repository `zzocojoa/storyboard-generator`
-- PR: [#1](https://github.com/zzocojoa/storyboard-generator/pull/1), base `master`, head `codex/storyboard-generator`, Open 상태 유지
-- 구현 commit `5a5c859`, 문서 commit `048e132`·`eaf69af`, heartbeat 회귀 안정화 commit `8efdba9`를 원격 Branch와 PR에 push했다.
-- 사용자 재승인 뒤 `master` 보호를 적용했으며 GitHub API 재조회에서 `protected=true`를 확인했다.
-- Pull Request와 승인 1개가 필수이고, required status checks는 strict `check`·`e2e`, admin 적용은 enabled다.
-- force push와 branch delete는 disabled다. `master` SHA `f66e46a98f657785cb68601c6c0c3eb219cf9884`는 설정 전후 동일하다.
-- `master`는 병합하지 않는다.
+신규: Output Policy·Final Readiness·Source Anchor·Visual Resolver, Build Schema·Manifest, Review Bundle·CLI, Safe Audio Range, 8개 회귀·fixture 파일과 실제 Audio E2E. 수정: Domain·Proposal·Codex·Store·HTTP·Web·PDF·CSV·Migration·JSON Schema, 기존 회귀 fixture, package scripts·Vitest worker 제한·필수 이름 Registry·Runtime Smoke. 문서: README·AGENTS·workbench skill·Plan·Design·Analysis·Report. 삭제 파일은 없다. 사용자 미추적 파일과 실제 생성 미디어는 Stage·Commit하지 않는다.
 
-## 14. 변경 파일
+## 16. 사람이 확인할 범위
 
-- 신규: `src/domain/text-placement.ts`, `playwright.config.ts`, `scripts/check-required-tests.ts`, `scripts/runtime-smoke.ts`, `tests/e2e/v15-workbench.spec.ts`, 15차 회귀 테스트 3개.
-- 수정: Domain schema·migration·proposal·validation·output·audit·time, Store·HTTP, JSON Schema, Web API·정책·화면, CSV·PDF, 기존 회귀 fixture, package·CI 설정.
-- 문서: `README.md`, `AGENTS.md`, storyboard-workbench skill, Design, 이 구현 보고서.
-- 삭제 파일은 없다.
-- 사용자 미추적 duplicate 파일은 읽거나 stage하거나 commit하지 않는다.
-
-## 15. 남은 위험
-
-- Bitmap의 간접적인 반전 암시는 구조 ID와 시간 검사만으로 판정할 수 없다.
-- 전체 Segment의 연출 품질, 자막 가독성, 음성 호흡과 실제 제작 가능성은 사람이 최종 검토해야 한다.
-- Process lock은 macOS·Ubuntu 로컬 파일 시스템의 협력 writer를 대상으로 하며 SMB·NFS 분산 writer를 보장하지 않는다.
+이미지의 간접 반전 암시, 전체 영상의 연출·자막 가독성·실제 음성 호흡·제작 가능성은 사람이 검토한다. 기존 UNIT-045 제작 결정과 회귀 fixture의 차이도 보존한 상태에서 판단한다. 로컬 파일 시스템의 협력 writer 계약이며 SMB·NFS 분산 writer를 보장하지 않는다. 전체 영상 자동 렌더링·업로드는 현재 범위가 아니다.

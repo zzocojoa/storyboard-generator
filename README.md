@@ -31,7 +31,13 @@ npm start
 2. Scene과 Segment를 선택해 Shot의 시간, 행동, 카메라, Source Link, Frame, Audio Cue와 Text Cue를 검토한다. 종료가 없는 원본 Text Placement는 시작 시각을 유지한 채 종료 시각을 편집하고 **시각 확정**으로 검토를 마친다. `sourced`는 확인된 직접 시각 Source가 컷 전체를 덮어야 하며, `black`은 검은 화면, `hold-previous`는 직전 안전 프레임을 유지한다.
 3. **CODEX CUT**, **IMAGE**, **CODEX VOICE**로 생성 요청을 쌓는다. 같은 저장소를 연 Codex App 작업에서 `$storyboard-workbench 대기 중인 콘티 생성 요청을 처리해 주세요.`를 실행한다.
 4. 결과가 반영되면 **REFRESH**를 누르고 **시간순 재생**으로 이미지, 음성, 자막과 공개 시점을 확인한다.
-5. 상단의 JSON·CSV·PDF 내보내기로 재편집 프로젝트, 제작 목록과 그림 콘티를 받는다.
+5. 생성 완료와 **FINAL READY**를 구분한다. **DRAFT PREVIEW/PDF/CSV**에서 초안을 검토하고, 모든 차단 항목이 해소되면 **FINAL PREVIEW/PDF/CSV**로 출력한다. JSON은 재편집 상태를 보존한다.
+
+`proposed` Text Cue는 Draft에서 `DRAFT · TIMING UNCONFIRMED`로 표시한다. Final에서는 `TEXT_TIMING_CONFIRMATION_REQUIRED`로 차단한다. **시각 확정**은 해당 Cue의 시간 검토 완료이며 원문 권한·Mapping·정보 Gate·자산·다른 컷의 안전성까지 승인하는 동작은 아니다. Draft도 미해결 Mapping, 종료 시각 부재와 Gate 위반의 본문은 출력하지 않는다.
+
+`GET /api/projects/:id/final-readiness`는 현재 Project와 실제 자산 검사에서 `generated → reviewed → text-confirmed → visual-timeline-safe → final-ready` 단계와 차단 Issue를 계산한다. 모든 컷 승인, 필요한 Frame 승인, Text 확정, 전체 시각 구간, 실제 Audio와 현재 출력 자산이 통과해야 Final Ready다. CSV·PDF의 `?maturity=final`은 조건 미달 시 파일 대신 모든 Issue를 포함한 `FINAL_OUTPUT_NOT_READY` 409를 반환한다. Query 생략은 하위 호환 Draft다.
+
+Program Monitor와 `GET /api/projects/:id/output/visual?atMs=1000&channel=program-monitor`는 실제 정수 Playhead의 활성 Source를 검사한다. 과거 Frame이 안전했어도 현재 Source 공백에서는 표시하지 않는다. `black`은 자산 없는 검은 화면이며 `hold-previous`는 인접한 이전 컷의 `endMs - 1` 안전 출력에서 실제 원본까지 추적한다. 전환 미리보기도 실제 노출 시각의 Gate를 검사한다. 수동 Source 수정·이동은 양쪽 컷의 신규·확대 공백을 거부하고 기존 공백의 축소는 허용한다. 공백 컷과 첫 컷·비인접 Hold는 승인할 수 없다.
 
 서버 상태와 저장 복구 상태는 `GET /api/status`, 현재 출력 자산 검사는 `GET /api/projects/:projectId/asset-integrity`, 생성 이력은 `GET /api/projects/:projectId/generation-audit`에서 확인한다.
 
@@ -97,7 +103,20 @@ npm run cli -- export-csv --project .local/plant-care.project.json --output .loc
 
 `outline`은 구간마다 편집 시작용 컷과 프레임을 만든다. 카메라·화면 위치·출연 인물을 임의로 확정하지 않는다. 음성 슬롯은 글자 수에 비례한 제안 시간이며 생성한 가이드 음성의 WAV 길이와 선언한 구간 관계를 검증한 뒤 `measured` 상태가 된다. `j-cut`은 바로 앞 구간부터 원본 구간 안까지, `l-cut`은 원본 구간부터 바로 다음 구간까지만 걸칠 수 있다. 두 관계는 정보 Gate를 앞당기는 증거로 사용하지 않는다. 원본에 화면 글자 종료점이 없으면 `--text-hold-ms` 값이 제안값으로 기록된다. `proposed` 글자 큐는 안전 미리보기와 초안 내보내기에 포함되며, 최종 편집 완료 전에는 Inspector에서 종료 시각을 검토하고 `confirmed`로 확정한다. 기존 출력 경로를 덮어쓰지 않는다.
 
-현재 프로젝트 형식은 `1.6.0`이다. 이전 저장본은 `1.0.0 → 1.1.0 → 1.2.0 → 1.3.0 → 1.4.0 → 1.5.0 → 1.6.0` 순서로 메모리에서 변환한다. 1.5 Shot은 데이터 추측 없이 `visualMode: sourced`로 이관하며 원문·ID·시간·Source Link·Frame·Text·Audio·Asset·Generation Record를 보존한다. 전체 시각 Source 범위를 증명하지 못하면 데이터를 바꾸지 않고 `SHOT_VISUAL_COVERAGE_GAP` 검토 이슈를 표시한다. 이전 단계의 보수적 Text Mapping, Source Anchor, Audio 관계와 Text Cue 권한 변환도 유지한다.
+현재 프로젝트 형식은 `1.7.0`이다. 이전 저장본은 `1.0.0 → 1.1.0 → 1.2.0 → 1.3.0 → 1.4.0 → 1.5.0 → 1.6.0 → 1.7.0` 순서로 메모리에서 변환한다. 1.5 Shot은 `visualMode: sourced`, 이전 Generation Record는 `generatorBuild: null`로 이관한다. 원문·ID·시간·Anchor·Frame·Text·Audio·Asset과 기존 생성 metadata는 보존하며 Version 파일을 재작성하지 않는다. 기존 `frame` Anchor는 공개 시점만 증명한다. 표시 구간은 명시적 `frame-range`의 `endOffsetMs` 또는 `shot-offset`으로 확정해야 하며 1ms 구간이나 다음 Frame까지로 추측하지 않는다. 구간 미확정은 `SOURCE_VISUAL_INTERVAL_REQUIRED`와 Coverage Gap으로 차단한다.
+
+## Build와 읽기 전용 검토 번들
+
+`npm run build:manifest`는 Commit SHA, 앱·Schema 버전, 생성 시각과 소스 트리 SHA-256을 `.build/build-manifest.json`에 작성한다. 일반 실행 명령의 pre-script가 이를 준비하며 런타임은 시작 시 읽은 Build를 고정한다. Git이 없거나 작업 트리가 수정 중이면 Commit은 `null`이다. `/api/status.build`와 신규 Codex 요청·Generation Record의 `generatorBuild`로 추적하며 다른 소스 Build의 요청은 재생성을 요구한다. 과거 Asset을 현재 Commit에서 생성한 것으로 소급 표기하지 않는다.
+
+```sh
+npm run review-bundle -- --project-id PRJ-007 --output .local/reviews/PRJ-007-draft --maturity draft
+npm run review-bundle -- --data-root /absolute/project-data --project-id PRJ-007 --output .local/reviews/PRJ-007-final --maturity final
+```
+
+새 출력 폴더에 `project.json`, `shots.csv`, `storyboard.pdf`, `final-readiness.json`, `generation-audit.json`, `asset-integrity.json`, `asset-manifest.json`, `build-manifest.json`, `bundle-manifest.json`을 만든다. Manifest는 각 파일의 SHA-256·크기와 원본 Snapshot 해시를 기록한다. Asset Manifest는 현재 사용처, 생성 Record·Build와 감사 산출물 연결을 포함한다. 기본값은 별도 원본 미디어 파일 제외이며 `--include-media`로만 추가한다. PDF 안의 콘티 이미지는 포함된다. `--created-at`을 고정하면 같은 Snapshot·Build의 재현 가능한 번들을 만들 수 있다.
+
+번들 CLI는 원본에 lock·heartbeat·복구·mkdir을 실행하지 않는다. 원본 Data Root 안의 출력 경로와 기존 출력 폴더를 거부하고, Project·전체 Version·자산의 변경을 검출한다. Final 불가 상태에서는 폴더를 생성하지 않는다. Draft 파일은 성숙도를 표시하며 `project.json`의 검토 Envelope도 프로젝트 읽기에서 지원한다. 기존 콘티를 재검증할 때 자동 Confirm·Frame Accept·Asset 교체를 하지 않는다. 실제 저장본별 결과와 회귀 fixture의 차이는 [검증 보고서](docs/04-report/storyboard-generator.report.md)에서 확인한다.
 
 Program Monitor는 상태를 다시 검사하는 `/output/frame/:frameId`와 `/output/audio/:cueId`만 사용한다. 서버는 매 요청에서 파일 존재, 프로젝트 내부 경로, SHA-256, 실제 MIME·디코딩, 대상 연결과 출력 인터록을 확인하며 응답에 `Cache-Control: no-store`를 붙인다. Raw Asset 경로는 검토용이다. `proposed` 음성, 자산·길이 불일치, 권한 미확정 Text Cue, 미해결 정보 규칙, Gate보다 이른 정보는 출력하지 않고 문제 코드와 대상 ID만 표시한다. 손상된 Frame은 PDF 전체를 실패시키지 않고 Frame ID·Asset ID·Issue code가 있는 placeholder로 바뀌며 CSV에는 현재 무결성과 출력 안전 상태가 기록된다.
 
@@ -117,7 +136,7 @@ CSV에서 같은 오디오 이벤트가 여러 컷 행에 나타나면 하나의
 npm run check
 ```
 
-이 명령은 서버·도메인 타입 검사, 웹 타입 검사, 자동 테스트, 필수 테스트 이름, 생성 스키마 정합성, 운영 웹 빌드를 순서대로 실행한다. 현재 단위·통합 검사는 32개 파일의 863개 테스트이며 Playwright Chromium 시나리오 8개를 별도로 실행한다. 지정된 75개 계약 이름은 Proposal Frame·Visual Mode, 주기 Heartbeat, Historical Audit, Recovery Marker Quarantine, Asset Integrity, 열린 Text Placement, Timecode, 상태 갱신과 브라우저 흐름을 각각 한 번 실행한다. PRJ-007 Golden은 12개 Scene, 32개 Segment, 79개 screenplay Source Unit, 16개 Panel Turn, Text Placement 25개, 1,500,000ms 전체 시간과 원문 불변을 확인한다. 실제 `UNIT-045` fixture는 48,000Hz mono PCM16 WAV 2,000ms이며 849,000–851,000ms J-cut, 안전 HTTP bytes, JSON 재열기, Gate와 Generation Record 불변성을 검사한다.
+이 명령은 서버·도메인 타입 검사, 웹 타입 검사, 자동 테스트, 필수 테스트 이름, 생성 스키마 정합성, 운영 웹 빌드를 순서대로 실행한다. 현재 단위·통합 검사는 39개 파일의 940개 테스트이며 Playwright Chromium 시나리오 14개를 별도로 실행한다. 필수 계약 이름 153개의 누락·중복·skip·only는 모두 0이다. 실제 `HTMLAudioElement` 6개 시나리오는 WAV 디코딩, metadata, Seek, Cue 종료, Monitor 종료와 Project 전환 정리를 검사하며 Audio API를 대체하지 않는다. PRJ-007 Golden은 12개 Scene, 32개 Segment, 79개 screenplay Source Unit, 16개 Panel Turn, Text Placement 25개, 1,500,000ms와 원문 불변을 확인한다. `UNIT-045` 회귀 fixture는 48,000Hz mono PCM16 WAV 2,000ms와 849,000–851,000ms J-cut을 유지한다.
 
 브라우저와 실제 HTTP 검증은 다음 명령을 사용한다. `npm run smoke`는 임시 data/request root와 동적 포트를 만들고 종료 시 listener, Worker, timer와 임시 파일을 정리한다.
 
