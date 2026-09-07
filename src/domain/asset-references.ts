@@ -1,5 +1,5 @@
 import { assertNoErrors, contractError, issue } from './errors.js';
-import type { Asset, Issue, Project } from './schema.js';
+import type { Asset, Issue, Project, Shot } from './schema.js';
 
 export type AssetReferenceKind = 'frame-image' | 'audio-cue' | 'generation-result' | 'shot-prop'
   | 'continuity-before' | 'continuity-after';
@@ -25,6 +25,17 @@ export const PROJECT_ASSET_REFERENCE_FIELDS: readonly string[] = [
 
 const GENERATION_RESULT_KINDS: readonly Asset['kind'][] = ['image', 'audio', 'character', 'location', 'prop'];
 const CONTINUITY_KINDS: readonly Asset['kind'][] = ['character', 'location', 'prop'];
+
+/** 이미지 Context와 현재 출력이 사용하는 인물·공간의 최신 기준 자산을 선택한다. */
+export function currentVisualReferenceAssets(project: Project, shot: Shot): Asset[] {
+  const visiblePersonIds: string[] = shot.presence.filter((presence): boolean =>
+    ['VISIBLE', 'HAND_ONLY', 'SILHOUETTE', 'ARCHIVE_IMAGE'].includes(presence.mode)).map((presence): string => presence.personId);
+  const candidates: Asset[] = project.assets.filter((asset: Asset): boolean =>
+    asset.kind === 'character' && asset.subjectId !== null && visiblePersonIds.includes(asset.subjectId)
+    || asset.kind === 'location' && asset.subjectId !== null && asset.subjectId === shot.visualLocationId);
+  return candidates.filter((asset: Asset): boolean => !candidates.some((candidate: Asset): boolean =>
+    candidate.kind === asset.kind && candidate.subjectId === asset.subjectId && candidate.version > asset.version));
+}
 
 function reference(
   relation: AssetReferenceKind, entityId: string, assetId: string, field: string,

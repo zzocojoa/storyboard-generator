@@ -161,6 +161,10 @@ export const SourceTemporalAnchorSchema = z.discriminatedUnion('kind', [
     kind: z.literal('frame'), frameId: IdSchema, basis: z.enum(['manual', 'proposal']), status: z.literal('confirmed'),
   }),
   z.strictObject({
+    kind: z.literal('frame-range'), frameId: IdSchema, endOffsetMs: MillisecondsSchema,
+    basis: z.enum(['manual', 'proposal']), status: z.literal('confirmed'),
+  }),
+  z.strictObject({
     kind: z.literal('unresolved'), basis: z.enum(['estimated', 'migration', 'mapping-change', 'source-move', 'audio-change', 'frame-change', 'source-update']), status: z.literal('review-required'),
   }),
 ]);
@@ -223,13 +227,18 @@ export const AssetSchema = z.strictObject({
   durationMs: MillisecondsSchema.nullable(), version: z.number().int().positive(),
   audioMetadata: z.strictObject({ sampleRate: z.number().int().positive(), channels: z.number().int().min(1).max(2), codec: z.string().min(1) }).nullable().optional(),
 });
+export const GeneratorBuildProvenanceSchema = z.strictObject({
+  commitSha: z.string().regex(/^[a-f0-9]{40}$/u).nullable(), appVersion: z.string().min(1),
+  projectSchemaVersion: z.string().min(1), builtAt: z.iso.datetime().nullable(), sourceTreeSha256: HashSchema.nullable(),
+});
 export const GenerationSchema = z.strictObject({
   id: IdSchema, provider: z.string(), model: z.string(), modelVersion: z.string().nullable(),
   requestId: z.string().nullable(), prompt: z.string(), templateVersion: z.string(), seed: z.number().int().nullable(),
   referenceHashes: z.array(HashSchema), resultAssetIds: z.array(IdSchema), shotIds: z.array(IdSchema), createdAt: z.iso.datetime(),
+  generatorBuild: GeneratorBuildProvenanceSchema.nullable(),
 });
 export const ProjectSchema = z.strictObject({
-  schemaVersion: z.literal('1.6.0'), projectId: IdSchema, title: z.string().min(1), revision: z.number().int().nonnegative(),
+  schemaVersion: z.literal('1.7.0'), projectId: IdSchema, title: z.string().min(1), revision: z.number().int().nonnegative(),
   profile: ProfileSchema,
   handoff: HandoffSchema, sources: z.array(SnapshotSchema), dataset: DatasetSchema, importIssues: z.array(IssueSchema),
   textMappingDecisions: z.array(TextMappingDecisionSchema),
@@ -274,4 +283,5 @@ export type TextCueAuthority = z.infer<typeof TextCueAuthoritySchema>;
 export type TextCue = z.infer<typeof TextCueSchema>;
 export type Asset = z.infer<typeof AssetSchema>;
 export type GenerationRecord = z.infer<typeof GenerationSchema>;
+export type GeneratorBuildProvenance = z.infer<typeof GeneratorBuildProvenanceSchema>;
 export type Project = z.infer<typeof ProjectSchema>;

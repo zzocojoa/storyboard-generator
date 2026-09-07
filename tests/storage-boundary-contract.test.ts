@@ -91,7 +91,7 @@ function audioAsset(id: string, subjectId: string, bytes: Buffer): Asset {
 }
 
 function generationRecord(id: string, resultAssetIds: readonly string[]): GenerationRecord {
-  return { id, provider: 'codex-app', model: 'imagegen', modelVersion: null, requestId: null, prompt: '저장 경계 검증',
+  return { id, provider: 'codex-app', model: 'imagegen', generatorBuild: null, modelVersion: null, requestId: null, prompt: '저장 경계 검증',
     templateVersion: '1', seed: null, referenceHashes: [], resultAssetIds: [...resultAssetIds], shotIds: [],
     createdAt: '2026-09-06T00:00:00.000Z' };
 }

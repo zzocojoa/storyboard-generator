@@ -3,8 +3,9 @@ import { issue } from './errors.js';
 import { reviewIssuesForFrame } from './mapping.js';
 import type { Asset, Issue, Project, Shot, StoryboardFrame } from './schema.js';
 import { frameEvaluationAbsoluteMs } from './time.js';
+import { reviewVisualOutputAt } from './visual-output.js';
 
-export type FrameOutputChannel = 'program-monitor' | 'transition-preview' | 'pdf-export' | 'csv-export';
+export type FrameOutputChannel = 'program-monitor' | 'transition-preview' | 'pdf-export' | 'csv-export' | 'safe-http' | 'readiness';
 export type FrameOutputDecision = {
   frameId: string;
   channel: FrameOutputChannel;
@@ -43,29 +44,18 @@ export function reviewFrameOutput(project: Project, frameId: string, channel: Fr
       '출력할 프레임을 찾을 수 없습니다.', 'existing frame', frameId, [])] };
   }
   const shot: Shot | undefined = project.shots.find((candidate: Shot): boolean => candidate.id === frame.shotId);
-  if (shot?.visualMode === 'black') {
-    return { frameId, channel, renderMode: 'black', renderBitmap: false, imageAssetId: null, sourceFrameId: frame.id, issues: [] };
+  if (shot !== undefined && shot.visualMode !== 'sourced') {
+    const resolved = reviewVisualOutputAt(project, frameEvaluationAbsoluteMs(shot, frame), channel);
+    return { frameId, channel, renderMode: resolved.renderMode, renderBitmap: resolved.imageAssetId !== null && resolved.renderMode !== 'blocked',
+      imageAssetId: resolved.imageAssetId, sourceFrameId: resolved.sourceFrameId, issues: resolved.issues };
   }
-  if (shot?.visualMode === 'hold-previous') {
-    const shotIndex: number = project.shots.findIndex((candidate: Shot): boolean => candidate.id === shot.id);
-    const previous: Shot | undefined = shotIndex > 0 ? project.shots[shotIndex - 1] : undefined;
-    const candidates: StoryboardFrame[] = previous === undefined || previous.endMs !== shot.startMs ? [] : project.frames
-      .filter((candidate: StoryboardFrame): boolean => candidate.shotId === previous.id)
-      .sort((left: StoryboardFrame, right: StoryboardFrame): number => right.offsetMs - left.offsetMs || right.id.localeCompare(left.id));
-    for (const candidate of candidates) {
-      const resolved: FrameOutputDecision = reviewFrameOutput(project, candidate.id, channel);
-      if (resolved.renderMode === 'bitmap' || resolved.renderMode === 'black' || resolved.renderMode === 'hold-previous') {
-        return {
-          frameId, channel, renderMode: 'hold-previous', renderBitmap: resolved.renderBitmap,
-          imageAssetId: resolved.imageAssetId, sourceFrameId: resolved.sourceFrameId ?? candidate.id, issues: [],
-        };
-      }
-    }
-    return { frameId, channel, renderMode: 'blocked', renderBitmap: false, imageAssetId: null, sourceFrameId: null, issues: [issue(
-      'HOLD_PREVIOUS_SOURCE_UNAVAILABLE', 'conflict', shot.id, 'visualMode',
-      '시간상 인접한 직전 컷에서 안전하게 출력할 프레임을 찾을 수 없습니다.', 'output-safe previous frame', previous?.id ?? null, [],
-    )] };
-  }
+  return reviewFrameBitmap(project, frame, channel);
+}
+
+/** 이미지 자체의 검토와 생성 기준 안전성을 검사하며 Playhead Coverage는 호출자가 별도로 판정한다. */
+export function reviewFrameBitmap(project: Project, frame: StoryboardFrame, channel: FrameOutputChannel): FrameOutputDecision {
+  const frameId: string = frame.id;
+  const shot: Shot | undefined = project.shots.find((candidate: Shot): boolean => candidate.id === frame.shotId);
   const asset: Asset | undefined = frame.imageAssetId === null ? undefined
     : project.assets.find((candidate: Asset): boolean => candidate.id === frame.imageAssetId);
   const assetIssues: Issue[] = frame.imageAssetId === null

@@ -8,8 +8,13 @@ import type {
   Asset, AudioCue, Dataset, InformationRule, Issue, Project, Segment, Shot, ShotSourceLink,
   SourceRef, SourceTemporalAnchor, SourceUnit, StoryboardFrame, TextCue, TextMappingDecision, TextPlacement,
 } from './schema.js';
-import { sourcePolicyIssues } from './source-policy.js';
+import { assertVisualCoverageChange, shotVisualCoverageIssues, sourcePolicyIssues, visualModeStructureIssues } from './source-policy.js';
+import { activeVisualSourceLinks, directVisualLinks, sourceAnchorRange, sourceRevealEvidenceMs } from './source-anchor.js';
+import type { SourceAnchorRange } from './source-anchor.js';
+export { directVisualLinks, sourceAnchorRange } from './source-anchor.js';
+export type { SourceAnchorRange } from './source-anchor.js';
 import { frameDisplayAbsoluteMs, frameEvaluationAbsoluteMs } from './time.js';
+import { effectiveTextPlacementRange } from './text-placement.js';
 import { validateProject } from './validation.js';
 
 export const TextMappingDecisionInputSchema = z.strictObject({
@@ -36,7 +41,6 @@ export type EffectiveInformationGate = {
   evidenceType: GateEvidenceType; evidenceId: string | null; reviewRequired: boolean; reviewReasons: string[];
   sourceRefs: SourceRef[];
 };
-export type SourceAnchorRange = { startMs: number; endMs: number };
 
 const canonicalKinds: ReadonlySet<SourceUnit['kind']> = new Set<SourceUnit['kind']>(['SCREEN_TEXT', 'CHAT', 'NOTE']);
 
@@ -97,27 +101,6 @@ function uniqueRefs(refs: readonly SourceRef[]): SourceRef[] {
   });
 }
 
-function anchorRange(project: Project, shot: Shot, anchor: SourceTemporalAnchor): SourceAnchorRange | null {
-  const shotDurationMs: number = shot.endMs - shot.startMs;
-  if (anchor.status !== 'confirmed') return null;
-  if (anchor.kind === 'frame') {
-    const frame: StoryboardFrame | undefined = project.frames.find((candidate: StoryboardFrame): boolean => candidate.id === anchor.frameId && candidate.shotId === shot.id);
-    if (frame === undefined || frame.offsetMs > shotDurationMs) return null;
-    const startMs: number = frameEvaluationAbsoluteMs(shot, frame);
-    return { startMs, endMs: Math.min(shot.endMs, startMs + 1) };
-  }
-  if (anchor.startOffsetMs >= shotDurationMs || anchor.startOffsetMs >= anchor.endOffsetMs || anchor.endOffsetMs > shotDurationMs) return null;
-  return { startMs: shot.startMs + anchor.startOffsetMs, endMs: shot.startMs + anchor.endOffsetMs };
-}
-
-export function sourceAnchorRange(project: Project, shot: Shot, link: ShotSourceLink): SourceAnchorRange | null {
-  return anchorRange(project, shot, link.temporalAnchor);
-}
-
-export function directVisualLinks(shot: Shot): ShotSourceLink[] {
-  return shot.sourceLinks.filter((link: ShotSourceLink): boolean => link.usage === 'primary-visual' || link.usage === 'continued-visual');
-}
-
 export function absoluteFrameTime(shot: Shot, frame: StoryboardFrame): number {
   return MillisecondsSchema.parse(frameDisplayAbsoluteMs(shot, frame));
 }
@@ -153,8 +136,8 @@ function sourceEvidence(project: Project, rule: InformationRule): GateEvidence[]
   return project.shots.flatMap((shot: Shot): GateEvidence[] => directVisualLinks(shot).flatMap((link: ShotSourceLink): GateEvidence[] => {
     if (link.status !== 'confirmed') return [];
     const unit: SourceUnit | undefined = project.dataset.units.find((candidate: SourceUnit): boolean => candidate.id === link.unitId && candidate.segmentId === rule.segmentId && candidate.informationIds.includes(rule.id));
-    const range: SourceAnchorRange | null = sourceAnchorRange(project, shot, link);
-    return unit === undefined || range === null ? [] : [{ time: range.startMs, type: 'source-anchor', id: `${shot.id}:${unit.id}`, refs: unit.sourceRefs }];
+    const revealMs: number | null = sourceRevealEvidenceMs(project, shot, link);
+    return unit === undefined || revealMs === null ? [] : [{ time: revealMs, type: 'source-anchor', id: `${shot.id}:${unit.id}`, refs: unit.sourceRefs }];
   }));
 }
 
@@ -346,6 +329,7 @@ export function updateShotSourceLinks(project: Project, shotId: string, input: S
     shots: project.shots.map((candidate: Shot): Shot => candidate.id === shotId ? { ...candidate, sourceLinks: parsed.links, approvalStatus: 'proposed', proposalOrigin: 'manual' } : candidate),
     frames: project.frames.map((frame: StoryboardFrame): StoryboardFrame => frame.shotId === shot.id ? { ...frame, visualReview: 'pending' } : frame),
   };
+  assertVisualCoverageChange(project, next, [shot.id]);
   assertSourcePolicyChange(project, next, shot.segmentId);
   return finishMappingEdit(project, next);
 }
@@ -374,6 +358,7 @@ export function moveShotSourceLink(project: Project, shotId: string, input: Move
     if (shot.id === target.id) return { ...shot, sourceLinks: [...shot.sourceLinks, { unitId: parsed.unitId, usage: parsed.usage, status: temporalAnchor.status === 'confirmed' ? 'confirmed' : 'mapping-required', temporalAnchor }], approvalStatus: 'proposed' };
     return shot;
   }), frames: project.frames.map((frame: StoryboardFrame): StoryboardFrame => [source.id, target.id].includes(frame.shotId) ? { ...frame, visualReview: 'pending' } : frame) };
+  assertVisualCoverageChange(project, next, [source.id, target.id]);
   assertSourcePolicyChange(project, next, source.segmentId);
   return finishMappingEdit(project, next);
 }
@@ -431,7 +416,8 @@ function sourceMappingReviewIssues(project: Project, shot: Shot): Issue[] {
     }
     if (link.status === 'mapping-required') return [issue('SOURCE_MAPPING_REQUIRED', 'conflict', shot.id, 'sourceLinks', `${link.unitId}의 컷 배치와 용도를 확인하세요.`, 'confirmed', link.status, refs)];
     if (directVisualLinks(shot).includes(link) && link.temporalAnchor.status === 'review-required') return [issue('SOURCE_TEMPORAL_ANCHOR_REQUIRED', 'conflict', shot.id, 'sourceLinks.temporalAnchor', `${link.unitId}가 컷 안에서 처음 보이는 시각을 확정하세요.`, 'confirmed temporal anchor', link.temporalAnchor.basis, refs)];
-    if (link.temporalAnchor.status === 'confirmed' && sourceAnchorRange(project, shot, link) === null) return [issue('INVALID_SOURCE_TEMPORAL_ANCHOR', 'conflict', shot.id, 'sourceLinks.temporalAnchor', `${link.unitId}의 시간 Anchor가 컷 또는 프레임 범위를 벗어났습니다.`, 'anchor inside shot', JSON.stringify(link.temporalAnchor), refs)];
+    if (directVisualLinks(shot).includes(link) && link.temporalAnchor.kind === 'frame') return [issue('SOURCE_VISUAL_INTERVAL_REQUIRED', 'conflict', shot.id, 'sourceLinks.temporalAnchor', `${link.unitId}: Frame 공개 증거와 별개로 표시 종료를 검토하고 frame-range 또는 shot-offset 구간을 확정하세요.`, 'explicit visual interval', JSON.stringify(link.temporalAnchor), refs)];
+    if (link.temporalAnchor.status === 'confirmed' && link.temporalAnchor.kind !== 'frame' && sourceAnchorRange(project, shot, link) === null) return [issue('INVALID_SOURCE_TEMPORAL_ANCHOR', 'conflict', shot.id, 'sourceLinks.temporalAnchor', `${link.unitId}의 시간 Anchor가 컷 또는 프레임 범위를 벗어났습니다.`, 'anchor inside shot', JSON.stringify(link.temporalAnchor), refs)];
     return [];
   });
 }
@@ -485,7 +471,11 @@ export function reviewIssuesForShot(project: Project, shotId: string): Issue[] {
 }
 
 export function approvalIssuesForShot(project: Project, shotId: string): Issue[] {
-  return reviewIssuesForShot(project, shotId);
+  const shot: Shot | undefined = project.shots.find((candidate: Shot): boolean => candidate.id === shotId);
+  if (shot === undefined) return reviewIssuesForShot(project, shotId);
+  const frameIssues: Issue[] = shot.visualMode === 'sourced' && !project.frames.some((frame: StoryboardFrame): boolean => frame.shotId === shot.id && frame.offsetMs === 0 && frame.role === 'start')
+    ? [issue('SHOT_START_FRAME_REQUIRED', 'conflict', shot.id, 'frames', 'sourced 컷에는 시작 Frame이 필요합니다.', 'start frame at zero', null, [])] : [];
+  return [...reviewIssuesForShot(project, shotId), ...shotVisualCoverageIssues(project, shot), ...visualModeStructureIssues(project, shot), ...frameIssues];
 }
 
 export function reviewIssuesForFrame(project: Project, frameId: string): Issue[] {
@@ -494,12 +484,31 @@ export function reviewIssuesForFrame(project: Project, frameId: string): Issue[]
   const shot: Shot | undefined = project.shots.find((candidate: Shot): boolean => candidate.id === frame.shotId);
   if (shot === undefined) return [issue('SHOT_NOT_FOUND', 'conflict', frame.id, 'shotId', `프레임의 컷을 찾을 수 없습니다: ${frame.shotId}`, 'existing shot', frame.shotId, [])];
   const frameMs: number = frameEvaluationAbsoluteMs(shot, frame);
-  const active: ShotSourceLink[] = directVisualLinks(shot).filter((link: ShotSourceLink): boolean => {
-    const range: SourceAnchorRange | null = sourceAnchorRange(project, shot, link);
-    return range !== null && range.startMs <= frameMs && frameMs < range.endMs;
-  });
+  const active: ShotSourceLink[] = activeVisualSourceLinks(project, shot, frameMs);
   const visualIssue: Issue[] = active.length === 0 ? [issue('FRAME_VISUAL_SOURCE_REQUIRED', 'conflict', frame.id, 'sourceLinks', '이 프레임 시각에 활성화된 직접 시각 원문이 필요합니다.', 'active primary or continued source', String(frameMs), [])] : [];
-  return [...reviewIssuesForShot(project, shot.id), ...visualIssue];
+  const pendingNonvisual: Shot = { ...shot, sourceLinks: shot.sourceLinks.filter((link: ShotSourceLink): boolean =>
+    link.status === 'mapping-required' && !directVisualLinks(shot).includes(link)) };
+  return [...reviewIssuesForVisualAt(project, shot, frameMs), ...sourceMappingReviewIssues(project, pendingNonvisual), ...visualIssue];
+}
+
+/** 실제 출력 시점에 활성인 Source와 Mapping의 권한 및 정보 공개만 검사한다. */
+export function reviewIssuesForVisualAt(project: Project, shot: Shot, atMs: number): Issue[] {
+  const active: ShotSourceLink[] = activeVisualSourceLinks(project, shot, atMs);
+  const unresolved: ShotSourceLink[] = directVisualLinks(shot).filter((link: ShotSourceLink): boolean => sourceAnchorRange(project, shot, link) === null);
+  const relevantShot: Shot = { ...shot, sourceLinks: [...active, ...unresolved] };
+  const relevantMappings: TextMappingDecision[] = project.textMappingDecisions.filter((decision: TextMappingDecision): boolean => {
+    const range = effectiveTextPlacementRange(project, decision.placementId);
+    return range.startMs <= atMs && (range.endMs === null || atMs < range.endMs);
+  });
+  const informationIds: string[] = [...new Set(active.flatMap((link: ShotSourceLink): string[] =>
+    project.dataset.units.find((unit: SourceUnit): boolean => unit.id === link.unitId)?.informationIds ?? []))];
+  return [
+    ...sourcePolicyReviewIssues(project, shot.segmentId).filter((value: Issue): boolean => value.entityId === shot.id),
+    ...textMappingReviewIssues({ ...project, textMappingDecisions: relevantMappings }, shot.segmentId),
+    ...sourceMappingReviewIssues(project, relevantShot),
+    ...revealReviewIssues(project, shot).filter((value: Issue): boolean => value.code === 'INFORMATION_WITHOUT_SOURCE_LINK' || value.code === 'UNRESOLVED_INFORMATION_RULE'),
+    ...informationIds.flatMap((id: string): Issue[] => gateIssue(project, shot.id, id, atMs)),
+  ];
 }
 
 export function reviewIssuesForSegment(project: Project, segmentId: string): Issue[] {

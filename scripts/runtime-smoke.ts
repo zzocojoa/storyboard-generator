@@ -1,3 +1,6 @@
+import { readBuildManifest, generatorBuildProvenance } from '../src/build.js';
+import { readReviewArchive, writeReviewBundle } from '../src/exporters/review-bundle.js';
+import { finalFixture, readinessOutline, withFirstGap } from '../tests/readiness-fixtures.js';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
@@ -128,21 +131,22 @@ async function runPrimarySmoke(root: string): Promise<{ ports: number[]; checks:
     const audioBytes: Buffer = pcmWav(audioDurationMs, project.handoff.timebase.sampleRate);
     const imageAsset: Asset = { id: 'runtime-image', kind: 'image', subjectId: sourceFrame.id, path: 'assets/runtime-image.png',
       mimeType: 'image/png', sha256: sha256Bytes(imageBytes), description: 'Runtime Frame', durationMs: null, version: 1 };
+    const keyAsset: Asset = { ...imageAsset, id: 'runtime-key-image', subjectId: keyFrame.id, path: 'assets/runtime-key-image.png' };
     const audioAsset: Asset = { id: 'runtime-audio', kind: 'audio', subjectId: audioCue.id, path: 'assets/runtime-audio.wav',
       mimeType: 'audio/wav', sha256: sha256Bytes(audioBytes), description: 'Runtime Audio', durationMs: audioDurationMs, version: 1,
       audioMetadata: { sampleRate: project.handoff.timebase.sampleRate, channels: 1, codec: 'pcm_s16le' } };
-    const record: GenerationRecord = { id: 'runtime-generation', provider: 'codex-app', model: 'current', modelVersion: null,
+    const record: GenerationRecord = { id: 'runtime-generation', provider: 'codex-app', model: 'current', generatorBuild: generatorBuildProvenance(readBuildManifest()), modelVersion: null,
       requestId: randomUUID(), prompt: 'Runtime smoke frame', templateVersion: '1.0.0', seed: null, referenceHashes: [],
       resultAssetIds: [imageAsset.id], shotIds: [sourceFrame.shotId], createdAt: new Date().toISOString() };
     project = await running.store.update(project.projectId, project.revision, (current: Project): Project => ({ ...current,
-      assets: [...current.assets, imageAsset, audioAsset], generationRecords: [...current.generationRecords, record],
+      assets: [...current.assets, imageAsset, keyAsset, audioAsset], generationRecords: [...current.generationRecords, record],
       frames: current.frames.map((frame: StoryboardFrame): StoryboardFrame => frame.id === sourceFrame.id
-        ? { ...frame, imageAssetId: imageAsset.id, visualReview: 'accepted' } : frame),
+        ? { ...frame, imageAssetId: imageAsset.id, visualReview: 'accepted' } : frame.id === keyFrame.id ? { ...frame, imageAssetId: keyAsset.id, visualReview: 'accepted' } : frame),
       audioCues: current.audioCues.map((cue: AudioCue): AudioCue => cue.id === audioCue.id
         ? { ...cue, assetId: audioAsset.id, timingStatus: 'measured' } : cue),
       shots: current.shots.map((shot: Shot, index: number): Shot => index === 0 ? nonSourced(shot, 'black')
         : index === 2 ? nonSourced(shot, 'hold-previous') : shot),
-    }), [{ relativePath: imageAsset.path, content: imageBytes }, { relativePath: audioAsset.path, content: audioBytes }]);
+    }), [{ relativePath: imageAsset.path, content: imageBytes }, { relativePath: keyAsset.path, content: imageBytes }, { relativePath: audioAsset.path, content: audioBytes }]);
 
     const blackFrame: StoryboardFrame = project.frames.find((frame: StoryboardFrame): boolean => frame.shotId === project.shots[0]?.id) as StoryboardFrame;
     const holdFrame: StoryboardFrame = project.frames.find((frame: StoryboardFrame): boolean => frame.shotId === project.shots[2]?.id) as StoryboardFrame;
@@ -163,7 +167,7 @@ async function runPrimarySmoke(root: string): Promise<{ ports: number[]; checks:
     }), 200));
     project = updated; checks.push('source-update:200');
     const exportedJson: HttpResult = await expectStatus(running.url, `/api/projects/${encodeURIComponent(project.projectId)}/export.json`, {}, 200);
-    assert.equal((JSON.parse(exportedJson.bytes.toString('utf8')) as Project).schemaVersion, '1.6.0');
+    assert.equal((JSON.parse(exportedJson.bytes.toString('utf8')) as Project).schemaVersion, '1.7.0');
     await expectStatus(running.url, `/api/projects/${encodeURIComponent(project.projectId)}/export.csv`, {}, 200);
     const exportedPdf: HttpResult = await expectStatus(running.url, `/api/projects/${encodeURIComponent(project.projectId)}/export.pdf`, {}, 200);
     assert.equal(exportedPdf.bytes.subarray(0, 5).toString('ascii'), '%PDF-'); checks.push('json:200', 'csv:200', 'pdf:200');
@@ -239,14 +243,60 @@ async function runActiveRefresh(root: string): Promise<{ port: number; checks: s
   } finally { gate.release(); await writer.close(); await observer.app.close(); }
 }
 
+
+async function runFinalSmoke(root: string): Promise<{ port: number; checks: string[] }> {
+  const dataRoot: string = join(root, 'final-data');
+  const running: RunningApp = await startApp(join(root, 'final-app'), dataRoot, new ProjectStore(dataRoot));
+  const checks: string[] = [];
+  try {
+    const base: Project = await running.store.create(await readinessOutline()); const ready = await finalFixture();
+    let project: Project = await running.store.update(base.projectId, base.revision, (): Project => ({ ...ready.project,
+      textCues: ready.project.textCues.map((cue) => ({ ...cue, timingStatus: 'proposed' })) }),
+      ready.project.assets.map((asset) => ({ relativePath: asset.path, content: ready.media.get(asset.id) as Buffer })));
+    const path: string = `/api/projects/${encodeURIComponent(project.projectId)}`;
+    const status = await expectStatus(running.url, '/api/status', {}, 200);
+    assert.deepEqual((status.body as { build: unknown }).build, readBuildManifest()); checks.push('build:verified');
+    const initial = await expectStatus(running.url, `${path}/final-readiness`, {}, 200);
+    assert.equal((initial.body as { finalReady: boolean }).finalReady, false);
+    for (const extension of ['csv', 'pdf']) {
+      await expectStatus(running.url, `${path}/export.${extension}?maturity=draft`, {}, 200);
+      const blocked = await expectStatus(running.url, `${path}/export.${extension}?maturity=final`, {}, 409);
+      assert.equal((blocked.body as { error: { code: string } }).error.code, 'FINAL_OUTPUT_NOT_READY');
+    }
+    checks.push('draft-text:200', 'final-unconfirmed:409');
+    for (const cue of project.textCues) project = projectFrom(await expectStatus(running.url, `${path}/text/${cue.id}/confirm`, json('POST', { expectedRevision: project.revision }), 200));
+    assert.equal(((await expectStatus(running.url, `${path}/final-readiness`, {}, 200)).body as { finalReady: boolean }).finalReady, true);
+    for (const extension of ['csv', 'pdf']) await expectStatus(running.url, `${path}/export.${extension}?maturity=final`, {}, 200);
+    const archive = await readReviewArchive(dataRoot, project.projectId);
+    const bundle = await writeReviewBundle(archive, { output: join(root, 'final-review'), maturity: 'final', fontPath: appConfig(root, dataRoot).pdfFontPath,
+      build: readBuildManifest(), createdAt: new Date().toISOString() }, []);
+    assert.equal(bundle.files.length, 8); await archive.assertUnchanged(); checks.push('text-confirm:200', 'final-pdf:200', 'final-csv:200', 'review-bundle:created');
+    await expectStatus(running.url, `${path}/output/visual?atMs=0`, {}, 200);
+    project = await running.store.update(project.projectId, project.revision, (current: Project): Project => withFirstGap(current, 1000), []);
+    await expectStatus(running.url, `${path}/output/visual?atMs=1000`, {}, 409); checks.push('actual-playhead-gap:409');
+    project = await running.store.update(project.projectId, project.revision, (current: Project): Project => ({ ...current,
+      shots: current.shots.map((shot: Shot, index: number): Shot => index === 1 ? nonSourced(shot, 'hold-previous') : shot) }), []);
+    await expectStatus(running.url, `${path}/output/visual?atMs=5000`, {}, 409); checks.push('hold-unsafe-origin:409');
+    project = await running.store.update(project.projectId, project.revision, (current: Project): Project => ({ ...current,
+      shots: current.shots.map((shot: Shot, index: number): Shot => index === 0 ? nonSourced(shot, 'black') : shot) }), []);
+    await expectStatus(running.url, `${path}/output/visual?atMs=0`, {}, 200);
+    await expectStatus(running.url, `${path}/output/visual?atMs=5000`, {}, 200); checks.push('safe-visual-black:200', 'safe-visual-hold:200');
+    await writeFile(join(dataRoot, sha256Text(project.projectId), 'project.json'), JSON.stringify({ ...project, title: 'Audit mismatch fixture' }));
+    const mismatch = await expectStatus(running.url, `${path}/generation-audit`, {}, 423);
+    assert.equal((mismatch.body as { error: { code: string } }).error.code, 'AUDIT_CURRENT_VERSION_MISMATCH'); checks.push('audit-mismatch:423');
+    return { port: Number(new URL(running.url).port), checks };
+  } finally { await running.app.close(); }
+}
+
 const root: string = await mkdtemp(join(tmpdir(), 'storyboard-runtime-smoke-'));
 try {
   const primary = await runPrimarySmoke(root);
   const service = await runServiceFailure(root);
   const active = await runActiveRefresh(root);
+  const final = await runFinalSmoke(root);
   const registryFiles: string[][] = await Promise.all([
-    join(root, 'primary-data', '.process-instances'), join(root, 'service-data', '.process-instances'), join(root, 'active-data', '.process-instances'),
+    join(root, 'primary-data', '.process-instances'), join(root, 'final-data', '.process-instances'), join(root, 'service-data', '.process-instances'), join(root, 'active-data', '.process-instances'),
   ].map((path: string): Promise<string[]> => readdir(path)));
   assert.ok(registryFiles.every((entries: string[]): boolean => entries.length === 0));
-  process.stdout.write(`${JSON.stringify({ ports: [...primary.ports, service.port, active.port], checks: [...primary.checks, service.check, ...active.checks], cleaned: true })}\n`);
+  process.stdout.write(`${JSON.stringify({ ports: [...primary.ports, service.port, active.port, final.port], checks: [...primary.checks, service.check, ...active.checks, ...final.checks], cleaned: true })}\n`);
 } finally { await rm(root, { recursive: true, force: true }); }

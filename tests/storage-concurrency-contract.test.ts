@@ -341,7 +341,7 @@ describe('D. Asset-free Initial Create', (): void => {
     expect((await rejectedCreate({ ...base, audioCues: base.audioCues.map((value: AudioCue): AudioCue => value.id === cue.id ? { ...value, assetId: 'audio-ref' } : value) })).code).toBe('UNSUPPORTED_INITIAL_PROJECT_ASSETS');
   });
   it('initial_create_rejects_generation_record_asset_reference', async (): Promise<void> => {
-    const base: Project = await outline('initial-generation'); const record: GenerationRecord = { id: 'generation', provider: 'codex-app', model: 'imagegen', modelVersion: null,
+    const base: Project = await outline('initial-generation'); const record: GenerationRecord = { id: 'generation', provider: 'codex-app', model: 'imagegen', generatorBuild: null, modelVersion: null,
       requestId: null, prompt: '검증', templateVersion: '1', seed: null, referenceHashes: [], resultAssetIds: ['generated-ref'], shotIds: [], createdAt: '2026-09-06T00:00:00.000Z' };
     expect((await rejectedCreate({ ...base, generationRecords: [record] })).code).toBe('UNSUPPORTED_INITIAL_PROJECT_ASSETS');
   });

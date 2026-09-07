@@ -1,3 +1,4 @@
+import { testGeneratorBuild } from './helpers.js';
 import { randomUUID } from 'node:crypto';
 import { hostname, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -122,7 +123,7 @@ async function appForRoot(root: string, dataRoot: string): Promise<FastifyInstan
 }
 
 function record(id: string, shotIds: readonly string[], resultAssetIds: readonly string[]): GenerationRecord {
-  return { id, provider: 'codex-app', model: 'model', modelVersion: null, requestId: `request:${id}`, prompt: `prompt:${id}`,
+  return { id, provider: 'codex-app', model: 'model', generatorBuild: null, modelVersion: null, requestId: `request:${id}`, prompt: `prompt:${id}`,
     templateVersion: '1.0.0', seed: null, referenceHashes: [], resultAssetIds: [...resultAssetIds], shotIds: [...shotIds],
     createdAt: '2026-09-06T00:00:00.000Z' };
 }
@@ -376,18 +377,18 @@ describe('E. Generation Record transition', (): void => {
 describe('F. Codex and source update audit', (): void => {
   it('image_apply_appends_generation_record', async (): Promise<void> => {
     const project = await outline('image-append'); const frame = project.frames[0]; if (frame === undefined) throw new Error('검증용 Frame이 없습니다.');
-    const mutation = await applyGeneratedImage(project, frame.id, 'image-record', '2026-09-06T00:00:00.000Z', { bytes: await png(1, 1), provider: 'codex-app', prompt: 'image', model: 'codex-imagegen', requestId: 'request-image', mimeType: 'image/png', referenceHashes: [] });
+    const mutation = await applyGeneratedImage(project, frame.id, 'image-record', '2026-09-06T00:00:00.000Z', { bytes: await png(1, 1), generatorBuild: testGeneratorBuild(), provider: 'codex-app', prompt: 'image', model: 'codex-imagegen', requestId: 'request-image', mimeType: 'image/png', referenceHashes: [] });
     expect(mutation.project.generationRecords.at(-1)).toMatchObject({ id: 'image-record', resultAssetIds: ['image-record:image'] });
   });
   it('speech_apply_appends_generation_record', async (): Promise<void> => {
     const project = await outline('speech-append'); const cue = project.audioCues.find((value): boolean => ['dialogue', 'voiceover', 'panel'].includes(value.kind)); if (cue === undefined) throw new Error('검증용 Cue가 없습니다.');
-    const normalizer = testAudioNormalizer(); const mutation = await applyGeneratedSpeech(project, cue.id, 'speech-record', '2026-09-06T00:00:00.000Z', { bytes: pcmWav(500, 48000, 1, 16), provider: 'codex-app', prompt: 'speech', model: 'macos-say:Yuna', requestId: 'request-speech', mimeType: 'audio/wav' }, normalizer); await normalizer.close();
+    const normalizer = testAudioNormalizer(); const mutation = await applyGeneratedSpeech(project, cue.id, 'speech-record', '2026-09-06T00:00:00.000Z', { bytes: pcmWav(500, 48000, 1, 16), generatorBuild: testGeneratorBuild(), provider: 'codex-app', prompt: 'speech', model: 'macos-say:Yuna', requestId: 'request-speech', mimeType: 'audio/wav' }, normalizer); await normalizer.close();
     expect(mutation.project.generationRecords.at(-1)).toMatchObject({ id: 'speech-record', resultAssetIds: ['speech-record:audio'] });
   });
   it('proposal_apply_preserves_generation_records', async (): Promise<void> => {
     const base = await outline('proposal-preserve'); const existing = record('existing-record', [], []); const project: Project = { ...base, generationRecords: [existing] }; const segment = project.dataset.segments[0]; if (segment === undefined) throw new Error('검증용 Segment가 없습니다.');
     const sourceLinks = project.dataset.units.filter((unit): boolean => unit.segmentId === segment.id).map((unit) => ({ unitId: unit.id, usage: 'primary-visual' as const }));
-    const mutation = applyGeneratedProposal(project, segment.id, 'proposal-record', '2026-09-06T00:00:01.000Z', { provider: 'codex-app', prompt: 'proposal', model: 'current', requestId: 'request-proposal', proposal: { shots: [{ sourceLinks, durationWeight: 1, action: '원문 행동', visualLocationId: project.dataset.scenes[0]?.storyLocationId ?? null, camera: { size: 'MS', angle: 'eye-level', move: 'static' }, presence: [], propIds: [], cameraAxis: null, screenDirection: null, informationIds: [], transitionOut: { kind: 'cut', durationMs: 0, note: '' }, frameDescription: '원문 프레임' }] } });
+    const mutation = applyGeneratedProposal(project, segment.id, 'proposal-record', '2026-09-06T00:00:01.000Z', { generatorBuild: testGeneratorBuild(), provider: 'codex-app', prompt: 'proposal', model: 'current', requestId: 'request-proposal', proposal: { shots: [{ sourceLinks, durationWeight: 1, action: '원문 행동', visualLocationId: project.dataset.scenes[0]?.storyLocationId ?? null, camera: { size: 'MS', angle: 'eye-level', move: 'static' }, presence: [], propIds: [], cameraAxis: null, screenDirection: null, informationIds: [], transitionOut: { kind: 'cut', durationMs: 0, note: '' }, frameDescription: '원문 프레임' }] } });
     expect(mutation.project.generationRecords[0]).toEqual(existing); expect(mutation.project.generationRecords.at(-1)?.id).toBe('proposal-record');
   });
   it('source_update_preserves_generation_records', async (): Promise<void> => {
@@ -395,8 +396,8 @@ describe('F. Codex and source update audit', (): void => {
   });
   it('asset_replacement_does_not_rewrite_generation_history', async (): Promise<void> => {
     const project = await outline('asset-history'); const frame = project.frames[0]; if (frame === undefined) throw new Error('검증용 Frame이 없습니다.'); const bytes = await png(1, 1);
-    const first = await applyGeneratedImage(project, frame.id, 'image-first', '2026-09-06T00:00:00.000Z', { bytes, provider: 'codex-app', prompt: 'first', model: 'image', requestId: 'first', mimeType: 'image/png', referenceHashes: [] });
-    const second = await applyGeneratedImage(first.project, frame.id, 'image-second', '2026-09-06T00:00:01.000Z', { bytes, provider: 'codex-app', prompt: 'second', model: 'image', requestId: 'second', mimeType: 'image/png', referenceHashes: [] });
+    const first = await applyGeneratedImage(project, frame.id, 'image-first', '2026-09-06T00:00:00.000Z', { bytes, generatorBuild: testGeneratorBuild(), provider: 'codex-app', prompt: 'first', model: 'image', requestId: 'first', mimeType: 'image/png', referenceHashes: [] });
+    const second = await applyGeneratedImage(first.project, frame.id, 'image-second', '2026-09-06T00:00:01.000Z', { bytes, generatorBuild: testGeneratorBuild(), provider: 'codex-app', prompt: 'second', model: 'image', requestId: 'second', mimeType: 'image/png', referenceHashes: [] });
     expect(second.project.generationRecords[0]).toEqual(first.project.generationRecords[0]); expect(second.project.generationRecords.at(-1)?.resultAssetIds).toEqual(['image-second:image']);
   });
   it('generation_records_survive_json_round_trip', async (): Promise<void> => {
@@ -471,9 +472,9 @@ describe('J. Existing storage regression', (): void => {
   });
   it('safe_frame_and_audio_output_still_pass', async (): Promise<void> => {
     const root = await temporaryRoot('storyboard-safe-output-'); const store = new ProjectStore(join(root, 'data')); const base = await store.create(await outline('safe-output')); const frame = base.frames[0]; const cue = base.audioCues.find((value): boolean => ['dialogue', 'voiceover', 'panel'].includes(value.kind)); if (frame === undefined || cue === undefined) throw new Error('검증용 Frame 또는 Cue가 없습니다.');
-    const image = await applyGeneratedImage(base, frame.id, 'safe-image', '2026-09-06T00:00:00.000Z', { bytes: await png(1, 1), provider: 'codex-app', prompt: 'safe', model: 'image', requestId: 'safe-image', mimeType: 'image/png', referenceHashes: [] });
+    const image = await applyGeneratedImage(base, frame.id, 'safe-image', '2026-09-06T00:00:00.000Z', { bytes: await png(1, 1), generatorBuild: testGeneratorBuild(), provider: 'codex-app', prompt: 'safe', model: 'image', requestId: 'safe-image', mimeType: 'image/png', referenceHashes: [] });
     let current = await store.update(base.projectId, 0, (): Project => image.project, [{ relativePath: image.relativePath as string, content: image.content as Buffer }]); current = await store.update(current.projectId, current.revision, (value: Project): Project => setFrameReview(value, frame.id, 'accepted'), []);
-    const normalizer = testAudioNormalizer(); const speech = await applyGeneratedSpeech(current, cue.id, 'safe-speech', '2026-09-06T00:00:01.000Z', { bytes: pcmWav(500, 48000, 1, 16), provider: 'codex-app', prompt: 'safe', model: 'speech', requestId: 'safe-speech', mimeType: 'audio/wav' }, normalizer); await normalizer.close();
+    const normalizer = testAudioNormalizer(); const speech = await applyGeneratedSpeech(current, cue.id, 'safe-speech', '2026-09-06T00:00:01.000Z', { bytes: pcmWav(500, 48000, 1, 16), generatorBuild: testGeneratorBuild(), provider: 'codex-app', prompt: 'safe', model: 'speech', requestId: 'safe-speech', mimeType: 'audio/wav' }, normalizer); await normalizer.close();
     current = await store.update(current.projectId, current.revision, (): Project => speech.project, [{ relativePath: speech.relativePath as string, content: speech.content as Buffer }]); expect((await store.safeFrame(current.projectId, frame.id)).content.subarray(1, 4).toString()).toBe('PNG'); expect((await store.safeAudio(current.projectId, cue.id)).content.subarray(0, 4).toString()).toBe('RIFF');
   });
 });

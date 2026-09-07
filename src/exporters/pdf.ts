@@ -1,5 +1,9 @@
 import PDFDocument from 'pdfkit';
-import { reviewIssuesForTextCue } from '../domain/emission.js';
+import { reviewTextOutput } from '../domain/output-policy.js';
+import type { OutputPolicy } from '../domain/output-policy.js';
+import { assertFinalReadiness, reviewFinalReadiness } from '../domain/final-readiness.js';
+import type { AssetIntegrityStatuses } from '../domain/final-readiness.js';
+import { reviewShotVisualTimeline } from '../domain/visual-output.js';
 import { contractError } from '../domain/errors.js';
 import { frameOutputPlaceholderText, reviewFrameOutput } from '../domain/frame-output.js';
 import type { FrameOutputDecision } from '../domain/frame-output.js';
@@ -24,7 +28,7 @@ function assetErrorCode(error: unknown): string | null {
     ? error.code : null;
 }
 
-async function pageItems(project: Project, loadAsset: AssetLoader): Promise<FramePageItem[]> {
+async function pageItems(project: Project, loadAsset: AssetLoader, policy: OutputPolicy): Promise<FramePageItem[]> {
   const orderedFrames: StoryboardFrame[] = project.shots.flatMap((shot: Shot): StoryboardFrame[] => project.frames
     .filter((frame: StoryboardFrame): boolean => frame.shotId === shot.id)
     .sort((left: StoryboardFrame, right: StoryboardFrame): number => left.offsetMs - right.offsetMs));
@@ -32,7 +36,7 @@ async function pageItems(project: Project, loadAsset: AssetLoader): Promise<Fram
     const shot: Shot | undefined = project.shots.find((candidate: Shot): boolean => candidate.id === frame.shotId);
     if (shot === undefined) throw contractError('SHOT_NOT_FOUND', `${frame.id}: PDF 출력용 Shot을 찾을 수 없습니다.`, []);
     const frameDecision: FrameOutputDecision = reviewFrameOutput(project, frame.id, 'pdf-export');
-    const frameIssues: Issue[] = frameDecision.issues;
+    const frameIssues: Issue[] = [...frameDecision.issues, ...reviewShotVisualTimeline(project, shot, 'pdf-export')];
     const sourceText: string = frameIssues.length > 0 ? '[OUTPUT BLOCKED]' : shot.sourceLinks.map((link): string => `[${link.usage}/${link.status}/${link.temporalAnchor.kind}:${link.temporalAnchor.basis}] ${project.dataset.units.find((unit): boolean => unit.id === link.unitId)?.text ?? link.unitId}`).join(' / ');
     const gates: EffectiveInformationGate[] = project.dataset.informationRules.filter((rule): boolean => rule.segmentId === shot.segmentId)
       .map((rule): EffectiveInformationGate => effectiveInformationGate(project, rule.id));
@@ -40,30 +44,31 @@ async function pageItems(project: Project, loadAsset: AssetLoader): Promise<Fram
     const audioBlocked: BlockedCue[] = project.audioCues.filter((cue): boolean => cue.startMs < shot.endMs && cue.endMs > shot.startMs)
       .flatMap((cue): BlockedCue[] => reviewAudioPlaybackAt(project, cue.startMs).blocked.filter((entry: BlockedCue): boolean => entry.cueId === cue.id));
     const textIssues: Issue[] = project.textCues.filter((cue: TextCue): boolean => cue.startMs < shot.endMs && cue.endMs > shot.startMs)
-      .flatMap((cue: TextCue): Issue[] => reviewIssuesForTextCue(project, cue.id));
+      .flatMap((cue: TextCue): Issue[] => reviewTextOutput(project, cue.id, policy).issues);
     let image: Buffer | null = null;
     let integrityCode: string | null = null;
-    if (frameDecision.renderBitmap && frameDecision.imageAssetId !== null) {
+    if (frameIssues.length === 0 && frameDecision.renderBitmap && frameDecision.imageAssetId !== null) {
       try {
         image = await loadAsset(frameDecision.imageAssetId);
       } catch (error: unknown) {
         integrityCode = assetErrorCode(error);
-        if (integrityCode === null) throw error;
+        if (integrityCode === null || policy.maturity === 'final') throw error;
       }
     }
     const codes: string[] = [...new Set([...frameIssues, ...textIssues, ...audioBlocked.flatMap((entry: BlockedCue): Issue[] => entry.issues)].map((value: Issue): string => value.code))];
     if (integrityCode !== null) codes.push(integrityCode);
-    const outputText: string = codes.length === 0 ? 'OUTPUT SAFE' : `DRAFT · OUTPUT INTERLOCK REVIEW REQUIRED · ${codes.join(', ')}`;
-    const placeholderText: string = integrityCode === null ? frameOutputPlaceholderText(frameDecision, frame.description)
+    const unconfirmed: boolean = project.textCues.some((cue: TextCue): boolean => cue.startMs < shot.endMs && cue.endMs > shot.startMs && cue.timingStatus === 'proposed');
+    const outputText: string = codes.length === 0 ? policy.maturity === 'final' ? 'FINAL · OUTPUT SAFE' : unconfirmed ? 'DRAFT · TIMING UNCONFIRMED' : 'DRAFT' : `DRAFT · OUTPUT INTERLOCK REVIEW REQUIRED · ${codes.join(', ')}`;
+    const placeholderText: string = integrityCode === null ? frameOutputPlaceholderText({ ...frameDecision, issues: frameIssues }, frame.description)
       : `Frame ID: ${frame.id}\nAsset ID: ${frameDecision.imageAssetId ?? 'NONE'}\nIssue: ${integrityCode}`;
-    return { frame, shot, image, renderMode: frameDecision.renderMode,
+    return { frame, shot, image, renderMode: integrityCode !== null || frameIssues.length > 0 ? 'blocked' : frameDecision.renderMode,
       sourceText, gateText, outputText, placeholderText };
   }));
 }
 
-function addHeader(document: PDFKit.PDFDocument, project: Project, page: number, totalPages: number): void {
+function addHeader(document: PDFKit.PDFDocument, project: Project, page: number, totalPages: number, policy: OutputPolicy): void {
   document.fillColor('#101820').fontSize(17).text(project.title, 32, 24, { width: 610, lineBreak: false });
-  document.fillColor('#59636d').fontSize(8).text(`STORYBOARD  ·  ${project.profile.aspectWidth}:${project.profile.aspectHeight}  ·  REV ${project.revision}`, 32, 48, { width: 610, lineBreak: false });
+  document.fillColor('#59636d').fontSize(8).text(`STORYBOARD  ·  ${policy.maturity.toUpperCase()}  ·  ${project.profile.aspectWidth}:${project.profile.aspectHeight}  ·  REV ${project.revision}`, 32, 48, { width: 610, lineBreak: false });
   document.fillColor('#101820').fontSize(9).text(`${page} / ${totalPages}`, 760, 31, { width: 50, align: 'right', lineBreak: false });
   document.moveTo(32, 64).lineTo(810, 64).lineWidth(0.8).strokeColor('#c8cdd2').stroke();
 }
@@ -106,14 +111,23 @@ function drawCard(document: PDFKit.PDFDocument, item: FramePageItem, index: numb
   document.fillColor('#59636d').fontSize(7).text('GATE', x + 8, y + 194, { width: 50 });
   document.fillColor('#101820').fontSize(7).text(item.gateText || '—', x + 58, y + 193, { width: width - 74, height: 13, ellipsis: true });
   document.fillColor('#59636d').fontSize(7).text(`FRAME ${item.frame.role.toUpperCase()} · ${item.frame.visualReview.toUpperCase()} · DISPLAY ${frameDisplayAbsoluteMs(item.shot, item.frame)} · EVAL ${frameEvaluationAbsoluteMs(item.shot, item.frame)}`, x + 8, y + 208, { width: width - 16, lineBreak: false });
-  document.fillColor(item.outputText === 'OUTPUT SAFE' ? '#2f6b4f' : '#a33a2a').fontSize(6.5).text(item.outputText, x + 8, y + 218, { width: width - 16, lineBreak: false, ellipsis: true });
+  document.fillColor(item.outputText === 'FINAL · OUTPUT SAFE' ? '#2f6b4f' : '#a33a2a').fontSize(6.5).text(item.outputText, x + 8, y + 218, { width: width - 16, height: 8, ellipsis: true });
 }
 
 /** 현재 컷 순서와 프레임을 A4 가로형 제작 콘티로 렌더링한다. */
 export async function exportProjectPdf(project: Project, fontPath: string, loadAsset: AssetLoader): Promise<Buffer> {
-  const items: FramePageItem[] = await pageItems(project, loadAsset);
+  return exportProjectPdfForPolicy(project, fontPath, loadAsset, { maturity: 'draft', channel: 'pdf-export' }, {});
+}
+
+export async function exportProjectPdfForPolicy(project: Project, fontPath: string, loadAsset: AssetLoader, policy: OutputPolicy, integrity: AssetIntegrityStatuses): Promise<Buffer> {
+  return exportProjectPdfAt(project, fontPath, loadAsset, policy, integrity, new Date().toISOString());
+}
+
+export async function exportProjectPdfAt(project: Project, fontPath: string, loadAsset: AssetLoader, policy: OutputPolicy, integrity: AssetIntegrityStatuses, createdAt: string): Promise<Buffer> {
+  if (policy.maturity === 'final') assertFinalReadiness(reviewFinalReadiness(project, integrity));
+  const items: FramePageItem[] = await pageItems(project, loadAsset, policy);
   const totalPages: number = Math.max(1, Math.ceil(items.length / 4));
-  const document = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 0, autoFirstPage: false, info: { Title: `${project.title} Storyboard`, Author: 'Storyboard Generator' } });
+  const document = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 0, autoFirstPage: false, info: { Title: `${policy.maturity.toUpperCase()} ${project.title} Storyboard`, Author: 'Storyboard Generator', CreationDate: new Date(createdAt), ModDate: new Date(createdAt) } });
   document.registerFont('Korean', fontPath);
   document.font('Korean');
   const chunks: Buffer[] = [];
@@ -124,7 +138,7 @@ export async function exportProjectPdf(project: Project, fontPath: string, loadA
   });
   for (let pageIndex: number = 0; pageIndex < totalPages; pageIndex += 1) {
     document.addPage();
-    addHeader(document, project, pageIndex + 1, totalPages);
+    addHeader(document, project, pageIndex + 1, totalPages, policy);
     items.slice(pageIndex * 4, pageIndex * 4 + 4).forEach((item: FramePageItem, index: number): void => {
       drawCard(document, item, index, project.profile.aspectWidth, project.profile.aspectHeight, project.handoff.timebase);
     });

@@ -1,6 +1,8 @@
 import { audioTimingIssues } from './audio.js';
-import { reviewInformationEmission, reviewIssuesForTextCue, textCueInformationIds } from './emission.js';
+import { reviewInformationEmission, textCueInformationIds } from './emission.js';
 import { issue } from './errors.js';
+import { reviewTextOutput } from './output-policy.js';
+import type { OutputPolicy } from './output-policy.js';
 import type { Asset, AudioCue, Issue, Project, Shot, StoryboardFrame, TextCue } from './schema.js';
 import { frameEvaluationAbsoluteMs } from './time.js';
 
@@ -11,7 +13,7 @@ export type BlockedCue = {
   atMs: number;
   issues: Issue[];
 };
-export type TextPlaybackReview = { playable: TextCue[]; blocked: BlockedCue[] };
+export type TextPlaybackReview = { playable: TextCue[]; blocked: BlockedCue[]; unconfirmedCueIds: string[] };
 export type AudioPlaybackReview = { playable: AudioCue[]; blocked: BlockedCue[] };
 
 export function activeStoryboardShot(project: Project, playheadMs: number): Shot | null {
@@ -35,14 +37,18 @@ export function activeStoryboardFrame(project: Project, shotId: string, playhead
 }
 
 export function reviewTextPlaybackAt(project: Project, playheadMs: number): TextPlaybackReview {
+  return reviewTextPlaybackWithPolicy(project, playheadMs, { maturity: 'draft', channel: 'program-monitor' });
+}
+
+export function reviewTextPlaybackWithPolicy(project: Project, playheadMs: number, policy: OutputPolicy): TextPlaybackReview {
   const playable: TextCue[] = [];
   const blocked: BlockedCue[] = [];
   for (const cue of project.textCues.filter((candidate: TextCue): boolean => candidate.startMs <= playheadMs && playheadMs < candidate.endMs)) {
-    const issues: Issue[] = reviewIssuesForTextCue(project, cue.id);
+    const issues: Issue[] = reviewTextOutput(project, cue.id, policy).issues;
     if (issues.length === 0) playable.push(cue);
     else blocked.push({ cueId: cue.id, channel: 'text-overlay', informationIds: textCueInformationIds(project, cue), atMs: playheadMs, issues });
   }
-  return { playable, blocked };
+  return { playable, blocked, unconfirmedCueIds: playable.filter((cue: TextCue): boolean => cue.timingStatus === 'proposed').map((cue: TextCue): string => cue.id) };
 }
 
 export function playableTextCuesAt(project: Project, playheadMs: number): TextCue[] {

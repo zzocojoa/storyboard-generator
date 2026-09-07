@@ -76,14 +76,17 @@ test('e2e_open_text_placement_end_is_edited_and_confirmed', async ({ page }): Pr
     const start = editor.locator('label.field').filter({ hasText: /^START MS/ }).locator('input');
     const end = editor.locator('label.field').filter({ hasText: /^END MS/ }).locator('input');
     await expect(editor).toBeVisible(); await expect(editor.locator('header span')).toHaveText('PROPOSED');
+    await expect(editor).toContainText('DRAFT · TIMING UNCONFIRMED');
     await expect(type).toBeDisabled(); await expect(start).toBeDisabled(); await expect(end).toBeEnabled();
     const changedEndMs: number = cue.endMs + 500;
     await end.fill(String(changedEndMs)); await expect(editor.getByRole('button', { name: '변경 저장 후 확정' })).toBeDisabled();
     await editor.getByRole('button', { name: '종료 시각 저장' }).click();
     await expect(editor.locator('header span')).toHaveText('PROPOSED'); await expect(end).toHaveValue(String(changedEndMs));
+    await expect(editor).toContainText('DRAFT · TIMING UNCONFIRMED');
     await expect(editor.getByRole('button', { name: '시각 확정', exact: true })).toBeEnabled();
     await editor.getByRole('button', { name: '시각 확정', exact: true }).click();
     await expect(editor.locator('header span')).toHaveText('CONFIRMED'); await expect(editor.getByRole('button', { name: '시각 확정됨' })).toBeDisabled();
+    await expect(editor).toContainText('TEXT CONFIRMED');
   } finally { await stopApp(running); }
 });
 

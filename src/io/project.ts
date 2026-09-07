@@ -1,6 +1,7 @@
 import { link, mkdir, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
+import { z } from 'zod';
 import { assertNoErrors, contractError } from '../domain/errors.js';
 import { ProjectSchema } from '../domain/schema.js';
 import type { Project } from '../domain/schema.js';
@@ -10,6 +11,11 @@ import { isSafePackagePath, parseJson } from '../importers/integrity.js';
 import { readUtf8 } from './package.js';
 
 type JsonObject = { [key: string]: unknown };
+
+export const ReviewProjectEnvelopeSchema = z.strictObject({
+  artifactType: z.literal('storyboard-review-project'), artifactVersion: z.literal('1.0.0'),
+  maturity: z.enum(['draft', 'final']), project: z.unknown(),
+});
 
 function isJsonObject(input: unknown): input is JsonObject {
   return typeof input === 'object' && input !== null && !Array.isArray(input);
@@ -150,15 +156,23 @@ function migrate15To16(input: JsonObject): JsonObject {
   };
 }
 
-/** 1.0~1.5 저장본을 명시적인 시각 모드가 있는 1.6 형식으로 올린다. */
+function migrate16To17(input: JsonObject): JsonObject {
+  if (input.schemaVersion !== '1.6.0' || !Array.isArray(input.generationRecords)) return input;
+  return { ...input, schemaVersion: '1.7.0', generationRecords: input.generationRecords.map((record: unknown): unknown =>
+    isJsonObject(record) ? { ...record, generatorBuild: null } : record) };
+}
+
+/** 기존 저장본은 원문·Anchor·Asset을 보존하고 알 수 없는 생성 Build만 null로 이관한다. */
 export function migrateProjectInput(input: unknown): unknown {
   if (!isJsonObject(input)) return input;
-  return migrate15To16(migrate14To15(migrate13To14(migrate12To13(migrate11To12(migrate10To11(input))))));
+  return migrate16To17(migrate15To16(migrate14To15(migrate13To14(migrate12To13(migrate11To12(migrate10To11(input)))))));
 }
 
 /** 저장된 원본 스냅샷에서 데이터를 다시 계산해 편집 가능한 값과 원문을 구분한다. */
 export function parseProject(input: unknown): Project {
-  const project: Project = ProjectSchema.parse(migrateProjectInput(input));
+  const payload: unknown = isJsonObject(input) && input.artifactType === 'storyboard-review-project'
+    ? ReviewProjectEnvelopeSchema.parse(input).project : input;
+  const project: Project = ProjectSchema.parse(migrateProjectInput(payload));
   const source: Project = recoverSourceProject(project);
   if (JSON.stringify(project.sources) !== JSON.stringify(source.sources)) throw contractError('SOURCE_SNAPSHOT_MODIFIED', '입력 계약과 저장된 원본 스냅샷의 메타데이터가 다릅니다.', []);
   if (JSON.stringify(project.importIssues) !== JSON.stringify(source.importIssues)) throw contractError('IMPORT_ISSUES_MODIFIED', '원본 검토 항목을 덮어쓸 수 없습니다. 별도의 검토 결정으로 처리하세요.', []);

@@ -1,3 +1,4 @@
+import { testGeneratorBuild } from './helpers.js';
 import { describe, expect, it } from 'vitest';
 import { audioOverhangAfterMs, audioOverhangBeforeMs, audioTimingIssues } from '../src/domain/audio.js';
 import { addStoryboardFrame } from '../src/domain/frame.js';
@@ -237,7 +238,7 @@ describe('End frame evaluation', (): void => {
     const changed: Project = frameProject(project, shot, 'end-frame-anchor');
     const sourceLink = shot.sourceLinks[0];
     if (sourceLink === undefined) throw new Error('검증용 Source Link가 없습니다.');
-    const link = { ...sourceLink, temporalAnchor: { kind: 'frame' as const, frameId: 'end-frame-anchor', basis: 'manual' as const, status: 'confirmed' as const } };
+    const link = { ...sourceLink, temporalAnchor: { kind: 'frame-range' as const, frameId: 'end-frame-anchor', endOffsetMs: shot.endMs - shot.startMs, basis: 'manual' as const, status: 'confirmed' as const } };
     expect(sourceAnchorRange(changed, shot, link)).toEqual({ startMs: shot.endMs - 1, endMs: shot.endMs });
   });
 
@@ -335,7 +336,7 @@ describe('J-cut and L-cut contract', (): void => {
     const project: Project = await outline();
     const cue: AudioCue = project.audioCues.find((candidate: AudioCue): boolean => candidate.unitId === '안내-1') as AudioCue;
     const prepared: Project = { ...project, audioCues: project.audioCues.map((candidate: AudioCue): AudioCue => candidate.id === cue.id ? { ...candidate, startMs: 4000, endMs: 6000, timingRelation: 'j-cut' } : candidate) };
-    const mutation = await applyGeneratedSpeech(prepared, cue.id, 'j-cut-speech', '2026-09-06T00:00:00.000Z', { bytes: wav(1500), provider: 'codex-app', prompt: '가이드', model: 'macos-say:test', requestId: 'request', mimeType: 'audio/wav' }, testAudioNormalizer());
+    const mutation = await applyGeneratedSpeech(prepared, cue.id, 'j-cut-speech', '2026-09-06T00:00:00.000Z', { bytes: wav(1500), generatorBuild: testGeneratorBuild(), provider: 'codex-app', prompt: '가이드', model: 'macos-say:test', requestId: 'request', mimeType: 'audio/wav' }, testAudioNormalizer());
     expect(mutation.project.audioCues.find((candidate: AudioCue): boolean => candidate.id === cue.id)).toEqual(expect.objectContaining({ startMs: 4000, endMs: 5500, timingRelation: 'j-cut', timingStatus: 'measured' }));
   });
 });
@@ -343,7 +344,7 @@ describe('J-cut and L-cut contract', (): void => {
 describe('1.3 to 1.4 migration', (): void => {
   it('migration_1_3_to_1_4_defaults_audio_to_within_segment', async (): Promise<void> => {
     const migrated: Project = parseProject(legacy13(await outline()));
-    expect(migrated.schemaVersion).toBe('1.6.0');
+    expect(migrated.schemaVersion).toBe('1.7.0');
     expect(migrated.audioCues.every((cue: AudioCue): boolean => cue.timingRelation === 'within-segment')).toBe(true);
   });
 
@@ -360,7 +361,7 @@ describe('1.3 to 1.4 migration', (): void => {
     const project: Project = await outline();
     const frame: StoryboardFrame = project.frames[0] as StoryboardFrame;
     const asset: Asset = { id: 'preserved-image', kind: 'image', subjectId: frame.id, path: 'assets/preserved.png', mimeType: 'image/png', sha256: '2'.repeat(64), description: '보존', durationMs: null, version: 1 };
-    const prepared: Project = { ...project, assets: [asset], generationRecords: [{ id: 'preserved-generation', provider: 'codex-app', model: 'imagegen', modelVersion: null,
+    const prepared: Project = { ...project, assets: [asset], generationRecords: [{ id: 'preserved-generation', provider: 'codex-app', model: 'imagegen', generatorBuild: null, modelVersion: null,
       requestId: 'request', prompt: '보존', templateVersion: '1', seed: null, referenceHashes: [], resultAssetIds: [asset.id], shotIds: [frame.shotId], createdAt: '2026-09-06T00:00:00.000Z' }] };
     const migrated: Project = parseProject(legacy13(prepared));
     expect(migrated.assets).toEqual(prepared.assets);

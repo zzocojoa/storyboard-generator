@@ -2,6 +2,7 @@ import { assertNoErrors, contractError } from './errors.js';
 import { approvalIssuesForShot, effectiveInformationGate, sourceAnchorRange } from './mapping.js';
 import { ProjectSchema, ShotContentSchema } from './schema.js';
 import type { Asset, AudioCue, Issue, LockedField, Project, Shot, ShotContent, ShotSourceLink, SourceUnit, StoryboardFrame, TextCue, TextMappingDecision, TextPlacement } from './schema.js';
+import { shotVisualCoverageIssues, visualModeStructureIssues } from './source-policy.js';
 import { validateProject } from './validation.js';
 
 export function shotContent(shot: Shot): ShotContent {
@@ -44,6 +45,11 @@ export function updateShotContent(project: Project, shotId: string, input: ShotC
   const fields: LockedField[] = changedContentFields(shot, content);
   requireUnlocked(shot, fields);
   if (fields.length === 0) return project;
+  if (shot.visualMode !== content.visualMode) {
+    const nextShot: Shot = { ...shot, ...content };
+    const issues: Issue[] = [...shotVisualCoverageIssues(project, nextShot), ...visualModeStructureIssues(project, nextShot)];
+    if (issues.length > 0) throw contractError('VISUAL_MODE_CHANGE_BLOCKED', issues.map((value: Issue): string => value.message).join('\n'), issues);
+  }
   return finishEdit(project, { ...project,
     shots: project.shots.map((candidate: Shot): Shot => candidate.id === shotId ? { ...candidate, ...content, proposalOrigin: 'manual', approvalStatus: 'proposed' } : candidate),
     frames: project.frames.map((frame: StoryboardFrame): StoryboardFrame => frame.shotId === shotId ? { ...frame, visualReview: 'pending' } : frame),

@@ -1,9 +1,13 @@
+import { reviewFinalReadiness, shotFinalVisualIssues } from '../domain/final-readiness.js';
+import type { FinalReadinessReport } from '../domain/final-readiness.js';
+import { reviewVisualOutputAt } from '../domain/visual-output.js';
+import type { VisualOutputChannel } from '../domain/visual-output.js';
 import { randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
 import { dirname, join, relative, sep } from 'node:path';
 import { stat } from 'node:fs/promises';
 import { z } from 'zod';
-import { assertAssetFreeInitialProject, assertAssetReferenceClosure } from '../domain/asset-references.js';
+import { assertAssetFreeInitialProject, assertAssetReferenceClosure, currentVisualReferenceAssets } from '../domain/asset-references.js';
 import { contractError } from '../domain/errors.js';
 import type { ContractError } from '../domain/errors.js';
 import { reviewFrameOutput } from '../domain/frame-output.js';
@@ -29,6 +33,8 @@ export type ProjectSummary = {
   framesWithAsset: number; framesAccepted: number; framesOutputSafe: number; framesTotal: number;
   audioWithAsset: number; audioMeasured: number; audioPlayable: number; audioRepairRequired: number; audioTotal: number;
   textPlayable: number; textTotal: number; blockedOutputCount: number; issues: number; updatedAt: string;
+  visualTimelineSafe: boolean; visualCoverageGapCount: number; shotsOutputSafe: number; shotsTotal: number;
+  textConfirmed: number; textProposed: number; finalOutputReady: boolean;
 };
 export type AssetWrite = { relativePath: string; content: Buffer };
 export type AssetCatalogTransition = {
@@ -50,6 +56,7 @@ export type StorageRecoveryEvent = {
 export type ActiveCreateState = {
   projectId: string; transactionId: string; host: string; pid: number; processInstanceId: string | null; detectedAt: string;
 };
+export type ActiveUpdateError = { projectId: string; transactionId: string; code: string; message: string; detectedAt: string };
 export type ActiveUpdateState = {
   projectId: string; transactionId: string; host: string; pid: number; processInstanceId: string | null; detectedAt: string;
 };
@@ -168,6 +175,7 @@ export type InvalidRecoveryMarker = {
 export type StorageStatusSnapshot = {
   activeCreates: readonly ActiveCreateState[];
   activeUpdates: readonly ActiveUpdateState[];
+  activeUpdateErrors: readonly ActiveUpdateError[];
   recoveryBlocks: readonly StorageRecoveryBlock[];
   invalidRecoveryMarkers: readonly InvalidRecoveryMarker[];
   processHeartbeat: ProcessHeartbeatStatus;
@@ -243,7 +251,7 @@ function defaultProcessProbe(pid: number): boolean {
   try { process.kill(pid, 0); return true; }
   catch (error: unknown) { if (error instanceof Error && 'code' in error && error.code === 'ESRCH') return false; throw error; }
 }
-function assetFailureCode(error: unknown): string | null {
+export function assetFailureCode(error: unknown): string | null {
   const code: string = errorCode(error);
   return ['ASSET_FILE_MISSING', 'ASSET_HASH_MISMATCH', 'ASSET_MIME_MISMATCH', 'ASSET_CONTENT_CORRUPT', 'ASSET_PATH_UNSAFE',
     'AUDIO_ASSET_METADATA_MISSING', 'AUDIO_ASSET_METADATA_MISMATCH', 'AUDIO_ASSET_NORMALIZATION_REQUIRED', 'STORE_PATH_UNSAFE']
@@ -366,6 +374,7 @@ export class ProjectStore {
   readonly #recoveryBlocks: Map<string, StorageRecoveryBlock> = new Map<string, StorageRecoveryBlock>();
   readonly #invalidRecoveryMarkers: InvalidRecoveryMarker[] = [];
   readonly #activeCreates: Map<string, ActiveCreateState> = new Map<string, ActiveCreateState>();
+  readonly #activeUpdateErrors: Map<string, ActiveUpdateError> = new Map<string, ActiveUpdateError>();
   readonly #activeUpdates: Map<string, ActiveUpdateState> = new Map<string, ActiveUpdateState>();
   #initialization: Promise<void> | null = null;
   #processInstanceRegistered: boolean = false;
@@ -763,8 +772,12 @@ export class ProjectStore {
     }
     if (metadata === null) recoveryRequired(`Project lock을 해석할 수 없습니다. directory=${directoryName}, cause=${parseError instanceof Error ? parseError.message : String(parseError)}`);
     if (projectKey(metadata.projectId) !== directoryName) recoveryRequired(`Project lock과 저장 디렉터리가 다릅니다. projectId=${metadata.projectId}`);
-    if (metadata.host !== hostname()) recoveryRequired(`다른 Host의 Project lock은 자동 삭제할 수 없습니다. projectId=${metadata.projectId}`);
-    return { metadata, path, identity: await this.#fs.identity(path) };
+    const lock: RecoveryLock = { metadata, path, identity: await this.#fs.identity(path) };
+    if (metadata.host !== hostname()) {
+      this.#rememberActiveUpdate(lock);
+      recoveryRequired(`다른 Host의 Project lock은 자동 삭제할 수 없습니다. projectId=${metadata.projectId}`);
+    }
+    return lock;
   }
 
   async #readRootCreateLock(entryName: string): Promise<RecoveryLock | null> {
@@ -811,10 +824,11 @@ export class ProjectStore {
   }
 
   #rememberActiveUpdate(lock: RecoveryLock): void {
+    const previous: ActiveUpdateState | undefined = this.#activeUpdates.get(projectKey(lock.metadata.projectId));
     this.#activeUpdates.set(projectKey(lock.metadata.projectId), {
       projectId: lock.metadata.projectId, transactionId: lock.metadata.transactionId, host: lock.metadata.host,
       pid: lock.metadata.pid, processInstanceId: lock.metadata.version === 3 ? lock.metadata.processInstanceId : null,
-      detectedAt: this.#nowIso(),
+      detectedAt: previous?.transactionId === lock.metadata.transactionId ? previous.detectedAt : this.#nowIso(),
     });
   }
 
@@ -961,6 +975,7 @@ export class ProjectStore {
     let lock: RecoveryLock | null = await this.#readRecoveryLock(directoryName);
     const projectId: string = await this.#projectIdForDirectory(directoryName, lock, transactionNames);
     if (projectKey(projectId) !== directoryName) recoveryRequired(`Project ID와 저장 디렉터리가 다릅니다. projectId=${projectId}, directory=${directoryName}`);
+    if (lock !== null) this.#rememberActiveUpdate(lock);
     if (lock !== null && await this.#ownerIsActive(lock)) {
       this.#rememberActiveUpdate(lock);
       await this.#readConsistentCurrentUnderLock(projectId, lock);
@@ -979,6 +994,7 @@ export class ProjectStore {
     if (lock !== null) {
       await this.#removeRecoveryLock(lock);
       this.#activeUpdates.delete(directoryName);
+      this.#activeUpdateErrors.delete(directoryName);
       this.#recordRecovery({ projectId, transactionId: lock.metadata.transactionId, outcome: 'stale-lock-removed' });
     }
     await this.#verifyCurrentSnapshot(projectId);
@@ -1265,9 +1281,11 @@ export class ProjectStore {
     const lock: RecoveryLock | null = await this.#readRecoveryLock(directoryName);
     if (lock === null) {
       this.#activeUpdates.delete(directoryName);
+      this.#activeUpdateErrors.delete(directoryName);
       return false;
     }
     try {
+      this.#rememberActiveUpdate(lock);
       if (await this.#ownerIsActive(lock)) {
         this.#rememberActiveUpdate(lock);
         return true;
@@ -1275,6 +1293,7 @@ export class ProjectStore {
       await this.#recoverProjectDirectory(directoryName);
       await this.#clearRecoveryBlock(directoryName);
       this.#activeUpdates.delete(directoryName);
+      this.#activeUpdateErrors.delete(directoryName);
       return false;
     } catch (error: unknown) {
       if (errorCode(error) === 'PROJECT_BUSY') {
@@ -1289,6 +1308,8 @@ export class ProjectStore {
   async #writeRecoveryBlock(directoryName: string, projectId: string, transactionId: string, error: unknown): Promise<void> {
     const block: StorageRecoveryBlock = StorageRecoveryBlockSchema.parse({ version: 1, projectId, directoryName, transactionId,
       code: errorCode(error), message: error instanceof Error ? error.message : String(error), detectedAt: this.#nowIso() });
+    const previous: StorageRecoveryBlock | undefined = this.#recoveryBlocks.get(directoryName);
+    if (previous !== undefined && previous.code === block.code && previous.message === block.message && previous.transactionId === block.transactionId) return;
     const path: string = this.#recoveryBlockPath(directoryName);
     if (await this.#fs.kind(path) === 'file') await this.#writeReplacement(path, JSON.stringify(block), randomUUID());
     else await this.#fs.writeExclusive(path, JSON.stringify(block));
@@ -1354,6 +1375,7 @@ export class ProjectStore {
     const blockedDuringInitialization: Set<string> = new Set<string>();
     this.#activeCreates.clear();
     this.#activeUpdates.clear();
+    this.#activeUpdateErrors.clear();
     for (const entry of await this.#fs.entries(this.#createLocksPath())) {
       const fileKey: string = /^[a-f0-9]{64}\.lock$/.test(entry.name) ? entry.name.slice(0, -5) : projectKey(`unknown:${entry.name}`);
       let lock: RecoveryLock | null = null;
@@ -1536,8 +1558,11 @@ export class ProjectStore {
   }
 
   async #summary(project: Project, updatedAt: string): Promise<ProjectSummary> {
+    const integrity: Record<string, string> = await this.#integrityForProject(project);
+    const safeShotIds: Set<string> = new Set(project.shots.filter((shot): boolean => shotFinalVisualIssues(project, shot, integrity).length === 0).map((shot): string => shot.id));
     let framesOutputSafe: number = 0;
     for (const frame of project.frames) {
+      if (!safeShotIds.has(frame.shotId)) continue;
       const decision = reviewFrameOutput(project, frame.id, 'program-monitor');
       if (decision.renderMode === 'blocked') continue;
       if (decision.imageAssetId === null) { framesOutputSafe += 1; continue; }
@@ -1552,6 +1577,7 @@ export class ProjectStore {
       try { await this.#assetForProject(project, cue.assetId); if (playable) audioPlayable += 1; }
       catch (error: unknown) { const code: string | null = assetFailureCode(error); if (code === null) throw error; if (code.startsWith('AUDIO_ASSET_') || code.startsWith('STORED_AUDIO_')) audioRepairRequired += 1; }
     }
+    const finalReport: FinalReadinessReport = reviewFinalReadiness(project, integrity);
     const textPlayable: number = project.textCues.filter((cue): boolean => reviewTextPlaybackAt(project, cue.startMs).playable.some((candidate): boolean => candidate.id === cue.id)).length;
     const blockedOutputCount: number = project.frames.length - framesOutputSafe + project.audioCues.length - audioPlayable + project.textCues.length - textPlayable;
     return { projectId: project.projectId, title: project.title, revision: project.revision,
@@ -1566,6 +1592,10 @@ export class ProjectStore {
       audioWithAsset: project.audioCues.filter((cue): boolean => cue.assetId !== null).length,
       audioMeasured: project.audioCues.filter((cue): boolean => cue.timingStatus === 'measured').length,
       audioPlayable, audioRepairRequired, audioTotal: project.audioCues.length, textPlayable, textTotal: project.textCues.length,
+      visualTimelineSafe: finalReport.counts.visualTimelineSafe === project.shots.length && project.shots.length > 0,
+      visualCoverageGapCount: finalReport.counts.visualCoverageGapCount, shotsOutputSafe: finalReport.counts.visualTimelineSafe,
+      shotsTotal: project.shots.length, textConfirmed: finalReport.counts.textConfirmed, textProposed: finalReport.counts.textProposed,
+      finalOutputReady: finalReport.finalReady,
       blockedOutputCount, issues: project.importIssues.length, updatedAt };
   }
 
@@ -1646,13 +1676,31 @@ export class ProjectStore {
         await this.#writeRecoveryBlock(projectKey(state.projectId), state.projectId, state.transactionId, error);
       }
     }
-    const updateStates: readonly ActiveUpdateState[] = [...this.#activeUpdates.values()];
+    const candidates: Map<string, { projectId: string; transactionId: string }> = new Map(
+      [...this.#activeUpdates.values()].map((state: ActiveUpdateState) => [state.projectId, state]));
+    for (const entry of await this.#fs.entries(this.#fs.root())) {
+      if (!entry.isDirectory() || !/^[a-f0-9]{64}$/.test(entry.name)) continue;
+      if (await this.#fs.kind(this.#fs.path(entry.name, 'write.lock')) === 'missing') continue;
+      const currentPath: string = this.#fs.path(entry.name, 'project.json');
+      if (await this.#fs.kind(currentPath) !== 'file') continue;
+      const current: Project = await this.#readProjectFile(currentPath);
+      if (!candidates.has(current.projectId)) candidates.set(current.projectId, { projectId: current.projectId, transactionId: 'unknown' });
+    }
+    const updateStates = [...candidates.values()];
     for (const state of updateStates) {
-      try { await this.#refreshActiveUpdate(state.projectId); }
-      catch { this.#activeUpdates.delete(projectKey(state.projectId)); }
+      try { await this.#refreshActiveUpdate(state.projectId); this.#activeUpdateErrors.delete(projectKey(state.projectId)); }
+      catch (error: unknown) {
+        const key: string = projectKey(state.projectId);
+        const previous: ActiveUpdateError | undefined = this.#activeUpdateErrors.get(key);
+        const code: string = errorCode(error);
+        const message: string = error instanceof Error ? error.message : String(error);
+        this.#activeUpdateErrors.set(key, previous?.code === code && previous.message === message ? previous
+          : { projectId: state.projectId, transactionId: this.#activeUpdates.get(key)?.transactionId ?? state.transactionId, code, message, detectedAt: this.#nowIso() });
+        await this.#writeRecoveryBlock(key, state.projectId, this.#activeUpdates.get(key)?.transactionId ?? state.transactionId, error);
+      }
     }
     return {
-      activeCreates: this.activeCreates(), activeUpdates: this.activeUpdates(), recoveryBlocks: this.recoveryBlocks(),
+      activeCreates: this.activeCreates(), activeUpdates: this.activeUpdates(), activeUpdateErrors: [...this.#activeUpdateErrors.values()], recoveryBlocks: this.recoveryBlocks(),
       invalidRecoveryMarkers: this.invalidRecoveryMarkers(), processHeartbeat: this.processHeartbeat(),
     };
   }
@@ -1695,14 +1743,20 @@ export class ProjectStore {
       const current: Project = parseProject(JSON.parse(firstContent) as unknown);
       const versions: Project[] = (await this.#versionProjects(projectId, null))
         .filter((version: Project): boolean => version.revision <= current.revision);
-      const revisions: ReadonlySet<number> = new Set<number>(versions.map((version: Project): number => version.revision));
-      for (let revision: number = 0; revision <= current.revision; revision += 1) if (!revisions.has(revision)) {
-        recoveryRequired(`Generation Audit에 필요한 revision snapshot이 없습니다. projectId=${projectId}, revision=${revision}`);
-      }
       await this.#fault('before-audit-current-recheck');
       const secondContent: string = await this.#fs.readText(this.#currentPath(projectId));
       const second: Project = parseProject(JSON.parse(secondContent) as unknown);
       if (current.revision === second.revision && sha256Text(firstContent) === sha256Text(secondContent)) {
+        const canonical: Project | undefined = versions.find((version: Project): boolean => version.revision === current.revision);
+        if (canonical === undefined || JSON.stringify(canonical) !== JSON.stringify(current)) {
+          const error = contractError('AUDIT_CURRENT_VERSION_MISMATCH', `${projectId}: Current와 revision ${current.revision}의 Version Snapshot이 일치하지 않습니다.`, []);
+          await this.#writeRecoveryBlock(projectKey(projectId), projectId, `audit:${current.revision}`, error);
+          throw error;
+        }
+        const revisions: ReadonlySet<number> = new Set<number>(versions.map((version: Project): number => version.revision));
+        for (let revision: number = 0; revision <= current.revision; revision += 1) if (!revisions.has(revision)) {
+          recoveryRequired(`Generation Audit에 필요한 revision snapshot이 없습니다. projectId=${projectId}, revision=${revision}`);
+        }
         return auditGenerationRecords(current, versions);
       }
     }
@@ -1924,7 +1978,11 @@ export class ProjectStore {
   async asset(projectId: string, assetId: string): Promise<StoredAsset> { return this.#assetForProject(await this.read(projectId), assetId); }
 
   async assetIntegrity(projectId: string): Promise<Record<string, string>> {
-    const project: Project = await this.read(projectId); const result: Record<string, string> = {};
+    return this.#integrityForProject(await this.read(projectId));
+  }
+
+  async #integrityForProject(project: Project): Promise<Record<string, string>> {
+    const result: Record<string, string> = {};
     for (const asset of project.assets) {
       try { await this.#assetForProject(project, asset.id); result[asset.id] = 'verified'; }
       catch (error: unknown) { const code: string | null = assetFailureCode(error); if (code === null) throw error; result[asset.id] = code; }
@@ -1947,12 +2005,7 @@ export class ProjectStore {
     for (const shot of project.shots) {
       for (const assetId of shot.propIds) remember(assetId, `shot:${shot.id}:prop`);
       for (const continuity of [...shot.continuityBefore, ...shot.continuityAfter]) remember(continuity.assetId, `shot:${shot.id}:continuity`);
-      const subjectIds: ReadonlySet<string> = new Set<string>([
-        ...(shot.visualLocationId === null ? [] : [shot.visualLocationId]),
-        ...shot.presence.map((presence): string => presence.personId),
-      ]);
-      for (const asset of project.assets) if (asset.subjectId !== null && subjectIds.has(asset.subjectId)
-        && ['character', 'location'].includes(asset.kind)) remember(asset.id, `shot:${shot.id}:visual-reference`);
+      for (const asset of currentVisualReferenceAssets(project, shot)) remember(asset.id, `shot:${shot.id}:visual-reference`);
     }
     const issues: AssetIntegrityIssue[] = [];
     for (const [assetId, targetIds] of targetIdsByAssetId) {
@@ -1984,6 +2037,29 @@ export class ProjectStore {
     const formatMatches: boolean = inspection.sampleRate === project.handoff.timebase.sampleRate && inspection.codec === 'pcm_s16le';
     if (metadataMatches && timelineMatches && formatMatches) throw contractError('AUDIO_ASSET_ALREADY_NORMALIZED', `Audio Asset이 이미 현재 Project 형식과 일치합니다. cueId=${cueId}, assetId=${asset.id}`, []);
     return { content, asset, inspection };
+  }
+
+  async outputSnapshot(projectId: string): Promise<{ project: Project; integrity: Record<string, string>; readiness: FinalReadinessReport }> {
+    const project: Project = await this.read(projectId);
+    const integrity: Record<string, string> = await this.#integrityForProject(project);
+    const current: Project = await this.read(projectId);
+    if (JSON.stringify(project) !== JSON.stringify(current)) throw contractError('AUDIT_SNAPSHOT_CHANGED',
+      `${projectId}: 출력 검사 중 Project가 변경됐습니다. 현재 Revision에서 다시 요청하세요.`, []);
+    return { project, integrity, readiness: reviewFinalReadiness(project, integrity) };
+  }
+
+  async finalReadiness(projectId: string): Promise<FinalReadinessReport> {
+    return (await this.outputSnapshot(projectId)).readiness;
+  }
+
+  async safeVisual(projectId: string, atMs: number, channel: VisualOutputChannel): Promise<SafeFrameOutput> {
+    const project: Project = await this.read(projectId);
+    const decision = reviewVisualOutputAt(project, atMs, channel);
+    if (decision.renderMode === 'blocked') throw contractError(decision.issues.some((value): boolean => value.code === 'INVALID_VISUAL_PLAYHEAD')
+      ? 'INVALID_VISUAL_PLAYHEAD' : 'VISUAL_OUTPUT_BLOCKED', decision.issues.map((value): string => value.message).join('\n'), decision.issues);
+    if (decision.imageAssetId === null) return { content: BLACK_FRAME_PNG, mimeType: 'image/png', asset: null, sourceFrameId: decision.sourceFrameId };
+    const stored: StoredAsset = await this.#assetForProject(project, decision.imageAssetId);
+    return { ...stored, sourceFrameId: decision.sourceFrameId };
   }
 
   async safeFrame(projectId: string, frameId: string): Promise<SafeFrameOutput> {

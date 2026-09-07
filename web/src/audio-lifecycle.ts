@@ -2,6 +2,7 @@ export type AudioElementPort = {
   currentTime: number;
   pause: () => void;
   play: () => Promise<void>;
+  dispose?: () => void;
 };
 
 export type AudioLifecycleCue = {
@@ -42,6 +43,7 @@ export class BrowserAudioController {
     if (active === undefined) return;
     this.#scheduler.cancel(active.timerId);
     active.element.pause();
+    active.element.dispose?.();
     this.#active.delete(cueId);
   }
 
@@ -93,4 +95,24 @@ export class BrowserAudioController {
   activeCount(): number {
     return this.#active.size;
   }
+}
+
+/** 실제 Media Element를 문서 수명에 연결하고 종료 시 Decoder와 네트워크 자원을 해제한다. */
+export function createBrowserAudio(url: string): AudioElementPort {
+  const audio: HTMLAudioElement = new Audio(url);
+  if (!(audio instanceof HTMLAudioElement)) return audio;
+  audio.hidden = true;
+  audio.dataset.storyboardAudio = 'active';
+  audio.preload = 'auto';
+  let requestedTime: number = 0;
+  const seekAfterMetadata = (): void => { audio.currentTime = requestedTime; };
+  audio.addEventListener('loadedmetadata', seekAfterMetadata);
+  document.body.append(audio);
+  return {
+    get currentTime(): number { return audio.currentTime; },
+    set currentTime(value: number) { requestedTime = value; if (audio.readyState >= 1) audio.currentTime = value; },
+    play: (): Promise<void> => audio.play(),
+    pause: (): void => { audio.pause(); },
+    dispose: (): void => { audio.removeEventListener('loadedmetadata', seekAfterMetadata); audio.pause(); audio.removeAttribute('src'); audio.load(); audio.remove(); },
+  };
 }

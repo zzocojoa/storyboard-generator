@@ -1,3 +1,4 @@
+import { generatorBuildProvenance, readBuildManifest } from '../build.js';
 import { contractError } from '../domain/errors.js';
 import { assertAudioTimingRelation, audioOverhangAfterMs, audioOverhangBeforeMs } from '../domain/audio.js';
 import { reviewInformationEmission } from '../domain/emission.js';
@@ -65,6 +66,11 @@ function speechPrompt(context: SpeechContext): string {
 }
 
 export async function buildCodexWork(request: CodexRequest, project: Project, store: ProjectStore): Promise<CodexWork> {
+  const build = generatorBuildProvenance(readBuildManifest());
+  if (request.generatorBuild === null || request.generatorBuild === undefined) throw contractError('CODEX_REQUEST_BUILD_UNVERIFIED', `${request.id}: 생성 Build를 증명할 수 없습니다. 현재 Build에서 새 요청을 만드세요.`, []);
+  if (request.generatorBuild.sourceTreeSha256 !== build.sourceTreeSha256 || request.generatorBuild.projectSchemaVersion !== build.projectSchemaVersion) {
+    throw contractError('CODEX_REQUEST_BUILD_CHANGED', `${request.id}: 요청 이후 생성 로직의 Build가 변경됐습니다. 현재 Build에서 새 요청을 만드세요.`, []);
+  }
   const actualHash: string = codexRequestBasis(project, request.kind, request.targetId);
   if (actualHash !== request.basisHash) throw contractError('CODEX_REQUEST_STALE', `${request.id}: 요청 이후 대상 내용이 바뀌었습니다. 새 생성 요청을 만드세요.`, []);
   if (request.kind === 'proposal') {

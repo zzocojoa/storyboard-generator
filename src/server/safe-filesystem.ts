@@ -24,6 +24,11 @@ export class SafeStoreFilesystem {
 
   async initialize(): Promise<void> {
     await mkdir(this.#configuredRoot, { recursive: true });
+    await this.openExisting();
+  }
+
+  /** 읽기 전용 감사는 폴더 생성이나 복구 없이 기존 루트만 연다. */
+  async openExisting(): Promise<void> {
     const canonicalRoot: string = await realpath(this.#configuredRoot);
     const metadata = await lstat(canonicalRoot);
     if (!metadata.isDirectory()) unsafe(canonicalRoot, 'root is not a directory');

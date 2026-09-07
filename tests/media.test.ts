@@ -1,3 +1,4 @@
+import { testGeneratorBuild } from './helpers.js';
 import { describe, expect, it } from 'vitest';
 import type { Project } from '../src/domain/schema.js';
 import { addReferenceAsset, applyGeneratedImage, applyGeneratedSpeech, wavDurationMs } from '../src/domain/media.js';
@@ -26,9 +27,9 @@ describe('생성 미디어 반영', (): void => {
     if (cue === undefined) throw new Error('오디오 검증 자료가 없습니다.');
     const bytes: Buffer = wav(500);
     expect(wavDurationMs(bytes)).toBe(500);
-    const mutation = await applyGeneratedSpeech(project, cue.id, 'speech-generation', '2026-09-06T00:00:00.000Z', { bytes, provider: 'codex-app', prompt: '가이드', model: 'speech-model', requestId: 'request-1', mimeType: 'audio/wav' }, testAudioNormalizer());
+    const mutation = await applyGeneratedSpeech(project, cue.id, 'speech-generation', '2026-09-06T00:00:00.000Z', { bytes, generatorBuild: testGeneratorBuild(), provider: 'codex-app', prompt: '가이드', model: 'speech-model', requestId: 'request-1', mimeType: 'audio/wav' }, testAudioNormalizer());
     expect(mutation.project.audioCues.find((candidate): boolean => candidate.id === cue.id)).toEqual(expect.objectContaining({ assetId: 'speech-generation:audio', timingStatus: 'measured', endMs: cue.startMs + 500 }));
-    expect(mutation.project.generationRecords[0]).toEqual(expect.objectContaining({ provider: 'codex-app', requestId: 'request-1', resultAssetIds: ['speech-generation:audio'] }));
+    expect(mutation.project.generationRecords[0]).toEqual(expect.objectContaining({ generatorBuild: testGeneratorBuild(), provider: 'codex-app', requestId: 'request-1', resultAssetIds: ['speech-generation:audio'] }));
     expect(project.audioCues.find((candidate): boolean => candidate.id === cue.id)?.assetId).toBeNull();
   });
 
@@ -36,7 +37,7 @@ describe('생성 미디어 반영', (): void => {
     const project: Project = await outline();
     const frame = project.frames[0];
     if (frame === undefined) throw new Error('프레임 검증 자료가 없습니다.');
-    const result = { bytes: Buffer.from('not-png'), provider: 'codex-app' as const, prompt: 'frame', model: 'image-model', requestId: 'request-1', mimeType: 'image/png' as const, referenceHashes: [] };
+    const result = { bytes: Buffer.from('not-png'), generatorBuild: testGeneratorBuild(), provider: 'codex-app' as const, prompt: 'frame', model: 'image-model', requestId: 'request-1', mimeType: 'image/png' as const, referenceHashes: [] };
     await expect(applyGeneratedImage(project, frame.id, 'image-generation', '2026-09-06T00:00:00.000Z', result)).rejects.toEqual(expect.objectContaining({ code: 'ASSET_CONTENT_CORRUPT' }));
     const locked: Project = { ...project, shots: project.shots.map((shot) => shot.id === frame.shotId ? { ...shot, lockedFields: ['frames'] } : shot) };
     await expect(applyGeneratedImage(locked, frame.id, 'image-generation', '2026-09-06T00:00:00.000Z', { ...result, bytes: await png(1, 1) })).rejects.toEqual(expect.objectContaining({ code: 'SHOT_FIELD_LOCKED' }));

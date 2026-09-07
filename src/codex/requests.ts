@@ -1,3 +1,4 @@
+import { generatorBuildProvenance, readBuildManifest } from '../build.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readdir, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -53,7 +54,7 @@ export class CodexRequestStore {
       request.kind === kind && request.projectId === projectId && request.targetId === targetId && request.basisHash === basisHash,
     );
     if (duplicate !== undefined) return duplicate;
-    const request: CodexRequest = CodexRequestSchema.parse({ id: randomUUID(), kind, projectId, targetId, basisHash,
+    const request: CodexRequest = CodexRequestSchema.parse({ generatorBuild: generatorBuildProvenance(readBuildManifest()), id: randomUUID(), kind, projectId, targetId, basisHash,
       status: 'pending', createdAt: now, updatedAt: now, resultRevision: null, error: null });
     await writeFile(requestPath(this.#root, request.id), serialize(request), { encoding: 'utf8', flag: 'wx' });
     return request;

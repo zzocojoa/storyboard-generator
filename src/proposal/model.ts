@@ -119,6 +119,10 @@ function proposalFrames(project: Project, shot: Shot, proposal: SegmentProposal[
   const explicit: ProposalFramePoint[] = (proposal.frames ?? []).map((frame): ProposalFramePoint => ({
     offsetMs: frameOffset(durationMs, frame.atPermille), role: frame.role, description: frame.description, explicit: true,
   }));
+  const offsets: number[] = explicit.map((point: ProposalFramePoint): number => point.offsetMs);
+  const collisions: number[] = [...new Set(offsets.filter((offset: number, index: number): boolean => offsets.indexOf(offset) !== index))];
+  if (collisions.length > 0) throw contractError('PROPOSAL_FRAME_OFFSET_COLLISION',
+    `${shot.id}: 서로 다른 명시 Frame이 같은 밀리초에 도착합니다. durationMs=${durationMs}, offsets=${collisions.join(',')}. 프레임 시점이나 컷 길이를 검토하세요.`, []);
   const anchorPoints: ProposalFramePoint[] = shot.visualMode === 'sourced' ? shot.sourceLinks.flatMap((link: ShotSourceLink): ProposalFramePoint[] => {
     const offsetMs: number = anchorStart(link);
     if (!['primary-visual', 'continued-visual'].includes(link.usage) || offsetMs <= 0 || offsetMs >= durationMs) return [];
@@ -150,7 +154,8 @@ function validateProposalSourceOrder(project: Project, shots: readonly Shot[]): 
       unit: project.dataset.units.find((unit: SourceUnit): boolean => unit.id === link.unitId),
       atMs: shot.startMs + anchorStart(link), index,
     }))).filter((event): event is { unit: SourceUnit; atMs: number; index: number } => event.unit !== undefined);
-  for (const earlier of events) for (const later of events) {
+  const firstEvents = events.filter((event): boolean => !events.some((candidate): boolean => candidate.unit.id === event.unit.id && candidate.atMs < event.atMs));
+  for (const earlier of firstEvents) for (const later of firstEvents) {
     if (earlier.unit.order < later.unit.order && earlier.atMs > later.atMs) {
       throw contractError('PROPOSAL_SOURCE_ORDER_REVERSED', `${later.unit.id}(${later.unit.order})가 ${earlier.unit.id}(${earlier.unit.order})보다 이른 ${later.atMs}ms에 공개됩니다.`, []);
     }

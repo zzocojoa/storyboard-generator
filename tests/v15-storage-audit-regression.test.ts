@@ -85,7 +85,7 @@ function barrier(point: StorageFaultPoint): Barrier {
 }
 
 function record(id: string, shotIds: readonly string[], assetIds: readonly string[], prompt: string): GenerationRecord {
-  return { id, provider: 'codex-app', model: 'current', modelVersion: null, requestId: `request:${id}`, prompt,
+  return { id, provider: 'codex-app', model: 'current', generatorBuild: null, modelVersion: null, requestId: `request:${id}`, prompt,
     templateVersion: '1.0.0', seed: null, referenceHashes: [], resultAssetIds: [...assetIds], shotIds: [...shotIds],
     createdAt: '2026-09-07T00:00:00.000Z' };
 }

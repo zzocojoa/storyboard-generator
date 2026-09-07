@@ -1,3 +1,6 @@
+import { mediaByteRange } from './media-range.js';
+import { readBuildManifest } from '../build.js';
+import { assertFinalReadiness } from '../domain/final-readiness.js';
 import { randomUUID } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import Fastify from 'fastify';
@@ -18,14 +21,14 @@ import { mappingReviewIssues, MoveShotSourceLinkInputSchema, moveShotSourceLink,
 import { addReferenceAsset } from '../domain/media.js';
 import { MAX_AUDIO_BYTES } from '../domain/media-inspection.js';
 import { TextPlacementInformationInputSchema, updatePlacementInformationDecision } from '../domain/placement-information.js';
-import { IdSchema, LockedFieldSchema, ProfileSchema, ShotContentSchema } from '../domain/schema.js';
+import { IdSchema, LockedFieldSchema, MillisecondsSchema, ProfileSchema, ShotContentSchema } from '../domain/schema.js';
 import type { Project } from '../domain/schema.js';
 import { deleteReviewTextCue, resolveTextCueAuthority, TextCueAuthorityResolutionInputSchema } from '../domain/text.js';
 import { applySourceUpdate, sourceImpact } from '../domain/source-update.js';
 import { AudioCueTimingInputSchema, confirmTextCueTiming, TextCueTimingInputSchema, updateAudioCueTiming, updateTextCueTiming } from '../domain/tracks.js';
-import { exportShotCsvWithIntegrity } from '../exporters/csv.js';
+import { exportShotCsvForPolicy } from '../exporters/csv.js';
 import { exportProjectJson } from '../exporters/json.js';
-import { exportProjectPdf } from '../exporters/pdf.js';
+import { exportProjectPdfForPolicy } from '../exporters/pdf.js';
 import { importPackage } from '../importers/import-package.js';
 import { readPackage } from '../io/package.js';
 import { createSourceOutline } from '../proposal/outline.js';
@@ -85,12 +88,12 @@ export type HttpErrorBody = { error: {
 } };
 
 const conflictPolicies: ReadonlyMap<string, boolean> = new Map<string, boolean>([
-  ['PROJECT_BUSY', true], ['REVISION_CONFLICT', true], ['AUDIT_SNAPSHOT_CHANGED', true],
+  ['CODEX_REQUEST_BUILD_UNVERIFIED', false], ['CODEX_REQUEST_BUILD_CHANGED', false], ['PROJECT_BUSY', true], ['REVISION_CONFLICT', true], ['AUDIT_SNAPSHOT_CHANGED', true],
   ['PROJECT_ALREADY_EXISTS', false], ['PROJECT_VERSION_EXISTS', false],
 ]);
 const lockedCodes: ReadonlySet<string> = new Set<string>([
   'STORE_RECOVERY_BLOCKED', 'STORE_RECOVERY_REQUIRED', 'STORE_CREATE_RECOVERY_REQUIRED', 'STORE_LOCK_CLEANUP_REQUIRED',
-  'STORE_CONCURRENT_MODIFICATION', 'STORE_PATH_UNSAFE', 'TRANSACTION_JOURNAL_PATH_UNSAFE',
+  'STORE_CONCURRENT_MODIFICATION', 'STORE_PATH_UNSAFE', 'TRANSACTION_JOURNAL_PATH_UNSAFE', 'AUDIT_CURRENT_VERSION_MISMATCH',
 ]);
 const storedAssetCodes: ReadonlySet<string> = new Set<string>([
   'STORED_ASSET_FILE_MISSING', 'STORED_ASSET_HASH_MISMATCH', 'STORED_ASSET_MIME_MISMATCH',
@@ -121,6 +124,10 @@ export function httpErrorPolicy(error: Error): HttpErrorPolicy {
   if (code === 'STORE_LOCK_ACQUISITION_FAILED' || code === 'PROCESS_HEARTBEAT_UNAVAILABLE') {
     return { status: 503, category: 'unavailable', scope: 'service', retryable: true, operatorActionRequired: false, mutationBlocked: false };
   }
+  if (code === 'INVALID_MEDIA_RANGE') return { status: 416, category: 'validation', scope: 'request', retryable: false, operatorActionRequired: false, mutationBlocked: false };
+  if (['FINAL_OUTPUT_NOT_READY', 'SHOT_VISUAL_COVERAGE_GAP', 'VISUAL_OUTPUT_BLOCKED'].includes(code)) return { status: 409, category: 'conflict',
+    scope: code === 'VISUAL_OUTPUT_BLOCKED' ? 'request' : 'project', retryable: code === 'FINAL_OUTPUT_NOT_READY', operatorActionRequired: false, mutationBlocked: false };
+  if (code === 'PROPOSAL_FRAME_OFFSET_COLLISION') return { status: 400, category: 'validation', scope: 'request', retryable: false, operatorActionRequired: false, mutationBlocked: false };
   const conflictRetryable: boolean | undefined = conflictPolicies.get(code);
   if (conflictRetryable !== undefined) {
     return { status: 409, category: 'conflict', scope: ['PROJECT_BUSY', 'AUDIT_SNAPSHOT_CHANGED'].includes(code) ? 'project' : 'request', retryable: conflictRetryable,
@@ -208,11 +215,11 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
     const [allRequests, storageStatus] = await Promise.all([requests.list(null), store.statusSnapshot()]);
     const metrics = codexRequestMetrics(allRequests);
     const failed: CodexRequest[] = allRequests.filter((item: CodexRequest): boolean => item.status === 'failed');
-    return { provider: 'codex-app', ...metrics,
+    return { provider: 'codex-app', build: readBuildManifest(), ...metrics,
       recentFailures: failed.slice(-5).reverse().map((item: CodexRequest): object => ({ id: item.id, kind: item.kind, projectId: item.projectId, targetId: item.targetId, error: item.error })),
       storageRecovery: store.recoveryEvents(), storageRecoveryBlocks: storageStatus.recoveryBlocks,
       invalidRecoveryMarkers: storageStatus.invalidRecoveryMarkers,
-      activeCreates: storageStatus.activeCreates, activeUpdates: storageStatus.activeUpdates,
+      activeCreates: storageStatus.activeCreates, activeUpdates: storageStatus.activeUpdates, activeUpdateErrors: storageStatus.activeUpdateErrors,
       processHeartbeat: storageStatus.processHeartbeat,
       generationInstruction: 'Codex 앱에서 $storyboard-workbench 대기 요청 처리를 실행하세요.', aiVoiceDisclosure: `가이드 음성은 macOS ${config.codex.speechVoice} 합성 음성입니다.` };
   });
@@ -420,6 +427,19 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
     reply.header('Content-Type', asset.mimeType).header('Cache-Control', 'private, max-age=31536000, immutable');
     return asset.content;
   });
+  app.get('/api/projects/:projectId/final-readiness', async (request: FastifyRequest, reply: FastifyReply): Promise<object> => {
+    const { projectId } = ProjectParamsSchema.parse(request.params);
+    reply.header('Cache-Control', 'no-store');
+    return store.finalReadiness(projectId);
+  });
+  app.get('/api/projects/:projectId/output/visual', async (request: FastifyRequest, reply: FastifyReply): Promise<Buffer> => {
+    const { projectId } = ProjectParamsSchema.parse(request.params);
+    const query = z.strictObject({ atMs: z.string().regex(/^\d+$/u).transform(Number).pipe(MillisecondsSchema),
+      channel: z.enum(['program-monitor', 'transition-preview', 'safe-http', 'pdf-export', 'csv-export', 'readiness']).optional() }).parse(request.query);
+    const output = await store.safeVisual(projectId, query.atMs, query.channel ?? 'program-monitor');
+    reply.header('Content-Type', output.mimeType).header('Cache-Control', 'no-store');
+    return output.content;
+  });
   app.get('/api/projects/:projectId/output/frame/:frameId', async (request: FastifyRequest, reply: FastifyReply): Promise<Buffer> => {
     const { projectId, frameId } = FrameParamsSchema.parse(request.params);
     const output = await store.safeFrame(projectId, frameId);
@@ -429,8 +449,11 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
   app.get('/api/projects/:projectId/output/audio/:cueId', async (request: FastifyRequest, reply: FastifyReply): Promise<Buffer> => {
     const { projectId, cueId } = CueParamsSchema.parse(request.params);
     const output = await store.safeAudio(projectId, cueId);
-    reply.header('Content-Type', output.mimeType).header('Cache-Control', 'no-store');
-    return output.content;
+    reply.header('Content-Type', output.mimeType).header('Cache-Control', 'no-store').header('Accept-Ranges', 'bytes');
+    if (request.headers.range === undefined) return output.content;
+    const range = mediaByteRange(request.headers.range, output.content.length);
+    reply.code(206).header('Content-Range', `bytes ${range.start}-${range.end}/${output.content.length}`);
+    return output.content.subarray(range.start, range.end + 1);
   });
   app.get('/api/projects/:projectId/export.json', async (request: FastifyRequest, reply: FastifyReply): Promise<string> => {
     const { projectId } = ProjectParamsSchema.parse(request.params);
@@ -440,12 +463,20 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
   app.get('/api/projects/:projectId/export.csv', async (request: FastifyRequest, reply: FastifyReply): Promise<string> => {
     const { projectId } = ProjectParamsSchema.parse(request.params);
     reply.header('Content-Type', 'text/csv; charset=utf-8').header('Content-Disposition', 'attachment; filename="storyboard.csv"');
-    return exportShotCsvWithIntegrity(await store.read(projectId), await store.assetIntegrity(projectId));
+    const { maturity } = z.strictObject({ maturity: z.enum(['draft', 'final']).optional() }).parse(request.query);
+    const snapshot = await store.outputSnapshot(projectId);
+    if (maturity === 'final') assertFinalReadiness(snapshot.readiness);
+    reply.header('Cache-Control', 'no-store');
+    return exportShotCsvForPolicy(snapshot.project, snapshot.integrity, { maturity: maturity ?? 'draft', channel: 'csv-export' });
   });
   app.get('/api/projects/:projectId/export.pdf', async (request: FastifyRequest, reply: FastifyReply): Promise<Buffer> => {
     const { projectId } = ProjectParamsSchema.parse(request.params);
-    const project: Project = await store.read(projectId);
-    const pdf: Buffer = await exportProjectPdf(project, config.pdfFontPath, async (assetId: string): Promise<Buffer> => (await store.asset(projectId, assetId)).content);
+    const { maturity } = z.strictObject({ maturity: z.enum(['draft', 'final']).optional() }).parse(request.query);
+    const snapshot = await store.outputSnapshot(projectId);
+    if (maturity === 'final') assertFinalReadiness(snapshot.readiness);
+    const pdf: Buffer = await exportProjectPdfForPolicy(snapshot.project, config.pdfFontPath, async (assetId: string): Promise<Buffer> => (await store.asset(projectId, assetId)).content,
+      { maturity: maturity ?? 'draft', channel: 'pdf-export' }, snapshot.integrity);
+    reply.header('Cache-Control', 'no-store');
     reply.header('Content-Type', 'application/pdf').header('Content-Disposition', 'attachment; filename="storyboard.pdf"');
     return pdf;
   });

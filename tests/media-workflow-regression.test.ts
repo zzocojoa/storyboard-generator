@@ -1,3 +1,4 @@
+import { testGeneratorBuild } from './helpers.js';
 import { mkdir, mkdtemp, readFile, readdir, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -88,7 +89,7 @@ async function acceptedImageStore(): Promise<{ app: FastifyInstance; store: Proj
   const { app, store } = await temporaryApp(base);
   const frame: StoryboardFrame = base.frames[0] as StoryboardFrame;
   const mutation = await applyGeneratedImage(base, frame.id, 'generated-frame', '2026-09-06T00:00:00.000Z', {
-    bytes: await png(2, 3), provider: 'codex-app', prompt: '검증', model: 'imagegen', requestId: 'request', mimeType: 'image/png', referenceHashes: [],
+    bytes: await png(2, 3), generatorBuild: testGeneratorBuild(), provider: 'codex-app', prompt: '검증', model: 'imagegen', requestId: 'request', mimeType: 'image/png', referenceHashes: [],
   });
   if (mutation.relativePath === null || mutation.content === null) throw new Error('저장할 이미지 자산이 없습니다.');
   await store.update(base.projectId, 0, (): Project => mutation.project,
@@ -589,7 +590,7 @@ describe('H. SOURCE UPDATE', (): void => {
 describe('I. READY METRICS', (): void => {
   it('stale_frame_is_not_counted_as_output_safe', async (): Promise<void> => {
     const base: Project = await nativeOutline(); const { store } = await temporaryStore(base); const frame: StoryboardFrame = base.frames[0] as StoryboardFrame;
-    const mutation = await applyGeneratedImage(base, frame.id, 'stale-metric', '2026-09-06T00:00:00.000Z', { bytes: await png(1, 1), provider: 'codex-app', prompt: '', model: '', requestId: 'request', mimeType: 'image/png', referenceHashes: [] });
+    const mutation = await applyGeneratedImage(base, frame.id, 'stale-metric', '2026-09-06T00:00:00.000Z', { bytes: await png(1, 1), generatorBuild: testGeneratorBuild(), provider: 'codex-app', prompt: '', model: '', requestId: 'request', mimeType: 'image/png', referenceHashes: [] });
     await store.update(base.projectId, 0, (): Project => mutation.project, [{ relativePath: mutation.relativePath as string, content: mutation.content as Buffer }]); expect((await store.list())[0]?.framesOutputSafe).toBe(0);
   });
   it('rejected_frame_is_not_counted_as_output_safe', async (): Promise<void> => {
@@ -633,7 +634,7 @@ describe('J. MIGRATION', (): void => {
   });
   it('migration_preserves_generation_records', async (): Promise<void> => {
     const project: Project = await nativeOutline(); const asset: Asset = { id: 'generated-asset', kind: 'prop', subjectId: null, path: 'assets/a.png', mimeType: 'image/png', sha256: sha256Text('asset'), description: '', durationMs: null, version: 1 };
-    const record: GenerationRecord = { id: 'legacy-generation', provider: 'codex-app', model: 'model', modelVersion: null, requestId: null, prompt: '', templateVersion: '1.0.0', seed: null, referenceHashes: [], resultAssetIds: [asset.id], shotIds: [], createdAt: '2026-09-06T00:00:00.000Z' };
+    const record: GenerationRecord = { id: 'legacy-generation', provider: 'codex-app', model: 'model', generatorBuild: null, modelVersion: null, requestId: null, prompt: '', templateVersion: '1.0.0', seed: null, referenceHashes: [], resultAssetIds: [asset.id], shotIds: [], createdAt: '2026-09-06T00:00:00.000Z' };
     expect(parseProject(legacy14({ ...project, assets: [asset], generationRecords: [record] })).generationRecords).toEqual([record]);
   });
 });

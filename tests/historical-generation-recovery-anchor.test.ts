@@ -1,3 +1,4 @@
+import { testGeneratorBuild } from './helpers.js';
 import { randomUUID } from 'node:crypto';
 import { hostname, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -53,7 +54,7 @@ afterEach(async (): Promise<void> => {
 
 function generationRecord(id: string, shotIds: readonly string[], assetIds: readonly string[], requestId: string | null): GenerationRecord {
   return {
-    id, provider: 'codex-app', model: 'current', modelVersion: null, requestId, prompt: `prompt:${id}`,
+    id, provider: 'codex-app', model: 'current', generatorBuild: null, modelVersion: null, requestId, prompt: `prompt:${id}`,
     templateVersion: '1.0.0', seed: null, referenceHashes: [], resultAssetIds: [...assetIds], shotIds: [...shotIds],
     createdAt: '2026-09-06T00:00:00.000Z',
   };
@@ -246,13 +247,13 @@ describe('B. shot topology integration', (): void => {
       const next: Project = mergeShots(current, 'shot-2', `removed:${name}`);
       expect((): void => { assertGenerationRecordTransition(current, next); }).not.toThrow();
       expect(next.generationRecords).toEqual(current.generationRecords);
-      expect(auditGenerationRecords(next, [current])[0]).toMatchObject({ currentTargetState: 'historical', validAtIntroduction: true });
+      expect(auditGenerationRecords({ ...next, revision: current.revision + 1 }, [current])[0]).toMatchObject({ currentTargetState: 'historical', validAtIntroduction: true });
       return;
     }
     if (name === 'reproposal_appends_new_generation_record') {
       const current: Project = withTargetHistory(nativeProject, 'existing-proposal', 'shot-2');
       const next: Project = applyGeneratedProposal(current, 'demonstration', 'appended-proposal', '2026-09-06T00:00:01.000Z', {
-        provider: 'codex-app', prompt: '새 컷 제안', model: 'current', requestId: 'appended-request', proposal: demonstrationProposal(undefined),
+        generatorBuild: testGeneratorBuild(), provider: 'codex-app', prompt: '새 컷 제안', model: 'current', requestId: 'appended-request', proposal: demonstrationProposal(undefined),
       }).project;
       expect(assertGenerationRecordTransition(current, next).added.map((record: GenerationRecord): string => record.id)).toEqual(['appended-proposal']);
       expect(next.generationRecords[0]).toEqual(current.generationRecords[0]);
@@ -781,7 +782,7 @@ describe('O. PRJ-007 regression additions', (): void => {
       (current: Project): Project => mergeShots(current, 'shot-2', 'prj007-split-shot'), []);
     const reproposed: Project = await store.update(created.projectId, merged.revision, (current: Project): Project =>
       applyGeneratedProposal(current, 'SEG-002', 'prj007-reproposal', '2026-09-06T00:00:02.000Z', {
-        provider: 'codex-app', prompt: 'SEG-002 재제안', model: 'current', requestId: 'prj007-reproposal-request',
+        generatorBuild: testGeneratorBuild(), provider: 'codex-app', prompt: 'SEG-002 재제안', model: 'current', requestId: 'prj007-reproposal-request',
         proposal: { shots: [{ sourceLinks: [{ unitId: 'UNIT-007', usage: 'primary-visual' }], durationWeight: 1,
           action: '닫힌 현관문 앞에서 태균이 손을 멈춘다.', visualLocationId: null,
           camera: { size: 'CU', angle: 'eye-level', move: 'static' }, presence: [], propIds: [], cameraAxis: null,

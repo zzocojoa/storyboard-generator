@@ -127,7 +127,7 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
       ...(segment === undefined ? [] : intervalIssues(shot.id, shot.startMs, shot.endMs, segment.startMs, segment.endMs)),
       ...shot.sourceLinks.flatMap((link: ShotSourceLink): Issue[] => referenceIssue(dataset.units.some((unit): boolean => unit.id === link.unitId && unit.segmentId === shot.segmentId), shot.id, 'sourceLinks', link.unitId, [])),
       ...shot.sourceLinks.flatMap((link: ShotSourceLink): Issue[] => {
-        if (link.temporalAnchor.kind !== 'frame') return [];
+        if (link.temporalAnchor.kind !== 'frame' && link.temporalAnchor.kind !== 'frame-range') return [];
         const frameId: string = link.temporalAnchor.frameId;
         return referenceIssue(project.frames.some((frame): boolean => frame.id === frameId && frame.shotId === shot.id), shot.id, 'sourceLinks.temporalAnchor.frameId', frameId, []);
       }),

@@ -47,7 +47,7 @@ function contextAt(project: Project, unitId: string, absoluteMs: number): Return
   const shot: Shot = project.shots.find((candidate: Shot): boolean => candidate.segmentId === 'SEG-024') as Shot;
   const frame: StoryboardFrame = { id: `golden-frame-${unitId}`, shotId: shot.id, offsetMs: absoluteMs - shot.startMs, role: 'key', description: unitId, imageAssetId: null, visualReview: 'pending' };
   const changed: Project = { ...project,
-    shots: project.shots.map((candidate: Shot): Shot => candidate.id === shot.id ? { ...candidate, sourceLinks: [{ unitId, usage: 'primary-visual', status: 'confirmed', temporalAnchor: { kind: 'frame', frameId: frame.id, basis: 'manual', status: 'confirmed' } }], informationIds: [] } : candidate),
+    shots: project.shots.map((candidate: Shot): Shot => candidate.id === shot.id ? { ...candidate, sourceLinks: [{ unitId, usage: 'primary-visual', status: 'confirmed', temporalAnchor: { kind: 'frame-range', frameId: frame.id, endOffsetMs: shot.endMs - shot.startMs, basis: 'manual', status: 'confirmed' } }], informationIds: [] } : candidate),
     frames: [...project.frames.filter((candidate: StoryboardFrame): boolean => candidate.id !== frame.id), frame],
   };
   return buildFrameImageContext(changed, frame.id);

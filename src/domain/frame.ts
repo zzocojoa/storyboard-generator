@@ -38,11 +38,11 @@ export function updateStoryboardFrame(project: Project, frameId: string, input: 
   const frame: StoryboardFrame = requireFrame(project, frameId);
   requireEditableShot(project, frame.shotId);
   if (frame.offsetMs === frameInput.offsetMs && frame.role === frameInput.role && frame.description === frameInput.description) return project;
-  const timingChanged: boolean = frame.offsetMs !== frameInput.offsetMs;
+  const timingChanged: boolean = frame.offsetMs !== frameInput.offsetMs || frame.role !== frameInput.role;
   return finish(project, { ...project,
     frames: project.frames.map((candidate: StoryboardFrame): StoryboardFrame => candidate.id === frameId ? { ...candidate, ...frameInput, visualReview: 'pending' } : candidate),
     shots: project.shots.map((candidate: Shot): Shot => candidate.id === frame.shotId ? { ...candidate, approvalStatus: 'proposed',
-      sourceLinks: timingChanged ? candidate.sourceLinks.map((link: ShotSourceLink): ShotSourceLink => link.temporalAnchor.kind === 'frame' && link.temporalAnchor.frameId === frameId
+      sourceLinks: timingChanged ? candidate.sourceLinks.map((link: ShotSourceLink): ShotSourceLink => (link.temporalAnchor.kind === 'frame' || link.temporalAnchor.kind === 'frame-range') && link.temporalAnchor.frameId === frameId
         ? { ...link, status: 'mapping-required', temporalAnchor: { kind: 'unresolved', basis: 'frame-change', status: 'review-required' } } : link) : candidate.sourceLinks,
     } : candidate),
   });

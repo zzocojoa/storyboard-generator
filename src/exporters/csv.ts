@@ -1,4 +1,6 @@
-import { reviewIssuesForTextCue } from '../domain/emission.js';
+import { reviewTextOutput } from '../domain/output-policy.js';
+import type { OutputPolicy } from '../domain/output-policy.js';
+import { reviewShotVisualTimeline } from '../domain/visual-output.js';
 import { contractError } from '../domain/errors.js';
 import { reviewFrameOutput } from '../domain/frame-output.js';
 import type { FrameOutputDecision } from '../domain/frame-output.js';
@@ -16,7 +18,7 @@ export function csvCell(value: string): string {
   return `"${safe.replaceAll('"', '""')}"`;
 }
 
-function shotRow(project: Project, shot: Shot, assetIntegrity: Readonly<Record<string, string>>): string[] {
+function shotRow(project: Project, shot: Shot, assetIntegrity: Readonly<Record<string, string>>, policy: OutputPolicy): string[] {
   const segment = project.dataset.segments.find((value): boolean => value.id === shot.segmentId);
   const scene = project.dataset.scenes.find((value): boolean => value.id === segment?.sceneId);
   const units: SourceUnit[] = shot.sourceLinks.flatMap((link: ShotSourceLink): SourceUnit[] => {
@@ -27,10 +29,11 @@ function shotRow(project: Project, shot: Shot, assetIntegrity: Readonly<Record<s
   const text = project.textCues.filter((cue): boolean => cue.startMs < shot.endMs && cue.endMs > shot.startMs);
   const blockedAudio: BlockedCue[] = audio.flatMap((cue): BlockedCue[] => reviewAudioPlaybackAt(project, cue.startMs).blocked.filter((entry: BlockedCue): boolean => entry.cueId === cue.id));
   const blockedText: { cue: TextCue; issues: Issue[] }[] = text.flatMap((cue: TextCue): { cue: TextCue; issues: Issue[] }[] => {
-    const issues: Issue[] = reviewIssuesForTextCue(project, cue.id);
+    const issues: Issue[] = reviewTextOutput(project, cue.id, policy).issues;
     return issues.length === 0 ? [] : [{ cue, issues }];
   });
-  const shotIssues: Issue[] = reviewIssuesForShot(project, shot.id);
+  const timelineIssues: Issue[] = reviewShotVisualTimeline(project, shot, 'csv-export');
+  const shotIssues: Issue[] = [...reviewIssuesForShot(project, shot.id), ...timelineIssues];
   const frameDecisions: FrameOutputDecision[] = project.frames.filter((frame: StoryboardFrame): boolean => frame.shotId === shot.id)
     .map((frame: StoryboardFrame): FrameOutputDecision => reviewFrameOutput(project, frame.id, 'csv-export'));
   const blockedCodes: string[] = [...new Set([...shotIssues.map((item: Issue): string => item.code),
@@ -51,23 +54,23 @@ function shotRow(project: Project, shot: Shot, assetIntegrity: Readonly<Record<s
     JSON.stringify(shot.sourceLinks.map((link: ShotSourceLink) => ({ unitId: link.unitId, temporalAnchor: link.temporalAnchor }))),
     JSON.stringify(units.map((unit: SourceUnit) => ({ ...shot.sourceLinks.find((link: ShotSourceLink): boolean => link.unitId === unit.id), id: unit.id, kind: unit.kind, order: unit.order, speakerId: unit.speakerId,
       ...(shotIssues.length === 0 ? { text: unit.text } : {}), sourceRefs: unit.sourceRefs, outputSafety: shotIssues.length === 0 ? 'safe' : 'blocked' }))),
-    JSON.stringify(gates), blockedCodes.length === 0 ? 'SAFE' : 'DRAFT · OUTPUT INTERLOCK REVIEW REQUIRED',
+    JSON.stringify(gates), blockedCodes.length === 0 ? policy.maturity.toUpperCase() : 'DRAFT · OUTPUT INTERLOCK REVIEW REQUIRED',
     String(blockedAudio.length + blockedText.length), JSON.stringify(blockedCodes),
     JSON.stringify(audio.map((cue) => ({ ...cue, assetMetadata: cue.assetId === null ? null : project.assets.find((asset): boolean => asset.id === cue.assetId) ?? null,
       assetIntegrity: cue.assetId === null ? 'not-attached' : assetIntegrity[cue.assetId] ?? 'not-checked',
       outputSafety: blockedAudio.some((entry: BlockedCue): boolean => entry.cueId === cue.id) ? 'blocked' : 'safe' }))),
     JSON.stringify(text.map((cue: TextCue) => {
       const blocked = blockedText.find((entry): boolean => entry.cue.id === cue.id);
-      return blocked === undefined ? { ...cue, outputSafety: 'safe' } : { id: cue.id, authority: cue.authority, mappingDecisionId: cue.mappingDecisionId,
+      return blocked === undefined ? { ...cue, outputSafety: cue.timingStatus === 'proposed' ? 'draft' : 'safe', maturity: policy.maturity, outputLabel: reviewTextOutput(project, cue.id, policy).label } : { id: cue.id, authority: cue.authority, mappingDecisionId: cue.mappingDecisionId,
         startMs: cue.startMs, endMs: cue.endMs, outputSafety: 'blocked', issueCodes: blocked.issues.map((item: Issue): string => item.code) };
     })),
     JSON.stringify(frames.map((frame: StoryboardFrame) => {
       const decision: FrameOutputDecision | undefined = frameDecisions.find((candidate: FrameOutputDecision): boolean => candidate.frameId === frame.id);
       if (decision === undefined) throw contractError('FRAME_OUTPUT_DECISION_NOT_FOUND', `${frame.id}: CSV 출력 판정을 찾을 수 없습니다.`, []);
       return { ...frame, historicalImageAssetId: frame.imageAssetId, displayAbsoluteMs: frameDisplayAbsoluteMs(shot, frame), evaluationAbsoluteMs: frameEvaluationAbsoluteMs(shot, frame),
-        resolvedImageAssetId: decision.imageAssetId, sourceFrameId: decision.sourceFrameId, renderMode: decision.renderMode,
+        resolvedImageAssetId: decision.imageAssetId, sourceFrameId: decision.sourceFrameId, renderMode: timelineIssues.length > 0 ? 'blocked' : decision.renderMode,
         assetIntegrity: decision.imageAssetId === null ? 'not-attached' : assetIntegrity[decision.imageAssetId] ?? 'not-checked',
-        outputSafety: decision.renderMode === 'blocked' ? 'blocked' : 'safe', renderBitmap: decision.renderBitmap, issueCodes: decision.issues.map((item: Issue): string => item.code) };
+        outputSafety: decision.renderMode === 'blocked' || timelineIssues.length > 0 ? 'blocked' : 'safe', renderBitmap: decision.renderBitmap && timelineIssues.length === 0, issueCodes: [...decision.issues, ...timelineIssues].map((item: Issue): string => item.code) };
     })),
     JSON.stringify(project.textPlacementInformationDecisions.filter((decision): boolean => project.dataset.textPlacements
       .some((placement): boolean => placement.id === decision.placementId && placement.segmentId === shot.segmentId))),
@@ -76,16 +79,16 @@ function shotRow(project: Project, shot: Shot, assetIntegrity: Readonly<Record<s
   ];
 }
 
-function exportShotCsvWithStatuses(input: Project, assetIntegrity: Readonly<Record<string, string>>): string {
+export function exportShotCsvForPolicy(input: Project, assetIntegrity: Readonly<Record<string, string>>, policy: OutputPolicy): string {
   const project: Project = parseProject(input);
   const header: string[] = ['project_id', 'title', 'shot_id', 'segment_id', 'scene_id', 'mode', 'start_ms', 'end_ms', 'duration_ms', 'visual_mode', 'start_time', 'end_time', 'story_location_id', 'visual_location_id', 'action', 'shot_size', 'camera_angle', 'camera_move', 'transition_kind', 'transition_duration_ms', 'transition_note', 'presence', 'prop_ids', 'source_links', 'source_temporal_anchors', 'source_units', 'information_gates', 'output_safety_status', 'blocked_cue_count', 'blocked_issue_codes', 'audio_events', 'text_events', 'frames', 'placement_information_decisions', 'proposal_origin', 'approval_status', 'locked_fields', 'continuity_before', 'continuity_after'];
-  return `\uFEFF${[header, ...project.shots.map((shot: Shot): string[] => shotRow(project, shot, assetIntegrity))].map((row: string[]): string => row.map(csvCell).join(',')).join('\r\n')}\r\n`;
+  return `\uFEFF${[header, ...project.shots.map((shot: Shot): string[] => shotRow(project, shot, assetIntegrity, policy))].map((row: string[]): string => row.map(csvCell).join(',')).join('\r\n')}\r\n`;
 }
 
 export function exportShotCsv(input: Project): string {
-  return exportShotCsvWithStatuses(input, {});
+  return exportShotCsvForPolicy(input, {}, { maturity: 'draft', channel: 'csv-export' });
 }
 
 export function exportShotCsvWithIntegrity(input: Project, assetIntegrity: Readonly<Record<string, string>>): string {
-  return exportShotCsvWithStatuses(input, assetIntegrity);
+  return exportShotCsvForPolicy(input, assetIntegrity, { maturity: 'draft', channel: 'csv-export' });
 }

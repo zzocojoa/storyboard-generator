@@ -1,4 +1,5 @@
 import { contractError, issue } from './errors.js';
+import { GenerationSchema, ProjectSchema } from './schema.js';
 import type { GenerationRecord, Issue, Project } from './schema.js';
 
 export type GenerationRecordTransition = {
@@ -27,7 +28,7 @@ export type GenerationRecordAuditEntry = {
 };
 
 function recordsEqual(left: GenerationRecord, right: GenerationRecord): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+  return JSON.stringify(GenerationSchema.parse(left)) === JSON.stringify(GenerationSchema.parse(right));
 }
 
 function duplicateValues(values: readonly string[]): string[] {
@@ -176,7 +177,8 @@ function auditIssuesAtIntroduction(record: GenerationRecord, project: Project): 
 
 type RecordObservation = { revision: number; project: Project; record: GenerationRecord };
 
-function targetState(id: string, currentIds: ReadonlySet<string>, historicalIds: ReadonlySet<string>): 'current' | 'historical' | 'unresolved' {
+function targetState(id: string, currentIds: ReadonlySet<string>, historicalIds: ReadonlySet<string>, introductionIds: ReadonlySet<string>): 'current' | 'historical' | 'unresolved' {
+  if (!introductionIds.has(id)) return 'unresolved';
   if (currentIds.has(id)) return 'current';
   return historicalIds.has(id) ? 'historical' : 'unresolved';
 }
@@ -193,14 +195,19 @@ function combinedTargetState(states: readonly ('current' | 'historical' | 'unres
 export function auditGenerationRecords(current: Project, versions: readonly Project[]): GenerationRecordAuditEntry[] {
   const versionSnapshots: Project[] = [...versions].filter((version: Project): boolean => version.revision <= current.revision)
     .sort((left: Project, right: Project): number => left.revision - right.revision);
-  const snapshots: Project[] = [...versionSnapshots, current].sort((left: Project, right: Project): number => left.revision - right.revision);
+  const byRevision: Map<number, Project> = new Map<number, Project>();
+  for (const snapshot of [...versionSnapshots, current]) {
+    const previous: Project | undefined = byRevision.get(snapshot.revision);
+    if (previous !== undefined && JSON.stringify(ProjectSchema.parse(previous)) !== JSON.stringify(ProjectSchema.parse(snapshot))) throw contractError('AUDIT_CURRENT_VERSION_MISMATCH',
+      `${current.projectId}: revision ${snapshot.revision}의 감사 Snapshot 내용이 일치하지 않습니다.`, []);
+    byRevision.set(snapshot.revision, snapshot);
+  }
+  const snapshots: Project[] = [...byRevision.values()].sort((left: Project, right: Project): number => left.revision - right.revision);
   const recordIds: string[] = [];
   const seenRecordIds: Set<string> = new Set<string>();
   for (const snapshot of snapshots) for (const record of snapshot.generationRecords) if (!seenRecordIds.has(record.id)) {
     seenRecordIds.add(record.id); recordIds.push(record.id);
   }
-  const historicalShotIds: ReadonlySet<string> = new Set<string>(snapshots.flatMap((snapshot: Project): string[] => snapshot.shots.map((shot): string => shot.id)));
-  const historicalAssetIds: ReadonlySet<string> = new Set<string>(snapshots.flatMap((snapshot: Project): string[] => snapshot.assets.map((asset): string => asset.id)));
   const currentShotIds: ReadonlySet<string> = new Set<string>(current.shots.map((shot): string => shot.id));
   const currentAssetIds: ReadonlySet<string> = new Set<string>(current.assets.map((asset): string => asset.id));
   return recordIds.map((recordId: string): GenerationRecordAuditEntry => {
@@ -218,7 +225,7 @@ export function auditGenerationRecords(current: Project, versions: readonly Proj
     for (const snapshot of afterIntroduction) {
       const present: boolean = snapshot.generationRecords.some((record: GenerationRecord): boolean => record.id === recordId);
       if (present && wasAbsent) reappearedAtRevisions.push(snapshot.revision);
-      if (!present) wasAbsent = true;
+      wasAbsent = !present;
     }
     const mutatedAtRevisions: number[] = observations.slice(1)
       .filter((observation: RecordObservation): boolean => !recordsEqual(introduction.record, observation.record))
@@ -244,8 +251,12 @@ export function auditGenerationRecords(current: Project, versions: readonly Proj
     }
     const shotIds: string[] = [...new Set<string>(observations.flatMap((observation: RecordObservation): string[] => observation.record.shotIds))];
     const resultAssetIds: string[] = [...new Set<string>(observations.flatMap((observation: RecordObservation): string[] => observation.record.resultAssetIds))];
-    const shotTargets = shotIds.map((shotId: string) => ({ shotId, state: targetState(shotId, currentShotIds, historicalShotIds) }));
-    const assetTargets = resultAssetIds.map((assetId: string) => ({ assetId, state: targetState(assetId, currentAssetIds, historicalAssetIds) }));
+    const historicalShotIds: ReadonlySet<string> = new Set<string>(afterIntroduction.flatMap((snapshot: Project): string[] => snapshot.shots.map((shot): string => shot.id)));
+    const historicalAssetIds: ReadonlySet<string> = new Set<string>(afterIntroduction.flatMap((snapshot: Project): string[] => snapshot.assets.map((asset): string => asset.id)));
+    const introductionShotIds: ReadonlySet<string> = new Set<string>(introduction.project.shots.map((shot): string => shot.id));
+    const introductionAssetIds: ReadonlySet<string> = new Set<string>(introduction.project.assets.map((asset): string => asset.id));
+    const shotTargets = shotIds.map((shotId: string) => ({ shotId, state: targetState(shotId, currentShotIds, historicalShotIds, introductionShotIds) }));
+    const assetTargets = resultAssetIds.map((assetId: string) => ({ assetId, state: targetState(assetId, currentAssetIds, historicalAssetIds, introductionAssetIds) }));
     const targetStates: ('current' | 'historical' | 'unresolved')[] = [...shotTargets.map((target) => target.state), ...assetTargets.map((target) => target.state)];
     const currentTargetState: 'current' | 'historical' | 'mixed' | 'unresolved' = combinedTargetState(targetStates);
     if (currentTargetState === 'mixed') issues.push(issue('HISTORICAL_GENERATION_TARGET_MIXED', 'warning', recordId, 'generationRecords',
