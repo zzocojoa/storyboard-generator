@@ -2,6 +2,7 @@ import { contractError, issue } from './errors.js';
 import { directVisualLinks, effectiveInformationGate, sourceAnchorRange } from './mapping.js';
 import type { EffectiveInformationGate } from './mapping.js';
 import type { Issue, Project, Shot, ShotSourceLink, SourceRef, SourceUnit, StoryboardFrame, TextCue, TextMappingDecision, TextPlacement, TextPlacementInformationDecision } from './schema.js';
+import { effectiveTextPlacementRange } from './text-placement.js';
 import { frameEvaluationAbsoluteMs } from './time.js';
 
 export type OutputChannel = 'image' | 'text-overlay' | 'audio-playback' | 'speech-generation' | 'proposal' | 'export';
@@ -87,10 +88,12 @@ export function textCueAuthorityIssues(project: Project, cue: TextCue): Issue[] 
   if (cue.authority === 'placement') {
     const placement: TextPlacement | undefined = project.dataset.textPlacements.find((candidate: TextPlacement): boolean => candidate.id === cue.placementId);
     if (placement === undefined) return [cueAuthorityIssue('TEXT_CUE_AUTHORITY_MISMATCH', cue, '권한 Placement를 찾을 수 없습니다.', 'existing placement', String(cue.placementId), [])];
-    const validEnd: boolean = placement.endMs === null || placement.endMs === cue.endMs;
-    return placement.segmentId === cue.segmentId && placement.text === cue.text && placement.startMs === cue.startMs && validEnd
-      ? [] : [cueAuthorityIssue('TEXT_CUE_AUTHORITY_MISMATCH', cue, 'Text Cue가 권한 Placement의 문구 또는 시각과 다릅니다.',
-        `${placement.startMs}..${placement.endMs ?? 'open'}:${placement.text}`, `${cue.startMs}..${cue.endMs}:${cue.text}`, placement.sourceRefs)];
+    const range = effectiveTextPlacementRange(project, placement.id);
+    const validEnd: boolean = range.endMs !== null && range.endMs === cue.endMs;
+    const mismatch: Issue[] = placement.segmentId === cue.segmentId && placement.text === cue.text && placement.startMs === cue.startMs && validEnd
+      ? [] : [cueAuthorityIssue('TEXT_CUE_AUTHORITY_MISMATCH', cue, 'Text Cue가 권한 Placement의 문구 또는 유효 시각과 다릅니다.',
+        `${range.startMs}..${range.endMs ?? 'review-required'}:${placement.text}`, `${cue.startMs}..${cue.endMs}:${cue.text}`, placement.sourceRefs)];
+    return [...range.issues, ...mismatch];
   }
   if (cue.authority === 'mapping-decision') {
     const decision: TextMappingDecision | undefined = project.textMappingDecisions.find((candidate: TextMappingDecision): boolean => candidate.id === cue.mappingDecisionId);

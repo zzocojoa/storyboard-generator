@@ -85,7 +85,8 @@ export type HttpErrorBody = { error: {
 } };
 
 const conflictPolicies: ReadonlyMap<string, boolean> = new Map<string, boolean>([
-  ['PROJECT_BUSY', true], ['REVISION_CONFLICT', true], ['PROJECT_ALREADY_EXISTS', false], ['PROJECT_VERSION_EXISTS', false],
+  ['PROJECT_BUSY', true], ['REVISION_CONFLICT', true], ['AUDIT_SNAPSHOT_CHANGED', true],
+  ['PROJECT_ALREADY_EXISTS', false], ['PROJECT_VERSION_EXISTS', false],
 ]);
 const lockedCodes: ReadonlySet<string> = new Set<string>([
   'STORE_RECOVERY_BLOCKED', 'STORE_RECOVERY_REQUIRED', 'STORE_CREATE_RECOVERY_REQUIRED', 'STORE_LOCK_CLEANUP_REQUIRED',
@@ -93,7 +94,7 @@ const lockedCodes: ReadonlySet<string> = new Set<string>([
 ]);
 const storedAssetCodes: ReadonlySet<string> = new Set<string>([
   'STORED_ASSET_FILE_MISSING', 'STORED_ASSET_HASH_MISMATCH', 'STORED_ASSET_MIME_MISMATCH',
-  'STORED_ASSET_CONTENT_CORRUPT', 'STORED_AUDIO_METADATA_MISMATCH', 'STORED_AUDIO_DURATION_MISMATCH',
+  'STORED_ASSET_CONTENT_CORRUPT', 'STORED_ASSET_PATH_UNSAFE', 'STORED_AUDIO_METADATA_MISMATCH', 'STORED_AUDIO_DURATION_MISMATCH',
 ]);
 const notFoundCodes: ReadonlySet<string> = new Set<string>([
   'PROJECT_NOT_FOUND', 'SHOT_NOT_FOUND', 'FRAME_NOT_FOUND', 'AUDIO_CUE_NOT_FOUND', 'TEXT_CUE_NOT_FOUND',
@@ -117,10 +118,12 @@ export function httpErrorPolicy(error: Error): HttpErrorPolicy {
   if (lockedCodes.has(code) || code.startsWith('STORE_RECOVERY_') || code.startsWith('STORE_CREATE_RECOVERY_')) {
     return { status: 423, category: 'locked', scope: 'project', retryable: false, operatorActionRequired: true, mutationBlocked: true };
   }
-  if (code === 'STORE_LOCK_ACQUISITION_FAILED') return { status: 503, category: 'unavailable', scope: 'service', retryable: true, operatorActionRequired: false, mutationBlocked: false };
+  if (code === 'STORE_LOCK_ACQUISITION_FAILED' || code === 'PROCESS_HEARTBEAT_UNAVAILABLE') {
+    return { status: 503, category: 'unavailable', scope: 'service', retryable: true, operatorActionRequired: false, mutationBlocked: false };
+  }
   const conflictRetryable: boolean | undefined = conflictPolicies.get(code);
   if (conflictRetryable !== undefined) {
-    return { status: 409, category: 'conflict', scope: code === 'PROJECT_BUSY' ? 'project' : 'request', retryable: conflictRetryable,
+    return { status: 409, category: 'conflict', scope: ['PROJECT_BUSY', 'AUDIT_SNAPSHOT_CHANGED'].includes(code) ? 'project' : 'request', retryable: conflictRetryable,
       operatorActionRequired: false, mutationBlocked: false };
   }
   if (notFoundCodes.has(code)) return { status: 404, category: 'not-found', scope: code === 'PROJECT_NOT_FOUND' ? 'project' : 'request',
@@ -202,13 +205,15 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
   });
 
   app.get('/api/status', async (): Promise<object> => {
-    const allRequests: CodexRequest[] = await requests.list(null);
+    const [allRequests, storageStatus] = await Promise.all([requests.list(null), store.statusSnapshot()]);
     const metrics = codexRequestMetrics(allRequests);
     const failed: CodexRequest[] = allRequests.filter((item: CodexRequest): boolean => item.status === 'failed');
     return { provider: 'codex-app', ...metrics,
       recentFailures: failed.slice(-5).reverse().map((item: CodexRequest): object => ({ id: item.id, kind: item.kind, projectId: item.projectId, targetId: item.targetId, error: item.error })),
-      storageRecovery: store.recoveryEvents(), storageRecoveryBlocks: store.recoveryBlocks(),
-      activeCreates: store.activeCreates(), activeUpdates: store.activeUpdates(),
+      storageRecovery: store.recoveryEvents(), storageRecoveryBlocks: storageStatus.recoveryBlocks,
+      invalidRecoveryMarkers: storageStatus.invalidRecoveryMarkers,
+      activeCreates: storageStatus.activeCreates, activeUpdates: storageStatus.activeUpdates,
+      processHeartbeat: storageStatus.processHeartbeat,
       generationInstruction: 'Codex 앱에서 $storyboard-workbench 대기 요청 처리를 실행하세요.', aiVoiceDisclosure: `가이드 음성은 macOS ${config.codex.speechVoice} 합성 음성입니다.` };
   });
   app.get('/api/projects', async (): Promise<object> => ({ projects: await store.list() }));
@@ -224,6 +229,10 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
   app.get('/api/projects/:projectId/generation-audit', async (request: FastifyRequest): Promise<object> => {
     const { projectId } = ProjectParamsSchema.parse(request.params);
     return { records: await store.generationRecordAudit(projectId) };
+  });
+  app.get('/api/projects/:projectId/asset-integrity', async (request: FastifyRequest): Promise<object> => {
+    const { projectId } = ProjectParamsSchema.parse(request.params);
+    return { issues: await store.currentAssetIntegrityIssues(projectId) };
   });
   app.post('/api/projects/import', async (request: FastifyRequest, reply: FastifyReply): Promise<object> => {
     const body = ImportBodySchema.parse(request.body);

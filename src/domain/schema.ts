@@ -150,6 +150,7 @@ export const TransitionSchema = z.strictObject({
   note: z.string(),
 });
 export const LockedFieldSchema = z.enum(['timing', 'sources', 'action', 'camera', 'location', 'presence', 'continuity', 'transition', 'frames']);
+export const ShotVisualModeSchema = z.enum(['sourced', 'black', 'hold-previous']);
 export const SourceAnchorBasisSchema = z.enum(['manual', 'text-cue', 'audio-cue', 'proposal', 'native-exact', 'estimated', 'migration', 'mapping-change', 'source-move', 'audio-change', 'frame-change', 'source-update']);
 export const SourceTemporalAnchorSchema = z.discriminatedUnion('kind', [
   z.strictObject({
@@ -171,7 +172,8 @@ export const ShotSourceLinkSchema = z.strictObject({
 });
 export const ShotSchema = z.strictObject({
   id: IdSchema, segmentId: IdSchema, startMs: MillisecondsSchema, endMs: MillisecondsSchema,
-  sourceLinks: z.array(ShotSourceLinkSchema), visualLocationId: IdSchema.nullable(), action: z.string(),
+  sourceLinks: z.array(ShotSourceLinkSchema), visualMode: ShotVisualModeSchema,
+  visualLocationId: IdSchema.nullable(), action: z.string(),
   camera: z.strictObject({ size: z.string(), angle: z.string(), move: z.string() }),
   presence: z.array(PresenceSchema), propIds: z.array(IdSchema),
   continuityBefore: z.array(ContinuitySchema), continuityAfter: z.array(ContinuitySchema),
@@ -180,7 +182,7 @@ export const ShotSchema = z.strictObject({
   proposalOrigin: z.enum(['manual', 'source-outline', 'model']), approvalStatus: z.enum(['proposed', 'approved']),
   lockedFields: z.array(LockedFieldSchema),
 });
-export const ShotContentSchema = ShotSchema.pick({ action: true, camera: true, visualLocationId: true, presence: true, propIds: true, continuityBefore: true, continuityAfter: true, cameraAxis: true, screenDirection: true, informationIds: true, transitionOut: true });
+export const ShotContentSchema = ShotSchema.pick({ visualMode: true, action: true, camera: true, visualLocationId: true, presence: true, propIds: true, continuityBefore: true, continuityAfter: true, cameraAxis: true, screenDirection: true, informationIds: true, transitionOut: true });
 export const FrameSchema = z.strictObject({
   id: IdSchema, shotId: IdSchema, offsetMs: MillisecondsSchema, role: z.enum(['start', 'end', 'key']),
   description: z.string(), imageAssetId: IdSchema.nullable(), visualReview: z.enum(['pending', 'accepted', 'rejected']),
@@ -227,7 +229,7 @@ export const GenerationSchema = z.strictObject({
   referenceHashes: z.array(HashSchema), resultAssetIds: z.array(IdSchema), shotIds: z.array(IdSchema), createdAt: z.iso.datetime(),
 });
 export const ProjectSchema = z.strictObject({
-  schemaVersion: z.literal('1.5.0'), projectId: IdSchema, title: z.string().min(1), revision: z.number().int().nonnegative(),
+  schemaVersion: z.literal('1.6.0'), projectId: IdSchema, title: z.string().min(1), revision: z.number().int().nonnegative(),
   profile: ProfileSchema,
   handoff: HandoffSchema, sources: z.array(SnapshotSchema), dataset: DatasetSchema, importIssues: z.array(IssueSchema),
   textMappingDecisions: z.array(TextMappingDecisionSchema),
@@ -259,6 +261,7 @@ export type Issue = z.infer<typeof IssueSchema>;
 export type Dataset = z.infer<typeof DatasetSchema>;
 export type NativeDataset = z.infer<typeof NativeDatasetSchema>;
 export type Transition = z.infer<typeof TransitionSchema>;
+export type ShotVisualMode = z.infer<typeof ShotVisualModeSchema>;
 export type Shot = z.infer<typeof ShotSchema>;
 export type ShotSourceLink = z.infer<typeof ShotSourceLinkSchema>;
 export type SourceTemporalAnchor = z.infer<typeof SourceTemporalAnchorSchema>;

@@ -141,6 +141,14 @@
         "additionalProperties": false
       }
     },
+    "visualMode": {
+      "type": "string",
+      "enum": [
+        "sourced",
+        "black",
+        "hold-previous"
+      ]
+    },
     "visualLocationId": {
       "anyOf": [
         {
@@ -305,6 +313,7 @@
     "startMs",
     "endMs",
     "sourceLinks",
+    "visualMode",
     "visualLocationId",
     "action",
     "camera",

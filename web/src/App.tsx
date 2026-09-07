@@ -13,11 +13,12 @@ import type { TextPlacementInformationInput } from '../../src/domain/placement-i
 import type { Asset, AudioCue, Issue, LockedField, Profile, Project, Segment, Shot, ShotContent, ShotSourceLink, SourceTemporalAnchor, SourceUnit, StoryboardFrame, TextCue, TextMappingDecision, TextPlacement, TextPlacementInformationDecision } from '../../src/domain/schema.js';
 import type { AudioCueTimingInput, TextCueTimingInput } from '../../src/domain/tracks.js';
 import type { TextCueAuthorityResolutionInput } from '../../src/domain/text.js';
-import { formatProjectTimecode, frameDisplayAbsoluteMs, frameEvaluationAbsoluteMs } from '../../src/domain/time.js';
-import { ApiError, apiErrorMessage, fetchProject, fetchStatus, importProject, listProjects, mutateProject, normalizeAudioAsset, previewSourceUpdate, queueCodexRequest, updateProjectSource, uploadAudioAsset } from './api.js';
+import { effectiveTextPlacementRange } from '../../src/domain/text-placement.js';
+import { formatProjectDurationTimecode, formatProjectTimecode, frameDisplayAbsoluteMs, frameEvaluationAbsoluteMs } from '../../src/domain/time.js';
+import { ApiError, apiErrorMessage, fetchAssetIntegrity, fetchProject, fetchStatus, importProject, listProjects, mutateProject, normalizeAudioAsset, previewSourceUpdate, queueCodexRequest, updateProjectSource, uploadAudioAsset } from './api.js';
 import type { AppStatus, CodexRequest, ProjectSummary, SourceImpact } from './api.js';
 import { BrowserAudioController } from './audio-lifecycle.js';
-import { emptyRecoveryUiState, importButtonState, mutationControlsDisabled, projectAssetIntegrityIssues, projectRecoveryBlocked, reconcileBlockedProjects, recordRecoveryUiError } from './ui-policy.js';
+import { emptyRecoveryUiState, importButtonState, mutationControlsDisabled, projectAssetIntegrityIssues, projectRecoveryBlocked, reconcileAssetIntegrityIssues, reconcileBlockedProjects, recordRecoveryUiError } from './ui-policy.js';
 import type { AssetIntegrityUiIssue, RecoveryUiState } from './ui-policy.js';
 
 type Notice = { tone: 'info' | 'error'; text: string };
@@ -27,7 +28,7 @@ type SourceGateComparison = { informationId: string; gateMs: number | null; resu
 const allLockedFields: LockedField[] = ['timing', 'sources', 'action', 'camera', 'location', 'presence', 'continuity', 'transition', 'frames'];
 
 function contentFromShot(shot: Shot): ShotContent {
-  return { action: shot.action, camera: { ...shot.camera }, visualLocationId: shot.visualLocationId, presence: [...shot.presence],
+  return { visualMode: shot.visualMode, action: shot.action, camera: { ...shot.camera }, visualLocationId: shot.visualLocationId, presence: [...shot.presence],
     propIds: [...shot.propIds], continuityBefore: [...shot.continuityBefore], continuityAfter: [...shot.continuityAfter],
     cameraAxis: shot.cameraAxis, screenDirection: shot.screenDirection, informationIds: [...shot.informationIds], transitionOut: { ...shot.transitionOut } };
 }
@@ -92,10 +93,6 @@ async function fileBase64(file: File): Promise<string> {
   return btoa(binary);
 }
 
-function assetUrl(projectId: string, assetId: string): string {
-  return `/api/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(assetId)}`;
-}
-
 function safeFrameUrl(projectId: string, frameId: string): string {
   return `/api/projects/${encodeURIComponent(projectId)}/output/frame/${encodeURIComponent(frameId)}`;
 }
@@ -134,7 +131,7 @@ function ProjectRail(props: { summaries: ProjectSummary[]; currentId: string | n
     <div className="rail-label">PROJECTS · {String(props.summaries.length).padStart(2, '0')}</div>
     <div className="project-list">{props.summaries.map((summary: ProjectSummary): ReactElement =>
       <button key={summary.projectId} className={summary.projectId === props.currentId ? 'project-tile active' : 'project-tile'} onClick={(): void => { void props.onSelect(summary.projectId); }}>
-        <span className="project-index">{formatProjectTimecode(summary.durationMs, { fpsNumerator: summary.frameRateNumerator,
+        <span className="project-index">{formatProjectDurationTimecode(summary.durationMs, { fpsNumerator: summary.frameRateNumerator,
           fpsDenominator: summary.frameRateDenominator, dropFrame: summary.dropFrame, startTimecode: summary.startTimecode,
           sampleRate: summary.sampleRate })}</span><strong>{summary.title}</strong>
         <span>{summary.shots} CUTS · ASSET {summary.framesWithAsset} · REVIEWED {summary.framesAccepted} · OUTPUT SAFE {summary.framesOutputSafe}{summary.audioRepairRequired > 0 ? ` · AUDIO REPAIR ${summary.audioRepairRequired}` : ''}</span>
@@ -154,15 +151,8 @@ function SceneRail(props: { project: Project; segmentId: string; onSelect: (segm
     })}{props.project.importIssues.length > 0 && <section className="issue-stack"><header>INPUT REVIEW · {props.project.importIssues.length}</header>{props.project.importIssues.map((issue, index: number): ReactElement => <article key={`${issue.code}:${issue.entityId}:${index}`}><b>{issue.severity.toUpperCase()}</b><span>{issue.code}</span><p>{issue.message}</p></article>)}</section>}</div></aside>;
 }
 
-function FrameImage(props: { project: Project; frame: StoryboardFrame | null; alt: string }): ReactElement {
-  if (props.frame?.imageAssetId !== null && props.frame?.imageAssetId !== undefined) {
-    return <img src={assetUrl(props.project.projectId, props.frame.imageAssetId)} alt={props.alt} />;
-  }
-  return <div className="frame-placeholder"><span>FRAME PENDING</span><p>{props.frame?.description || '시각 설명을 준비 중입니다.'}</p></div>;
-}
-
 function SafeFrameImage(props: { project: Project; frame: StoryboardFrame | null; decision: FrameOutputDecision | null; alt: string }): ReactElement {
-  if (props.frame !== null && props.decision?.renderBitmap === true && props.decision.imageAssetId !== null) {
+  if (props.frame !== null && props.decision !== null && props.decision.renderMode !== 'blocked') {
     return <img src={safeFrameUrl(props.project.projectId, props.frame.id)} alt={props.alt} />;
   }
   return <div className="frame-placeholder"><span>OUTPUT BLOCKED</span><p>{props.decision?.issues.map((item: Issue): string => item.code).join(', ') || props.frame?.id || '재생할 프레임이 없습니다.'}</p></div>;
@@ -170,6 +160,8 @@ function SafeFrameImage(props: { project: Project; frame: StoryboardFrame | null
 
 function reviewFrameLabel(project: Project, frame: StoryboardFrame): string {
   const output: FrameOutputDecision = reviewFrameOutput(project, frame.id, 'program-monitor');
+  if (output.renderMode === 'black') return 'BLACK · OUTPUT SAFE';
+  if (output.renderMode === 'hold-previous') return `HOLD · ${output.sourceFrameId ?? 'SOURCE'} · OUTPUT SAFE`;
   if (output.renderBitmap) return 'CURRENT';
   if (frame.visualReview === 'rejected') return 'REJECTED · OUTPUT BLOCKED';
   if (frame.imageAssetId !== null) return 'STALE · OUTPUT BLOCKED';
@@ -178,22 +170,23 @@ function reviewFrameLabel(project: Project, frame: StoryboardFrame): string {
 
 function ShotBoard(props: { project: Project; shot: Shot; selected: boolean; onSelect: (shotId: string) => void; onGenerate: (frameId: string) => Promise<void>; busy: boolean }): ReactElement {
   const frame: StoryboardFrame | null = props.project.frames.filter((candidate: StoryboardFrame): boolean => candidate.shotId === props.shot.id).sort((left, right): number => left.offsetMs - right.offsetMs)[0] ?? null;
+  const decision: FrameOutputDecision | null = frame === null ? null : reviewFrameOutput(props.project, frame.id, 'program-monitor');
   return <article className={props.selected ? 'shot-card selected' : 'shot-card'} onClick={(): void => { props.onSelect(props.shot.id); }}>
-    <div className="shot-frame" style={{ aspectRatio: aspectRatio(props.project) }}><FrameImage project={props.project} frame={frame} alt={`${props.shot.id} 콘티 프레임`} />
+    <div className="shot-frame" data-visual-mode={props.shot.visualMode} style={{ aspectRatio: aspectRatio(props.project) }}><SafeFrameImage project={props.project} frame={frame} decision={decision} alt={`${props.shot.id} 콘티 프레임`} />
       <span className="frame-time">{formatProjectTimecode(props.shot.startMs, props.project.handoff.timebase)}</span><span className={`review-dot ${frame?.visualReview ?? 'pending'}`}></span>
       {frame !== null && <span className="frame-output-state">{reviewFrameLabel(props.project, frame)}</span>}
-      {frame !== null && <button className="frame-generate" disabled={props.busy} onClick={(event): void => { event.stopPropagation(); void props.onGenerate(frame.id); }}>{frame.imageAssetId === null ? 'CODEX IMAGE' : 'RETAKE'}</button>}
+      {frame !== null && <button className="frame-generate" disabled={props.busy || props.shot.visualMode !== 'sourced'} onClick={(event): void => { event.stopPropagation(); void props.onGenerate(frame.id); }}>{props.shot.visualMode === 'sourced' ? frame.imageAssetId === null ? 'CODEX IMAGE' : 'RETAKE' : props.shot.visualMode.toUpperCase()}</button>}
     </div>
     <div className="shot-meta"><div><span>{props.shot.camera.size || 'SIZE TBD'}</span><span>{props.shot.camera.angle || 'ANGLE TBD'}</span></div><time>{((props.shot.endMs - props.shot.startMs) / 1000).toFixed(1)}s</time></div>
     <h3>{props.shot.action || '동작을 입력하세요'}</h3>
-    <footer><span>{props.shot.sourceLinks.length} SOURCES</span><span>{props.shot.approvalStatus === 'approved' ? 'LOCKED' : props.shot.proposalOrigin.toUpperCase()}</span></footer>
+    <footer><span>{props.shot.visualMode.toUpperCase()} · {props.shot.sourceLinks.length} SOURCES</span><span>{props.shot.approvalStatus === 'approved' ? 'LOCKED' : props.shot.proposalOrigin.toUpperCase()}</span></footer>
   </article>;
 }
 
 function Timeline(props: { project: Project; playhead: number; playing: boolean; onChange: (value: number) => void; onToggle: () => void }): ReactElement {
   const total: number = props.project.dataset.segments.at(-1)?.endMs ?? 1;
   return <section className="timeline"><header><button className={props.playing ? 'transport active' : 'transport'} onClick={props.onToggle} aria-label={props.playing ? '재생 일시 정지' : '시간순 재생'}>{props.playing ? 'Ⅱ' : '▶'}</button>
-    <time>{formatProjectTimecode(props.playhead, props.project.handoff.timebase)}</time><span className="timeline-title">MASTER TIMELINE</span><span>{formatProjectTimecode(total, props.project.handoff.timebase)}</span></header>
+    <time>{formatProjectTimecode(props.playhead, props.project.handoff.timebase)}</time><span className="timeline-title">MASTER TIMELINE</span><span>{formatProjectDurationTimecode(total, props.project.handoff.timebase)}</span></header>
     <div className="timeline-canvas">
       <div className="track-label">CUT</div><div className="track cut-track">{props.project.shots.map((shot: Shot): ReactElement => <span key={shot.id} style={{ left: `${percent(shot.startMs, total)}%`, width: `${percent(shot.endMs - shot.startMs, total)}%` }} title={shot.id}></span>)}</div>
       <div className="track-label">TXT</div><div className="track text-track">{props.project.textCues.map((cue: TextCue): ReactElement => <span key={cue.id} style={{ left: `${percent(cue.startMs, total)}%`, width: `${percent(cue.endMs - cue.startMs, total)}%` }} title={cue.text}></span>)}</div>
@@ -214,7 +207,7 @@ function PlaybackMonitor(props: { project: Project; playhead: number; onClose: (
   const transitionProgress: number = transitionActive && shot !== null ? (props.playhead - transitionStart) / shot.transitionOut.durationMs : 0;
   const nextFrame: StoryboardFrame | null = nextShot === undefined ? null : activeStoryboardFrame(props.project, nextShot.id, nextShot.startMs);
   const nextFrameDecision: FrameOutputDecision | null = nextFrame === null ? null : reviewFrameOutput(props.project, nextFrame.id, 'transition-preview');
-  const nextFrameSafe: boolean = nextFrameDecision?.renderBitmap === true;
+  const nextFrameSafe: boolean = nextFrameDecision !== null && nextFrameDecision.renderMode !== 'blocked';
   const currentOpacity: number = transitionActive && shot?.transitionOut.kind !== 'wipe' ? 1 - transitionProgress : 1;
   const nextOpacity: number = shot?.transitionOut.kind === 'match-cut' ? (transitionProgress >= .5 ? 1 : 0) : transitionProgress;
   const nextClip: string = shot?.transitionOut.kind === 'wipe' ? `inset(0 ${100 - transitionProgress * 100}% 0 0)` : 'none';
@@ -241,7 +234,7 @@ function FrameEditor(props: { project: Project; shot: Shot; frame: StoryboardFra
     <div className="pair"><label className="field">ROLE<select disabled={props.frame.role === 'start'} value={draft.role} onChange={(event): void => { setDraft({ ...draft, role: event.target.value as StoryboardFrame['role'] }); }}><option value="start">시작</option><option value="key">키</option><option value="end">끝</option></select></label>
       <label className="field">OFFSET MS<input type="number" min="0" value={draft.offsetMs} onChange={(event): void => { setDraft({ ...draft, offsetMs: Number(event.target.value) }); }} /></label></div>
     <label className="field wide">FRAME DESCRIPTION<textarea value={draft.description} onChange={(event): void => { setDraft({ ...draft, description: event.target.value }); }} /></label>
-    <div className="frame-actions"><button disabled={props.working} onClick={(): void => { void props.onEdit(props.frame.id, draft); }}>프레임 저장</button><button disabled={props.working} onClick={(): void => { void props.onGenerate(props.frame.id); }}>{props.frame.imageAssetId === null ? 'CODEX IMAGE' : 'RETAKE'}</button><button disabled={props.working || props.frame.imageAssetId === null} onClick={(): void => { void props.onReview(props.frame.id, 'accepted'); }}>이미지 승인</button><button disabled={props.working || props.frame.imageAssetId === null} onClick={(): void => { void props.onReview(props.frame.id, 'rejected'); }}>재생성 표시</button></div>
+    <div className="frame-actions"><button disabled={props.working} onClick={(): void => { void props.onEdit(props.frame.id, draft); }}>프레임 저장</button><button disabled={props.working || props.shot.visualMode !== 'sourced'} onClick={(): void => { void props.onGenerate(props.frame.id); }}>{props.shot.visualMode === 'sourced' ? props.frame.imageAssetId === null ? 'CODEX IMAGE' : 'RETAKE' : props.shot.visualMode.toUpperCase()}</button><button disabled={props.working || props.frame.imageAssetId === null} onClick={(): void => { void props.onReview(props.frame.id, 'accepted'); }}>이미지 승인</button><button disabled={props.working || props.frame.imageAssetId === null} onClick={(): void => { void props.onReview(props.frame.id, 'rejected'); }}>재생성 표시</button></div>
   </article>;
 }
 
@@ -457,6 +450,7 @@ function Inspector(props: { project: Project; segment: Segment; shot: Shot | nul
   return <aside className="inspector"><div className="column-head"><span>SHOT INSPECTOR</span><b>{shot === null ? '—' : shot.approvalStatus.toUpperCase()}</b></div>
     {shot !== null && props.draft !== null && <div className="inspector-scroll">
       <div className="inspector-title"><span>{shot.id}</span><time>{formatProjectTimecode(shot.startMs, props.project.handoff.timebase)} — {formatProjectTimecode(shot.endMs, props.project.handoff.timebase)}</time></div>
+      <label className="field wide">VISUAL MODE<select value={props.draft.visualMode} onChange={(event): void => { props.onDraft({ ...props.draft as ShotContent, visualMode: event.target.value as ShotContent['visualMode'] }); }}><option value="sourced">SOURCED</option><option value="black">BLACK</option><option value="hold-previous">HOLD PREVIOUS</option></select></label>
       <label className="field wide">ACTION<textarea value={props.draft.action} onChange={(event): void => { props.onDraft({ ...props.draft as ShotContent, action: event.target.value }); }} /></label>
       <div className="field-grid">
         <label className="field">SIZE<input value={props.draft.camera.size} onChange={(event): void => { props.onDraft({ ...props.draft as ShotContent, camera: { ...(props.draft as ShotContent).camera, size: event.target.value } }); }} /></label>
@@ -484,7 +478,7 @@ function Inspector(props: { project: Project; segment: Segment; shot: Shot | nul
       <section className="inspector-section text-mapping-block"><header>TEXT MAPPING REVIEW <span>{textMappingIssues.length} REVIEW</span></header>{textMappings.map((mapping): ReactElement => <div key={mapping.decision.id}><TextMappingEditor decision={mapping.decision} placement={mapping.placement} units={props.project.dataset.units.filter((unit: SourceUnit): boolean => unit.segmentId === props.segment.id)} issues={textMappingIssues.filter((item: Issue): boolean => item.entityId === mapping.decision.id)} working={props.working} onSave={props.onTextMapping} /><PlacementInformationEditor project={props.project} mapping={mapping.decision} placement={mapping.placement} working={props.working} onSave={props.onPlacementInformation} /></div>)}</section>
       <section className="inspector-section information-gate-block"><header>INFORMATION GATE <span>{informationGates.filter((gate: EffectiveInformationGate): boolean => gate.reviewRequired).length} REVIEW</span></header>{informationGates.length === 0 && <p className="empty-note">이 구간에는 정보 공개 규칙이 없습니다.</p>}{informationGates.map((gate: EffectiveInformationGate): ReactElement => <article className={gate.reviewRequired ? 'mapping-editor unresolved' : 'mapping-editor'} key={gate.id}><header><b>{gate.id}</b><span>{gate.precision}</span></header><p>BASE {gate.baseNotBeforeMs}ms · EFFECTIVE {gate.effectiveNotBeforeMs}ms</p><p className="canonical-text">{gate.evidenceType} · {gate.evidenceId ?? 'authoritative base'}</p>{gate.reviewReasons.map((reason: string): ReactElement => <p className="mapping-issue" key={reason}>{reason}</p>)}<small className="source-ref">{gate.sourceRefs.map((ref): string => `${ref.fileId}:${ref.locator}`).join(' · ')}</small></article>)}</section>
       <section className="inspector-section audio-block"><header>AUDIO TRACK <span>{audio.filter((cue: AudioCue): boolean => playableAudioCuesAt(props.project, cue.startMs).some((candidate: AudioCue): boolean => candidate.id === cue.id)).length}/{audio.length} PLAYABLE</span></header><p className="disclosure">{props.status?.aiVoiceDisclosure ?? '가이드 음성은 Codex App 작업에서 생성합니다.'}</p>{audio.map((cue: AudioCue): ReactElement => <AudioCueEditor key={cue.id} project={props.project} cue={cue} text={props.project.dataset.units.find((candidate): boolean => candidate.id === cue.unitId)?.text ?? cue.unitId} working={props.working} disclosure={props.status?.aiVoiceDisclosure ?? 'Codex App 가이드 음성'} onTiming={props.onAudioTiming} onSpeech={props.onSpeech} onAsset={props.onAudioAsset} onNormalize={props.onAudioNormalize} />)}</section>
-      <section className="inspector-section text-block"><header>TEXT TRACK <span>{text.length}</span></header>{text.map((cue: TextCue): ReactElement => <TextCueEditor key={cue.id} project={props.project} cue={cue} working={props.working} placementEndMs={props.project.dataset.textPlacements.find((placement): boolean => placement.id === cue.placementId)?.endMs} onTiming={props.onTextTiming} onResolve={props.onTextResolve} onDelete={props.onTextDelete} />)}</section>
+      <section className="inspector-section text-block"><header>TEXT TRACK <span>{text.length}</span></header>{text.map((cue: TextCue): ReactElement => <TextCueEditor key={cue.id} project={props.project} cue={cue} working={props.working} placementEndMs={cue.placementId === null ? undefined : effectiveTextPlacementRange(props.project, cue.placementId).endMs ?? undefined} onTiming={props.onTextTiming} onResolve={props.onTextResolve} onDelete={props.onTextDelete} />)}</section>
       <form className="reference-form" onSubmit={upload}><header>VISUAL REFERENCE</header><select value={reference.kind} onChange={(event): void => { const kind = event.target.value as ReferenceDraft['kind']; setReference({ ...reference, kind, subjectId: '' }); }}><option value="character">인물</option><option value="location">장소</option><option value="prop">소품</option></select>
         {reference.kind !== 'prop' && <select required value={reference.subjectId} onChange={(event): void => { setReference({ ...reference, subjectId: event.target.value }); }}><option value="">대상 선택</option>{referenceSubjects.map((subject): ReactElement => <option key={subject.id} value={subject.id}>{subject.name}</option>)}</select>}
         <input required placeholder="외형·상태 설명" value={reference.description} onChange={(event): void => { setReference({ ...reference, description: event.target.value }); }} />
@@ -529,9 +523,16 @@ export default function App(): ReactElement {
   const shot: Shot | null = shots.find((candidate: Shot): boolean => candidate.id === shotId) ?? shots[0] ?? null;
 
   const refreshSummaries = async (): Promise<void> => { setSummaries(await listProjects()); };
+  const reconcileProjectAssets = async (projectId: string): Promise<void> => {
+    const issues = await fetchAssetIntegrity(projectId);
+    setRecoveryUi((current: RecoveryUiState): RecoveryUiState => reconcileAssetIntegrityIssues(current, projectId, issues));
+  };
   const openProject = async (projectId: string): Promise<void> => {
     setWorking(true); setNotice(null); setSourceImpactReport(null);
-    try { setProject(await fetchProject(projectId)); }
+    try {
+      const [nextProject] = await Promise.all([fetchProject(projectId), reconcileProjectAssets(projectId)]);
+      setProject(nextProject);
+    }
     catch (error: unknown) { showError(error); }
     finally { setWorking(false); }
   };
@@ -543,7 +544,8 @@ export default function App(): ReactElement {
         nextStatus.storageRecoveryBlocks.map((block): string => block.projectId)));
       const first: ProjectSummary | undefined = nextSummaries[0];
       if (first !== undefined) {
-        setProject(await fetchProject(first.projectId));
+        const [nextProject] = await Promise.all([fetchProject(first.projectId), reconcileProjectAssets(first.projectId)]);
+        setProject(nextProject);
       }
     }).catch((error: unknown): void => { showError(error); });
   }, []);
@@ -573,7 +575,7 @@ export default function App(): ReactElement {
     const total: number = project.dataset.segments.at(-1)?.endMs ?? 0;
     let requestId: number = 0;
     const tick = (now: number): void => {
-      const next: number = Math.min(total, origin + now - startedAt);
+      const next: number = Math.min(total, Math.floor(origin + now - startedAt));
       setPlayhead(next);
       if (next >= total) { audioController.reset(); setPlaying(false); return; }
       requestId = requestAnimationFrame(tick);
@@ -595,7 +597,7 @@ export default function App(): ReactElement {
 
   const importHandoff = async (path: string, holdMs: number): Promise<void> => {
     setWorking(true); setNotice(null); setSourceImpactReport(null);
-    try { const next: Project = await importProject(path, holdMs); setProject(next); await refreshSummaries(); setNotice({ tone: 'info', text: `${next.title} 원본을 검증하고 컷 초안을 만들었습니다.` }); }
+    try { const next: Project = await importProject(path, holdMs); setProject(next); await Promise.all([refreshSummaries(), reconcileProjectAssets(next.projectId)]); setNotice({ tone: 'info', text: `${next.title} 원본을 검증하고 컷 초안을 만들었습니다.` }); }
     catch (error: unknown) { showError(error); }
     finally { setWorking(false); }
   };
@@ -603,7 +605,7 @@ export default function App(): ReactElement {
   const mutate = async (path: string, method: 'DELETE' | 'PATCH' | 'POST', body: object): Promise<void> => {
     if (project === null) return;
     setWorking(true); setNotice(null);
-    try { const next: Project = await mutateProject(project.projectId, path, method, body); setProject(next); await refreshSummaries(); }
+    try { const next: Project = await mutateProject(project.projectId, path, method, body); setProject(next); await Promise.all([refreshSummaries(), reconcileProjectAssets(next.projectId)]); }
     catch (error: unknown) { showError(error); }
     finally { setWorking(false); }
   };
@@ -623,7 +625,9 @@ export default function App(): ReactElement {
     if (project === null) return;
     setWorking(true); setNotice(null);
     try {
-      const [nextProject, nextStatus, nextSummaries] = await Promise.all([fetchProject(project.projectId), fetchStatus(), listProjects()]);
+      const [nextProject, nextStatus, nextSummaries] = await Promise.all([
+        fetchProject(project.projectId), fetchStatus(), listProjects(), reconcileProjectAssets(project.projectId),
+      ]);
       setProject(nextProject); setStatus(nextStatus); setSummaries(nextSummaries);
       setRecoveryUi((current: RecoveryUiState): RecoveryUiState => reconcileBlockedProjects(current,
         nextStatus.storageRecoveryBlocks.map((block): string => block.projectId)));
@@ -663,7 +667,7 @@ export default function App(): ReactElement {
     setWorking(true); setNotice(null);
     try {
       const next: Project = await uploadAudioAsset(project.projectId, cueId, project.revision, file);
-      setProject(next); await refreshSummaries();
+      setProject(next); await Promise.all([refreshSummaries(), reconcileProjectAssets(next.projectId)]);
       const asset: Asset | undefined = next.audioCues.find((cue: AudioCue): boolean => cue.id === cueId)?.assetId === null ? undefined
         : next.assets.find((candidate: Asset): boolean => candidate.id === next.audioCues.find((cue: AudioCue): boolean => cue.id === cueId)?.assetId);
       setNotice({ tone: 'info', text: asset?.audioMetadata === undefined || asset.audioMetadata === null ? '오디오 파일을 등록했습니다.'
@@ -677,7 +681,7 @@ export default function App(): ReactElement {
     setWorking(true); setNotice(null);
     try {
       const next: Project = await normalizeAudioAsset(project.projectId, cueId, project.revision);
-      setProject(next); await refreshSummaries();
+      setProject(next); await Promise.all([refreshSummaries(), reconcileProjectAssets(next.projectId)]);
       setNotice({ tone: 'info', text: '기존 WAV를 프로젝트 형식으로 정규화해 새 Asset 버전으로 복구했습니다.' });
     } catch (error: unknown) { showError(error); }
     finally { setWorking(false); }
@@ -694,7 +698,7 @@ export default function App(): ReactElement {
   const applySource = async (path: string, holdMs: number): Promise<void> => {
     if (project === null) return;
     setWorking(true); setNotice(null);
-    try { const next: Project = await updateProjectSource(project.projectId, path, holdMs, project.revision); setProject(next); setSourceImpactReport(null); await refreshSummaries(); setNotice({ tone: 'info', text: '새 원본을 적용하고 영향 받은 구간만 편집 초안으로 교체했습니다.' }); }
+    try { const next: Project = await updateProjectSource(project.projectId, path, holdMs, project.revision); setProject(next); setSourceImpactReport(null); await Promise.all([refreshSummaries(), reconcileProjectAssets(next.projectId)]); setNotice({ tone: 'info', text: '새 원본을 적용하고 영향 받은 구간만 편집 초안을 교체했습니다.' }); }
     catch (error: unknown) { showError(error); }
     finally { setWorking(false); }
   };

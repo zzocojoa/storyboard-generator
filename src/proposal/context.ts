@@ -8,6 +8,7 @@ import type {
   StoryboardFrame, TextMappingDecision, TextPlacement,
 } from '../domain/schema.js';
 import { frameDisplayAbsoluteMs, frameEvaluationAbsoluteMs } from '../domain/time.js';
+import { effectiveTextPlacementRange } from '../domain/text-placement.js';
 
 export type ProposalPerson = Pick<Person, 'id' | 'name' | 'visualDescription'>;
 export type ProposalUnit = Pick<SourceUnit, 'id' | 'kind' | 'order' | 'text' | 'speakerId' | 'informationIds'> & {
@@ -102,7 +103,9 @@ function contextMappings(project: Project, segmentId: string): ContextTextMappin
 function frameContextMappings(project: Project, segmentId: string, absoluteMs: number, activeUnitIds: ReadonlySet<string>): ContextTextMapping[] {
   return contextMappings(project, segmentId).filter((mapping: ContextTextMapping): boolean => {
     const placement: TextPlacement | undefined = project.dataset.textPlacements.find((value: TextPlacement): boolean => value.id === mapping.placementId);
-    if (placement === undefined || placement.startMs > absoluteMs || (placement.endMs !== null && absoluteMs >= placement.endMs)) return false;
+    if (placement === undefined) return false;
+    const range = effectiveTextPlacementRange(project, placement.id);
+    if (range.endMs === null || range.startMs > absoluteMs || absoluteMs >= range.endMs) return false;
     return mapping.canonicalUnitId === null || activeUnitIds.has(mapping.canonicalUnitId);
   });
 }
@@ -138,6 +141,7 @@ export function buildSegmentContext(project: Project, segmentId: string): Segmen
 
 /** 그림 요청에는 선택한 프레임의 절대 시각에 허용된 직접 시각 원문만 넣는다. */
 function imageContext(project: Project, shot: Shot, frame: StoryboardFrame): ImageContext {
+  if (shot.visualMode !== 'sourced') throw contractError('FRAME_GENERATION_NOT_APPLICABLE', `${shot.id}: ${shot.visualMode} 시각 모드에는 이미지 생성 요청을 만들 수 없습니다.`, []);
   const displayAbsoluteMs: number = frameDisplayAbsoluteMs(shot, frame);
   const evaluationAbsoluteMs: number = frameEvaluationAbsoluteMs(shot, frame);
   const reviewIssues: Issue[] = reviewIssuesForFrame(project, frame.id);

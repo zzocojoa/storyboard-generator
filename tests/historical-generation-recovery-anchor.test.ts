@@ -176,10 +176,15 @@ function recoveryError(scope: RecoveryUiError['scope'], projectId: string | null
 }
 
 function demonstrationProposal(anchor: { startPermille: number; endPermille: number } | undefined): SegmentProposal {
-  const link = (unitId: string, usage: 'primary-visual' | 'audio-only') =>
-    unitId === '동작' && anchor !== undefined ? { unitId, usage, anchor } : { unitId, usage };
+  const visualLinks = anchor === undefined
+    ? [{ unitId: '안내-1', usage: 'audio-only' as const }, { unitId: '동작', usage: 'primary-visual' as const }]
+    : anchor.startPermille > 0
+      ? [{ unitId: '안내-1', usage: 'primary-visual' as const, anchor: { startPermille: 0, endPermille: anchor.startPermille } },
+        { unitId: '동작', usage: 'primary-visual' as const, anchor }]
+      : [{ unitId: '안내-1', usage: 'audio-only' as const },
+        { unitId: '동작', usage: 'primary-visual' as const, anchor: { startPermille: 0, endPermille: 1000 } }];
   return SegmentProposalSchema.parse({ shots: [{
-    sourceLinks: [link('안내-1', 'audio-only'), link('동작', 'primary-visual'), link('효과음', 'audio-only')],
+    sourceLinks: [...visualLinks, { unitId: '효과음', usage: 'audio-only' }],
     durationWeight: 1, action: '물을 준다', visualLocationId: null,
     camera: { size: 'CU', angle: 'eye', move: 'static' }, presence: [], propIds: [], cameraAxis: null,
     screenDirection: null, informationIds: [], transitionOut: { kind: 'cut', durationMs: 0, note: '' }, frameDescription: '화분',
@@ -710,7 +715,7 @@ describe('M. proposal temporal anchor', (): void => {
       const base: SegmentProposal = demonstrationProposal(undefined);
       const shot = base.shots[0] as SegmentProposal['shots'][number];
       const proposal: SegmentProposal = SegmentProposalSchema.parse({ shots: [{ ...shot, sourceLinks: [
-        { unitId: '안내-1', usage: 'primary-visual', anchor: { startPermille: 0, endPermille: 500 } },
+        { unitId: '안내-1', usage: 'primary-visual', anchor: { startPermille: 0, endPermille: 700 } },
         { unitId: '동작', usage: 'primary-visual', anchor: { startPermille: 700, endPermille: 1000 } },
         { unitId: '효과음', usage: 'audio-only' },
       ] }] });

@@ -8,8 +8,10 @@ export type FrameOutputChannel = 'program-monitor' | 'transition-preview' | 'pdf
 export type FrameOutputDecision = {
   frameId: string;
   channel: FrameOutputChannel;
+  renderMode: 'bitmap' | 'black' | 'hold-previous' | 'blocked';
   renderBitmap: boolean;
   imageAssetId: string | null;
+  sourceFrameId: string | null;
   issues: Issue[];
 };
 
@@ -37,8 +39,32 @@ function frameOutputEvaluationMs(project: Project, shot: Shot, frame: Storyboard
 export function reviewFrameOutput(project: Project, frameId: string, channel: FrameOutputChannel): FrameOutputDecision {
   const frame: StoryboardFrame | undefined = project.frames.find((candidate: StoryboardFrame): boolean => candidate.id === frameId);
   if (frame === undefined) {
-    return { frameId, channel, renderBitmap: false, imageAssetId: null, issues: [issue('FRAME_NOT_FOUND', 'conflict', frameId, 'id',
+    return { frameId, channel, renderMode: 'blocked', renderBitmap: false, imageAssetId: null, sourceFrameId: null, issues: [issue('FRAME_NOT_FOUND', 'conflict', frameId, 'id',
       '출력할 프레임을 찾을 수 없습니다.', 'existing frame', frameId, [])] };
+  }
+  const shot: Shot | undefined = project.shots.find((candidate: Shot): boolean => candidate.id === frame.shotId);
+  if (shot?.visualMode === 'black') {
+    return { frameId, channel, renderMode: 'black', renderBitmap: false, imageAssetId: null, sourceFrameId: frame.id, issues: [] };
+  }
+  if (shot?.visualMode === 'hold-previous') {
+    const shotIndex: number = project.shots.findIndex((candidate: Shot): boolean => candidate.id === shot.id);
+    const previous: Shot | undefined = shotIndex > 0 ? project.shots[shotIndex - 1] : undefined;
+    const candidates: StoryboardFrame[] = previous === undefined || previous.endMs !== shot.startMs ? [] : project.frames
+      .filter((candidate: StoryboardFrame): boolean => candidate.shotId === previous.id)
+      .sort((left: StoryboardFrame, right: StoryboardFrame): number => right.offsetMs - left.offsetMs || right.id.localeCompare(left.id));
+    for (const candidate of candidates) {
+      const resolved: FrameOutputDecision = reviewFrameOutput(project, candidate.id, channel);
+      if (resolved.renderMode === 'bitmap' || resolved.renderMode === 'black' || resolved.renderMode === 'hold-previous') {
+        return {
+          frameId, channel, renderMode: 'hold-previous', renderBitmap: resolved.renderBitmap,
+          imageAssetId: resolved.imageAssetId, sourceFrameId: resolved.sourceFrameId ?? candidate.id, issues: [],
+        };
+      }
+    }
+    return { frameId, channel, renderMode: 'blocked', renderBitmap: false, imageAssetId: null, sourceFrameId: null, issues: [issue(
+      'HOLD_PREVIOUS_SOURCE_UNAVAILABLE', 'conflict', shot.id, 'visualMode',
+      '시간상 인접한 직전 컷에서 안전하게 출력할 프레임을 찾을 수 없습니다.', 'output-safe previous frame', previous?.id ?? null, [],
+    )] };
   }
   const asset: Asset | undefined = frame.imageAssetId === null ? undefined
     : project.assets.find((candidate: Asset): boolean => candidate.id === frame.imageAssetId);
@@ -53,12 +79,11 @@ export function reviewFrameOutput(project: Project, frameId: string, channel: Fr
     frame.visualReview === 'rejected' ? '거부된 프레임 이미지는 안전 출력에 사용할 수 없습니다.' : '검토가 끝나지 않은 프레임 이미지는 안전 출력에 사용할 수 없습니다.',
     'accepted', frame.visualReview, [],
   )];
-  const shot: Shot | undefined = project.shots.find((candidate: Shot): boolean => candidate.id === frame.shotId);
   const emissionIssues: Issue[] = shot === undefined ? [] : reviewInformationEmission(project, {
     entityId: frame.id, channel: 'image', informationIds: frameInformationIds(project, frame.id), atMs: frameOutputEvaluationMs(project, shot, frame, channel),
   });
   const issues: Issue[] = uniqueIssues([...assetIssues, ...reviewIssues, ...reviewIssuesForFrame(project, frame.id), ...emissionIssues]);
-  return { frameId, channel, renderBitmap: issues.length === 0, imageAssetId: frame.imageAssetId, issues };
+  return { frameId, channel, renderMode: issues.length === 0 ? 'bitmap' : 'blocked', renderBitmap: issues.length === 0, imageAssetId: frame.imageAssetId, sourceFrameId: frame.id, issues };
 }
 
 export function frameOutputPlaceholderText(decision: FrameOutputDecision, description: string): string {

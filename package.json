@@ -10,14 +10,18 @@
     "typecheck": "tsc --noEmit",
     "typecheck:web": "tsc -p tsconfig.web.json --noEmit",
     "test": "vitest run --config vitest.config.ts",
+    "test:names": "node --import tsx scripts/check-required-tests.ts",
     "build:web": "vite build --logLevel warn",
+    "test:e2e": "playwright test",
+    "check:e2e": "npm run build:web && npm run test:e2e",
+    "smoke": "node --import tsx scripts/runtime-smoke.ts",
     "start": "node --import tsx src/server/main.ts storyboard.config.json",
     "dev:web": "vite",
     "schemas:write": "node --import tsx scripts/write-schemas.ts",
     "schemas:check": "node --import tsx scripts/check-schemas.ts",
     "cli": "node --import tsx src/cli.ts",
     "codex-workbench": "node --import tsx src/codex/cli.ts storyboard.config.json",
-    "check": "npm run typecheck && npm run typecheck:web && npm test && npm run schemas:check && npm run build:web"
+    "check": "npm run typecheck && npm run typecheck:web && npm test && npm run test:names && npm run schemas:check && npm run build:web"
   },
   "dependencies": {
     "@fastify/multipart": "10.1.1",
@@ -32,6 +36,7 @@
     "zod": "4.5.4"
   },
   "devDependencies": {
+    "@playwright/test": "1.55.0",
     "@types/node": "24.10.1",
     "@types/pdfkit": "0.17.6",
     "@types/react": "19.2.18",

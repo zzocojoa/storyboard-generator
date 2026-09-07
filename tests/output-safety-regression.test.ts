@@ -243,7 +243,7 @@ describe('Frame 안전 출력', (): void => {
 
   it.each([['stale_frame_image_is_not_rendered_after_shot_action_change', 'action'], ['stale_frame_image_is_not_rendered_after_camera_change', 'camera']] as const)('%s', async (_name, field): Promise<void> => {
     const fixture = await acceptedFrameFixture();
-    const content = { action: fixture.shot.action, camera: fixture.shot.camera, visualLocationId: fixture.shot.visualLocationId, presence: fixture.shot.presence,
+    const content = { visualMode: fixture.shot.visualMode, action: fixture.shot.action, camera: fixture.shot.camera, visualLocationId: fixture.shot.visualLocationId, presence: fixture.shot.presence,
       propIds: fixture.shot.propIds, continuityBefore: fixture.shot.continuityBefore, continuityAfter: fixture.shot.continuityAfter, cameraAxis: fixture.shot.cameraAxis,
       screenDirection: fixture.shot.screenDirection, informationIds: fixture.shot.informationIds, transitionOut: fixture.shot.transitionOut };
     const changed: Project = updateShotContent(fixture.project, fixture.shot.id, field === 'action' ? { ...content, action: `${content.action} 변경` }

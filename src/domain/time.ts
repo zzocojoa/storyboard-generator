@@ -78,12 +78,10 @@ function dropFrameLabel(frameNumber: bigint, nominalFps: number): bigint {
   return normalized + droppedPerMinute * 9n * tenMinuteBlocks + droppedPerMinute * additionalMinutes;
 }
 
-/** Project Timebase와 시작 Timecode를 사용해 정수 프레임 산술로 표시한다. */
-export function formatProjectTimecode(milliseconds: number, timebase: Timebase): string {
+function formatFrameNumber(frameNumber: bigint, timebase: Timebase): string {
   assertNoErrors(validateTimebase(timebase), 'INVALID_TIMEBASE');
   const nominalFps: number = Math.round(timebase.fpsNumerator / timebase.fpsDenominator);
-  const absoluteFrame: bigint = startFrameNumber(timebase, nominalFps) + elapsedFrames(milliseconds, timebase);
-  const displayFrame: bigint = timebase.dropFrame ? dropFrameLabel(absoluteFrame, nominalFps) : absoluteFrame;
+  const displayFrame: bigint = timebase.dropFrame ? dropFrameLabel(frameNumber, nominalFps) : frameNumber;
   const nominal: bigint = BigInt(nominalFps);
   const frames: bigint = displayFrame % nominal;
   const totalSeconds: bigint = displayFrame / nominal;
@@ -94,6 +92,24 @@ export function formatProjectTimecode(milliseconds: number, timebase: Timebase):
   const separator: string = timebase.dropFrame ? ';' : ':';
   const base: string = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}${separator}${String(frames).padStart(2, '0')}`;
   return hours === 0n ? base : `${String(hours).padStart(2, '0')}:${base}`;
+}
+
+/** Project 시작 Timecode를 정확히 한 번 반영한 절대 Timeline 시각이다. */
+export function formatAbsoluteProjectTimecode(milliseconds: number, timebase: Timebase): string {
+  assertNoErrors(validateTimebase(timebase), 'INVALID_TIMEBASE');
+  const nominalFps: number = Math.round(timebase.fpsNumerator / timebase.fpsDenominator);
+  return formatFrameNumber(startFrameNumber(timebase, nominalFps) + elapsedFrames(milliseconds, timebase), timebase);
+}
+
+/** Project 시작 Timecode와 무관하게 0부터 세는 길이 표시다. */
+export function formatProjectDurationTimecode(milliseconds: number, timebase: Timebase): string {
+  assertNoErrors(validateTimebase(timebase), 'INVALID_TIMEBASE');
+  return formatFrameNumber(elapsedFrames(milliseconds, timebase), timebase);
+}
+
+/** 기존 호출자의 절대 Timeline 의미를 유지하는 호환 별칭이다. */
+export function formatProjectTimecode(milliseconds: number, timebase: Timebase): string {
+  return formatAbsoluteProjectTimecode(milliseconds, timebase);
 }
 
 export function validateTimebase(timebase: Timebase): Issue[] {

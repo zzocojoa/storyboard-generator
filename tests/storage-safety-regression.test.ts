@@ -346,7 +346,7 @@ describe('E. Symlink safety', (): void => {
       assets: [...current.assets, asset] }), [{ relativePath: asset.path, content: bytes }]);
     const outside: string = join(fixtureRoot, 'outside.png'); const path: string = join(projectDirectory(dataRoot, project.projectId), asset.path);
     await writeFile(outside, bytes); await unlink(path); await symlink(outside, path);
-    await expect(new ProjectStore(dataRoot).asset(project.projectId, asset.id)).rejects.toSatisfy((error: unknown): boolean => codeOf(error) === 'STORE_PATH_UNSAFE');
+    await expect(new ProjectStore(dataRoot).asset(project.projectId, asset.id)).rejects.toSatisfy((error: unknown): boolean => codeOf(error) === 'STORED_ASSET_PATH_UNSAFE');
   });
 
   it('versions_directory_symlink_is_rejected', async (): Promise<void> => {
@@ -383,7 +383,7 @@ describe('E. Symlink safety', (): void => {
       assets: [...current.assets, asset] }), [{ relativePath: asset.path, content: bytes }]);
     const outside: string = join(fixtureRoot, 'read.png'); const path: string = join(projectDirectory(dataRoot, project.projectId), asset.path);
     await writeFile(outside, bytes); await unlink(path); await symlink(outside, path);
-    await expect(new ProjectStore(dataRoot).asset(project.projectId, asset.id)).rejects.toSatisfy((error: unknown): boolean => codeOf(error) === 'STORE_PATH_UNSAFE');
+    await expect(new ProjectStore(dataRoot).asset(project.projectId, asset.id)).rejects.toSatisfy((error: unknown): boolean => codeOf(error) === 'STORED_ASSET_PATH_UNSAFE');
   });
 
   it('safe_write_rejects_symlinked_parent', async (): Promise<void> => {

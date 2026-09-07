@@ -9,8 +9,18 @@ export type GenerationRecordTransition = {
 export type GenerationRecordAuditEntry = {
   recordId: string;
   introducedRevision: number | null;
+  lastObservedRevision: number | null;
+  presentInCurrent: boolean;
+  removedAtRevision: number | null;
+  reappearedAtRevisions: number[];
+  mutatedAtRevisions: number[];
   validAtIntroduction: boolean;
-  currentTargetState: 'current' | 'historical' | 'unresolved';
+  recordPresenceState: 'current' | 'legacy-removed' | 'legacy-reappeared' | 'unresolved';
+  recordIntegrityState: 'unchanged' | 'legacy-mutated' | 'unresolved';
+  currentTargetState: 'current' | 'historical' | 'mixed' | 'unresolved';
+  shotTargets: { shotId: string; state: 'current' | 'historical' | 'unresolved' }[];
+  assetTargets: { assetId: string; state: 'current' | 'historical' | 'unresolved' }[];
+  observedRevisions: number[];
   shotIds: string[];
   resultAssetIds: string[];
   issues: Issue[];
@@ -164,37 +174,94 @@ function auditIssuesAtIntroduction(record: GenerationRecord, project: Project): 
   return issues;
 }
 
-/** Revision snapshot으로 각 생성 기록의 도입 시점과 현재 또는 과거 Target 상태를 파생한다. */
+type RecordObservation = { revision: number; project: Project; record: GenerationRecord };
+
+function targetState(id: string, currentIds: ReadonlySet<string>, historicalIds: ReadonlySet<string>): 'current' | 'historical' | 'unresolved' {
+  if (currentIds.has(id)) return 'current';
+  return historicalIds.has(id) ? 'historical' : 'unresolved';
+}
+
+function combinedTargetState(states: readonly ('current' | 'historical' | 'unresolved')[]): 'current' | 'historical' | 'mixed' | 'unresolved' {
+  if (states.some((state): boolean => state === 'unresolved')) return 'unresolved';
+  const unique: Set<string> = new Set<string>(states);
+  if (unique.size === 0 || unique.size === 1 && unique.has('current')) return 'current';
+  if (unique.size === 1 && unique.has('historical')) return 'historical';
+  return 'mixed';
+}
+
+/** Current와 모든 Revision snapshot의 합집합에서 생성 기록의 변경 없는 감사 이력을 파생한다. */
 export function auditGenerationRecords(current: Project, versions: readonly Project[]): GenerationRecordAuditEntry[] {
-  const orderedVersions: Project[] = [...versions].sort((left: Project, right: Project): number => left.revision - right.revision);
+  const versionSnapshots: Project[] = [...versions].filter((version: Project): boolean => version.revision <= current.revision)
+    .sort((left: Project, right: Project): number => left.revision - right.revision);
+  const snapshots: Project[] = [...versionSnapshots, current].sort((left: Project, right: Project): number => left.revision - right.revision);
+  const recordIds: string[] = [];
+  const seenRecordIds: Set<string> = new Set<string>();
+  for (const snapshot of snapshots) for (const record of snapshot.generationRecords) if (!seenRecordIds.has(record.id)) {
+    seenRecordIds.add(record.id); recordIds.push(record.id);
+  }
+  const historicalShotIds: ReadonlySet<string> = new Set<string>(snapshots.flatMap((snapshot: Project): string[] => snapshot.shots.map((shot): string => shot.id)));
+  const historicalAssetIds: ReadonlySet<string> = new Set<string>(snapshots.flatMap((snapshot: Project): string[] => snapshot.assets.map((asset): string => asset.id)));
   const currentShotIds: ReadonlySet<string> = new Set<string>(current.shots.map((shot): string => shot.id));
-  return current.generationRecords.map((record: GenerationRecord): GenerationRecordAuditEntry => {
-    const introduction: Project | undefined = orderedVersions.find((project: Project): boolean =>
-      project.generationRecords.some((candidate: GenerationRecord): boolean => candidate.id === record.id));
-    if (introduction === undefined) {
-      const unresolved: Issue = issue('GENERATION_RECORD_INTRODUCTION_UNRESOLVED', 'warning', record.id, 'generationRecords',
-        `Generation Record가 처음 등장한 Revision을 증명할 수 없습니다. recordId=${record.id}`,
-        'record in version snapshot', 'missing', []);
-      return { recordId: record.id, introducedRevision: null, validAtIntroduction: false,
-        currentTargetState: 'unresolved', shotIds: [...record.shotIds], resultAssetIds: [...record.resultAssetIds], issues: [unresolved] };
+  const currentAssetIds: ReadonlySet<string> = new Set<string>(current.assets.map((asset): string => asset.id));
+  return recordIds.map((recordId: string): GenerationRecordAuditEntry => {
+    const observations: RecordObservation[] = snapshots.flatMap((snapshot: Project): RecordObservation[] => {
+      const record: GenerationRecord | undefined = snapshot.generationRecords.find((candidate: GenerationRecord): boolean => candidate.id === recordId);
+      return record === undefined ? [] : [{ revision: snapshot.revision, project: snapshot, record }];
+    });
+    const introduction: RecordObservation | undefined = observations[0];
+    if (introduction === undefined) throw contractError('GENERATION_RECORD_AUDIT_INCONSISTENT', `Generation Record 관측값이 없습니다. recordId=${recordId}`, []);
+    const afterIntroduction: Project[] = snapshots.filter((snapshot: Project): boolean => snapshot.revision >= introduction.revision);
+    const removedSnapshot: Project | undefined = afterIntroduction.find((snapshot: Project): boolean =>
+      !snapshot.generationRecords.some((record: GenerationRecord): boolean => record.id === recordId));
+    let wasAbsent: boolean = false;
+    const reappearedAtRevisions: number[] = [];
+    for (const snapshot of afterIntroduction) {
+      const present: boolean = snapshot.generationRecords.some((record: GenerationRecord): boolean => record.id === recordId);
+      if (present && wasAbsent) reappearedAtRevisions.push(snapshot.revision);
+      if (!present) wasAbsent = true;
     }
-    const introducedRecord: GenerationRecord | undefined = introduction.generationRecords.find((candidate: GenerationRecord): boolean => candidate.id === record.id);
-    if (introducedRecord === undefined) throw contractError('GENERATION_RECORD_AUDIT_INCONSISTENT', `도입 Generation Record를 찾을 수 없습니다. recordId=${record.id}`, []);
-    const issues: Issue[] = auditIssuesAtIntroduction(introducedRecord, introduction);
-    if (!recordsEqual(introducedRecord, record)) {
-      issues.push(issue('HISTORICAL_GENERATION_RECORD_CHANGED', 'warning', record.id, 'generationRecords',
-        `도입 Revision 이후 Generation Record metadata가 달라졌습니다. recordId=${record.id}`,
+    const mutatedAtRevisions: number[] = observations.slice(1)
+      .filter((observation: RecordObservation): boolean => !recordsEqual(introduction.record, observation.record))
+      .map((observation: RecordObservation): number => observation.revision);
+    const introductionIsCurrentOnly: boolean = !versionSnapshots.some((snapshot: Project): boolean =>
+      snapshot.generationRecords.some((candidate: GenerationRecord): boolean => candidate.id === recordId));
+    const issues: Issue[] = introductionIsCurrentOnly ? [issue('GENERATION_RECORD_INTRODUCTION_UNRESOLVED', 'warning', recordId, 'generationRecords',
+      `Generation Record가 처음 등장한 Version Snapshot을 증명할 수 없습니다. recordId=${recordId}`,
+      'record in version snapshot', 'current only', [])] : auditIssuesAtIntroduction(introduction.record, introduction.project);
+    if (removedSnapshot !== undefined) issues.push(issue('HISTORICAL_GENERATION_RECORD_REMOVED', 'warning', recordId, 'generationRecords',
+      `Generation Record가 이후 Revision에서 사라졌습니다. recordId=${recordId}, revision=${removedSnapshot.revision}`,
+      'append-only record', `removed at ${removedSnapshot.revision}`, []));
+    if (reappearedAtRevisions.length > 0) issues.push(issue('HISTORICAL_GENERATION_RECORD_REAPPEARED', 'warning', recordId, 'generationRecords',
+      `삭제된 Generation Record가 다시 나타났습니다. recordId=${recordId}, revisions=${reappearedAtRevisions.join(',')}`,
+      'continuous append-only record', reappearedAtRevisions.join(','), []));
+    if (mutatedAtRevisions.length > 0) {
+      issues.push(issue('HISTORICAL_GENERATION_RECORD_MUTATED', 'warning', recordId, 'generationRecords',
+        `Generation Record metadata가 변경된 Revision이 있습니다. recordId=${recordId}, revisions=${mutatedAtRevisions.join(',')}`,
+        'immutable record metadata', mutatedAtRevisions.join(','), []));
+      issues.push(issue('HISTORICAL_GENERATION_RECORD_CHANGED', 'warning', recordId, 'generationRecords',
+        `도입 Revision 이후 Generation Record metadata가 달라졌습니다. recordId=${recordId}`,
         'immutable record metadata', 'changed', []));
     }
-    const validAtIntroduction: boolean = issues.every((value: Issue): boolean =>
+    const shotIds: string[] = [...new Set<string>(observations.flatMap((observation: RecordObservation): string[] => observation.record.shotIds))];
+    const resultAssetIds: string[] = [...new Set<string>(observations.flatMap((observation: RecordObservation): string[] => observation.record.resultAssetIds))];
+    const shotTargets = shotIds.map((shotId: string) => ({ shotId, state: targetState(shotId, currentShotIds, historicalShotIds) }));
+    const assetTargets = resultAssetIds.map((assetId: string) => ({ assetId, state: targetState(assetId, currentAssetIds, historicalAssetIds) }));
+    const targetStates: ('current' | 'historical' | 'unresolved')[] = [...shotTargets.map((target) => target.state), ...assetTargets.map((target) => target.state)];
+    const currentTargetState: 'current' | 'historical' | 'mixed' | 'unresolved' = combinedTargetState(targetStates);
+    if (currentTargetState === 'mixed') issues.push(issue('HISTORICAL_GENERATION_TARGET_MIXED', 'warning', recordId, 'generationRecords',
+      `Generation Record가 현재와 과거 Target을 함께 참조합니다. recordId=${recordId}`, 'single target state', 'mixed', []));
+    const validAtIntroduction: boolean = !introductionIsCurrentOnly && issues.every((value: Issue): boolean =>
       !['HISTORICAL_GENERATION_SHOT_UNRESOLVED', 'HISTORICAL_GENERATION_ASSET_UNRESOLVED'].includes(value.code));
-    const allCurrent: boolean = record.shotIds.every((shotId: string): boolean => currentShotIds.has(shotId));
+    const presentInCurrent: boolean = current.generationRecords.some((record: GenerationRecord): boolean => record.id === recordId);
     return {
-      recordId: record.id,
-      introducedRevision: introduction.revision,
-      validAtIntroduction,
-      currentTargetState: validAtIntroduction ? (allCurrent ? 'current' : 'historical') : 'unresolved',
-      shotIds: [...record.shotIds], resultAssetIds: [...record.resultAssetIds], issues,
+      recordId, introducedRevision: introductionIsCurrentOnly ? null : introduction.revision, lastObservedRevision: observations.at(-1)?.revision ?? null,
+      presentInCurrent, removedAtRevision: removedSnapshot?.revision ?? null, reappearedAtRevisions, mutatedAtRevisions,
+      validAtIntroduction, recordPresenceState: introductionIsCurrentOnly ? 'unresolved' : reappearedAtRevisions.length > 0 ? 'legacy-reappeared'
+        : presentInCurrent ? 'current' : removedSnapshot === undefined ? 'unresolved' : 'legacy-removed',
+      recordIntegrityState: introductionIsCurrentOnly ? 'unresolved' : mutatedAtRevisions.length > 0 ? 'legacy-mutated' : 'unchanged',
+      currentTargetState: introductionIsCurrentOnly ? 'unresolved' : currentTargetState, shotTargets, assetTargets,
+      observedRevisions: [...new Set<number>(observations.map((observation: RecordObservation): number => observation.revision))],
+      shotIds, resultAssetIds, issues,
     };
   });
 }

@@ -140,10 +140,20 @@ function migrate14To15(input: JsonObject): JsonObject {
   return { ...input, schemaVersion: '1.5.0', textPlacementInformationDecisions: migratedPlacementInformationDecisions(input) };
 }
 
-/** 1.0~1.4 저장본을 독립 Placement 정보 판정이 명시된 1.5 형식으로 올린다. */
+function migrate15To16(input: JsonObject): JsonObject {
+  if (input.schemaVersion !== '1.5.0' || !Array.isArray(input.shots)) return input;
+  return {
+    ...input,
+    schemaVersion: '1.6.0',
+    shots: input.shots.map((shot: unknown): unknown => isJsonObject(shot) && !('visualMode' in shot)
+      ? { ...shot, visualMode: 'sourced' } : shot),
+  };
+}
+
+/** 1.0~1.5 저장본을 명시적인 시각 모드가 있는 1.6 형식으로 올린다. */
 export function migrateProjectInput(input: unknown): unknown {
   if (!isJsonObject(input)) return input;
-  return migrate14To15(migrate13To14(migrate12To13(migrate11To12(migrate10To11(input)))));
+  return migrate15To16(migrate14To15(migrate13To14(migrate12To13(migrate11To12(migrate10To11(input))))));
 }
 
 /** 저장된 원본 스냅샷에서 데이터를 다시 계산해 편집 가능한 값과 원문을 구분한다. */

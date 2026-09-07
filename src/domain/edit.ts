@@ -5,7 +5,7 @@ import type { Asset, AudioCue, Issue, LockedField, Project, Shot, ShotContent, S
 import { validateProject } from './validation.js';
 
 export function shotContent(shot: Shot): ShotContent {
-  return { action: shot.action, camera: shot.camera, visualLocationId: shot.visualLocationId, presence: shot.presence, propIds: shot.propIds,
+  return { visualMode: shot.visualMode, action: shot.action, camera: shot.camera, visualLocationId: shot.visualLocationId, presence: shot.presence, propIds: shot.propIds,
     continuityBefore: shot.continuityBefore, continuityAfter: shot.continuityAfter, cameraAxis: shot.cameraAxis, screenDirection: shot.screenDirection,
     informationIds: shot.informationIds, transitionOut: shot.transitionOut };
 }
@@ -29,6 +29,7 @@ function requireUnlocked(shot: Shot, fields: readonly LockedField[]): void {
 
 function changedContentFields(before: Shot, after: ShotContent): LockedField[] {
   const mappings: { field: LockedField; keys: (keyof ShotContent)[] }[] = [
+    { field: 'frames', keys: ['visualMode'] },
     { field: 'action', keys: ['action', 'informationIds'] }, { field: 'camera', keys: ['camera', 'cameraAxis', 'screenDirection'] },
     { field: 'location', keys: ['visualLocationId'] }, { field: 'presence', keys: ['presence'] },
     { field: 'continuity', keys: ['propIds', 'continuityBefore', 'continuityAfter'] },

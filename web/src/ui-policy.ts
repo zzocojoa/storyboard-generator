@@ -30,6 +30,22 @@ export function recordRecoveryUiError(state: RecoveryUiState, error: RecoveryUiE
     { projectId: error.projectId, assetId: error.resourceId, code: error.code, message: error.message }] };
 }
 
+export function clearAssetIntegrityIssue(state: RecoveryUiState, projectId: string, assetId: string): RecoveryUiState {
+  return { ...state, assetIntegrityIssues: state.assetIntegrityIssues.filter((issue: AssetIntegrityUiIssue): boolean =>
+    issue.projectId !== projectId || issue.assetId !== assetId) };
+}
+
+export function reconcileAssetIntegrityIssues(
+  state: RecoveryUiState, projectId: string, issues: readonly AssetIntegrityUiIssue[],
+): RecoveryUiState {
+  const otherProjects: AssetIntegrityUiIssue[] = state.assetIntegrityIssues.filter((issue: AssetIntegrityUiIssue): boolean => issue.projectId !== projectId);
+  const byAssetId: Map<string, AssetIntegrityUiIssue> = new Map<string, AssetIntegrityUiIssue>();
+  for (const issue of issues) byAssetId.set(issue.assetId, issue);
+  return { ...state, assetIntegrityIssues: [...otherProjects, ...byAssetId.values()]
+    .sort((left: AssetIntegrityUiIssue, right: AssetIntegrityUiIssue): number =>
+      `${left.projectId}\u0000${left.assetId}`.localeCompare(`${right.projectId}\u0000${right.assetId}`)) };
+}
+
 export function projectRecoveryBlocked(state: RecoveryUiState, projectId: string | null): boolean {
   return projectId !== null && state.blockedProjectIds.includes(projectId);
 }

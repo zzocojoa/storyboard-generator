@@ -1,7 +1,8 @@
 import { issue } from './errors.js';
-import type { Issue, ShotSourceLink, SourceUnit } from './schema.js';
+import type { Issue, Project, Shot, ShotSourceLink, ShotVisualMode, SourceUnit } from './schema.js';
+import { frameEvaluationAbsoluteMs } from './time.js';
 
-export type SourcePolicyShot = { id: string; sourceLinks: readonly ShotSourceLink[] };
+export type SourcePolicyShot = { id: string; visualMode: ShotVisualMode; sourceLinks: readonly ShotSourceLink[] };
 
 /** Source Link의 시각 용도와 원문 순서를 하나의 정책으로 검사한다. */
 export function sourcePolicyIssues(units: readonly SourceUnit[], shots: readonly SourcePolicyShot[]): Issue[] {
@@ -10,7 +11,8 @@ export function sourcePolicyIssues(units: readonly SourceUnit[], shots: readonly
   let latestPrimaryOrder: number = 0;
   for (const shot of shots) {
     const direct: ShotSourceLink[] = shot.sourceLinks.filter((link: ShotSourceLink): boolean => link.usage === 'primary-visual' || link.usage === 'continued-visual');
-    if (direct.length === 0) issues.push(issue('SHOT_VISUAL_SOURCE_REQUIRED', 'conflict', shot.id, 'sourceLinks', '컷에는 하나 이상의 직접 시각 원문이 필요합니다.', 'primary-visual or continued-visual', null, []));
+    if (shot.visualMode === 'sourced' && direct.length === 0) issues.push(issue('SHOT_VISUAL_SOURCE_REQUIRED', 'conflict', shot.id, 'sourceLinks', 'sourced 컷에는 하나 이상의 직접 시각 원문이 필요합니다.', 'primary-visual or continued-visual', null, []));
+    if (shot.visualMode !== 'sourced' && direct.length > 0) issues.push(issue('NON_SOURCED_DIRECT_VISUAL_LINK', 'conflict', shot.id, 'sourceLinks', `${shot.visualMode} 컷에는 직접 시각 원문을 연결할 수 없습니다.`, 'audio-only or context-only', direct.map((link: ShotSourceLink): string => link.unitId).join(', '), []));
     const duplicateIds: string[] = [...new Set(shot.sourceLinks.map((link: ShotSourceLink): string => link.unitId).filter((id: string, index: number, ids: string[]): boolean => ids.indexOf(id) !== index))];
     if (duplicateIds.length > 0) issues.push(issue('DUPLICATE_SHOT_SOURCE_LINK', 'conflict', shot.id, 'sourceLinks', `같은 컷에서 원문 연결을 중복할 수 없습니다: ${duplicateIds.join(', ')}`, 'unique unitId', duplicateIds.join(', '), []));
     for (const link of shot.sourceLinks) {
@@ -31,4 +33,35 @@ export function sourcePolicyIssues(units: readonly SourceUnit[], shots: readonly
     }
   }
   return issues;
+}
+
+/** confirmed 직접 시각 Anchor의 합집합이 sourced 컷의 반열린 전체 구간을 덮는지 검사한다. */
+export function shotVisualCoverageIssues(project: Project, shot: Shot): Issue[] {
+  if (shot.visualMode !== 'sourced') return [];
+  const ranges: { startMs: number; endMs: number; unitId: string }[] = shot.sourceLinks.flatMap((link: ShotSourceLink): { startMs: number; endMs: number; unitId: string }[] => {
+    if (link.status !== 'confirmed' || !['primary-visual', 'continued-visual'].includes(link.usage)) return [];
+    const anchor = link.temporalAnchor;
+    if (anchor.status !== 'confirmed') return [];
+    const range = anchor.kind === 'frame'
+      ? project.frames.find((frame) => frame.id === anchor.frameId && frame.shotId === shot.id) === undefined ? null : (() => {
+        const frame = project.frames.find((candidate) => candidate.id === anchor.frameId && candidate.shotId === shot.id);
+        if (frame === undefined) return null;
+        const startMs: number = frameEvaluationAbsoluteMs(shot, frame);
+        return { startMs, endMs: Math.min(shot.endMs, startMs + 1) };
+      })()
+      : anchor.kind === 'shot-offset' && anchor.startOffsetMs < anchor.endOffsetMs && anchor.endOffsetMs <= shot.endMs - shot.startMs
+        ? { startMs: shot.startMs + anchor.startOffsetMs, endMs: shot.startMs + anchor.endOffsetMs } : null;
+    return range === null ? [] : [{ ...range, unitId: link.unitId }];
+  }).sort((left, right): number => left.startMs - right.startMs || left.endMs - right.endMs || left.unitId.localeCompare(right.unitId));
+  const gaps: { startMs: number; endMs: number }[] = [];
+  let cursor: number = shot.startMs;
+  for (const range of ranges) {
+    if (range.startMs > cursor) gaps.push({ startMs: cursor, endMs: range.startMs });
+    cursor = Math.max(cursor, range.endMs);
+  }
+  if (cursor < shot.endMs) gaps.push({ startMs: cursor, endMs: shot.endMs });
+  const actual: string = JSON.stringify(ranges);
+  return gaps.map((gap) => issue('SHOT_VISUAL_COVERAGE_GAP', 'conflict', shot.id, 'sourceLinks',
+    `${shot.id}: 직접 시각 Source가 ${gap.startMs}..${gap.endMs}ms를 덮지 않습니다. confirmed Anchor를 이어 붙이거나 visualMode를 명시적으로 변경하세요.`,
+    `${shot.startMs}..${shot.endMs}`, actual, []));
 }

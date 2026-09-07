@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { approveShot, mergeShots, reorderShots, requireShot, setShotLocks, shotContent, splitShot, updateShotContent } from '../src/domain/edit.js';
-import type { Asset, Project } from '../src/domain/schema.js';
+import type { Asset, Issue, Project } from '../src/domain/schema.js';
 import { validateProject } from '../src/domain/validation.js';
 import { importPackage } from '../src/importers/import-package.js';
 import { createSourceOutline } from '../src/proposal/outline.js';
@@ -16,7 +16,9 @@ describe('원문 뼈대와 편집', (): void => {
       const imported = importPackage(payload);
       const before: string = JSON.stringify(imported);
       const project = createSourceOutline(imported, { proposedTextHoldMs: 3000 });
-      expect(validateProject(project, imported.dataset)).toEqual([]);
+      const issues: Issue[] = validateProject(project, imported.dataset);
+      expect(issues.filter((issue: Issue): boolean => issue.severity === 'error')).toEqual([]);
+      expect(issues.every((issue: Issue): boolean => issue.code === 'SHOT_VISUAL_COVERAGE_GAP')).toBe(true);
       expect(JSON.stringify(imported)).toBe(before);
       expect(project.shots.every((shot): boolean => shot.visualLocationId === null && shot.presence.length === 0 && shot.approvalStatus === 'proposed')).toBe(true);
       expect(project.audioCues.every((cue): boolean => cue.timingStatus === 'proposed' && cue.assetId === null)).toBe(true);

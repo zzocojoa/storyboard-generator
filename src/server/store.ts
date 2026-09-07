@@ -37,6 +37,10 @@ export type AssetCatalogTransition = {
   writesByAssetId: ReadonlyMap<string, AssetWrite>;
 };
 export type StoredAsset = { content: Buffer; mimeType: string; asset: Asset };
+export type SafeFrameOutput = { content: Buffer; mimeType: string; asset: Asset | null; sourceFrameId: string | null };
+export type AssetIntegrityIssue = {
+  projectId: string; assetId: string; outputTargetIds: string[]; code: string; message: string;
+};
 export type AudioAssetRecoverySource = { content: Buffer; asset: Asset; inspection: InspectedAudioFile };
 export type StorageRecoveryEvent = {
   projectId: string; transactionId: string;
@@ -60,7 +64,7 @@ export type StorageFaultPoint = 'after-update-lock-acquired' | 'after-update-cur
   | 'before-create-directory-publish' | 'after-create-directory-publish' | 'before-create-cleanup'
   | 'before-lock-write' | 'after-lock-file-created' | 'after-lock-write-eexist' | 'before-lock-directory-sync'
   | 'after-lock-directory-sync' | 'after-create-lock-written' | 'before-create-journal-cleanup' | 'before-create-lock-removal'
-  | 'before-root-create-lock-removal';
+  | 'before-root-create-lock-removal' | 'before-audit-current-recheck';
 export type StorageFaultInjector = { ownerPid: number; trigger(point: StorageFaultPoint): void | Promise<void> };
 export type StorageRuntime = {
   processInstanceId?: string;
@@ -152,14 +156,73 @@ const ProcessInstanceRecordSchema = z.strictObject({
   startedAt: z.iso.datetime(), heartbeatAt: z.iso.datetime(),
 });
 export type ProcessInstanceRecord = z.infer<typeof ProcessInstanceRecordSchema>;
+export type ProcessHeartbeatStatus = {
+  processInstanceId: string;
+  healthy: boolean;
+  lastSuccessAt: string | null;
+  lastError: { code: string; message: string } | null;
+};
+export type InvalidRecoveryMarker = {
+  fileName: string; quarantinedPath: string; code: string; message: string; detectedAt: string;
+};
+export type StorageStatusSnapshot = {
+  activeCreates: readonly ActiveCreateState[];
+  activeUpdates: readonly ActiveUpdateState[];
+  recoveryBlocks: readonly StorageRecoveryBlock[];
+  invalidRecoveryMarkers: readonly InvalidRecoveryMarker[];
+  processHeartbeat: ProcessHeartbeatStatus;
+};
 
 const SHARED_PROCESS_INSTANCE_ID: string = randomUUID();
 const SHARED_PROCESS_STARTED_AT: string = new Date().toISOString();
 const DEFAULT_HEARTBEAT_FRESHNESS_MS: number = 30_000;
-const processInstanceRegistrations: Map<string, number> = new Map<string, number>();
+const BLACK_FRAME_PNG: Buffer = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADElEQVQImWNgYGAAAAAEAAGjChXjAAAAAElFTkSuQmCC', 'base64');
+type HeartbeatReference = { intervalMs: number; touch: () => Promise<void> };
+type SharedHeartbeat = {
+  references: Map<symbol, HeartbeatReference>;
+  timer: ReturnType<typeof setInterval>;
+  intervalMs: number;
+  inFlight: Promise<void> | null;
+  state: ProcessHeartbeatStatus;
+};
+const sharedHeartbeats: Map<string, SharedHeartbeat> = new Map<string, SharedHeartbeat>();
 
 function processRegistrationKey(root: string, processInstanceId: string): string {
   return `${root}\u0000${processInstanceId}`;
+}
+
+function heartbeatIntervalMs(freshnessMs: number): number {
+  return Math.max(1_000, Math.floor(freshnessMs / 3));
+}
+
+function startHeartbeatTimer(registrationKey: string, entry: SharedHeartbeat): ReturnType<typeof setInterval> {
+  const timer: ReturnType<typeof setInterval> = setInterval((): void => {
+    const current: SharedHeartbeat | undefined = sharedHeartbeats.get(registrationKey);
+    if (current === undefined || current.inFlight !== null) return;
+    const reference: HeartbeatReference | undefined = current.references.values().next().value as HeartbeatReference | undefined;
+    if (reference === undefined) return;
+    current.inFlight = reference.touch().then((): void => {
+      current.state = { ...current.state, healthy: true, lastSuccessAt: new Date().toISOString(), lastError: null };
+    }).catch((error: unknown): void => {
+      const lastError: { code: string; message: string } = {
+        code: errorCode(error), message: error instanceof Error ? error.message : String(error),
+      };
+      current.state = { ...current.state, healthy: false, lastError };
+      console.warn(JSON.stringify({ event: 'project-store-heartbeat-failed', processInstanceId: current.state.processInstanceId,
+        code: lastError.code, message: lastError.message }));
+      if (lastError.code === 'STORE_PATH_UNSAFE' && lastError.message.includes('actual=missing')) {
+        clearInterval(current.timer);
+        sharedHeartbeats.delete(registrationKey);
+      }
+    }).finally((): void => { current.inFlight = null; });
+  }, entry.intervalMs);
+  timer.unref();
+  return timer;
+}
+
+export function processHeartbeatTimerHasRef(root: string, processInstanceId: string): boolean | null {
+  const entry: SharedHeartbeat | undefined = sharedHeartbeats.get(processRegistrationKey(root, processInstanceId));
+  return entry === undefined ? null : entry.timer.hasRef();
 }
 
 export function projectStoreKey(projectId: string): string { return sha256Text(projectId); }
@@ -196,6 +259,7 @@ export function mapStoredAssetIntegrityError(error: unknown, projectId: string, 
     : code === 'ASSET_HASH_MISMATCH' ? 'STORED_ASSET_HASH_MISMATCH'
       : code === 'ASSET_MIME_MISMATCH' ? 'STORED_ASSET_MIME_MISMATCH'
         : code === 'ASSET_CONTENT_CORRUPT' ? 'STORED_ASSET_CONTENT_CORRUPT'
+          : code === 'ASSET_PATH_UNSAFE' || code === 'STORE_PATH_UNSAFE' ? 'STORED_ASSET_PATH_UNSAFE'
           : code === 'AUDIO_ASSET_METADATA_MISMATCH' && error instanceof Error && error.message.includes('길이') ? 'STORED_AUDIO_DURATION_MISMATCH'
             : code === 'AUDIO_ASSET_METADATA_MISMATCH' || code === 'AUDIO_ASSET_METADATA_MISSING'
               || code === 'AUDIO_ASSET_NORMALIZATION_REQUIRED' ? 'STORED_AUDIO_METADATA_MISMATCH' : null;
@@ -297,8 +361,10 @@ export class ProjectStore {
   readonly #now: () => Date;
   readonly #processProbe: (pid: number) => boolean;
   readonly #heartbeatFreshnessMs: number;
+  readonly #heartbeatReferenceId: symbol = Symbol('project-store-heartbeat');
   readonly #recoveryEvents: StorageRecoveryEvent[] = [];
   readonly #recoveryBlocks: Map<string, StorageRecoveryBlock> = new Map<string, StorageRecoveryBlock>();
+  readonly #invalidRecoveryMarkers: InvalidRecoveryMarker[] = [];
   readonly #activeCreates: Map<string, ActiveCreateState> = new Map<string, ActiveCreateState>();
   readonly #activeUpdates: Map<string, ActiveUpdateState> = new Map<string, ActiveUpdateState>();
   #initialization: Promise<void> | null = null;
@@ -326,6 +392,7 @@ export class ProjectStore {
   #createLocksPath(): string { return this.#fs.path(CREATE_LOCKS_DIRECTORY); }
   #rootCreateLockPath(projectId: string): string { return join(this.#createLocksPath(), `${projectKey(projectId)}.lock`); }
   #recoveryBlocksPath(): string { return this.#fs.path(RECOVERY_BLOCKS_DIRECTORY); }
+  #invalidRecoveryBlocksPath(): string { return this.#fs.path(RECOVERY_BLOCKS_DIRECTORY, '.invalid'); }
   #recoveryBlockPath(directoryName: string): string { return join(this.#recoveryBlocksPath(), `${directoryName}.json`); }
   #processInstancesPath(): string { return this.#fs.path(PROCESS_INSTANCES_DIRECTORY); }
   #processInstancePath(processInstanceId: string): string { return join(this.#processInstancesPath(), `${processInstanceId}.json`); }
@@ -361,12 +428,41 @@ export class ProjectStore {
     }
   }
 
+  async #requireProcessHeartbeat(): Promise<void> {
+    try { await this.#touchProcessInstance(); }
+    catch (error: unknown) {
+      throw contractError('PROCESS_HEARTBEAT_UNAVAILABLE',
+        `새 저장 Lock을 획득하기 전에 Process heartbeat를 갱신할 수 없습니다. processInstanceId=${this.#processInstanceId}, causeCode=${errorCode(error)}, cause=${error instanceof Error ? error.message : String(error)}`, []);
+    }
+  }
+
   async #registerProcessInstance(): Promise<void> {
     if (!this.#processInstanceRegistered) {
       const root: string = this.#fs.root();
       const registrationKey: string = processRegistrationKey(root, this.#processInstanceId);
       await this.#touchProcessInstance();
-      processInstanceRegistrations.set(registrationKey, (processInstanceRegistrations.get(registrationKey) ?? 0) + 1);
+      const intervalMs: number = heartbeatIntervalMs(this.#heartbeatFreshnessMs);
+      const existing: SharedHeartbeat | undefined = sharedHeartbeats.get(registrationKey);
+      if (existing === undefined) {
+        const entry = {
+          references: new Map<symbol, HeartbeatReference>(), intervalMs, inFlight: null,
+          state: { processInstanceId: this.#processInstanceId, healthy: true, lastSuccessAt: this.#nowIso(), lastError: null },
+          timer: setInterval((): void => undefined, intervalMs),
+        } satisfies SharedHeartbeat;
+        clearInterval(entry.timer);
+        entry.references.set(this.#heartbeatReferenceId, { intervalMs, touch: (): Promise<void> => this.#touchProcessInstance() });
+        entry.timer = startHeartbeatTimer(registrationKey, entry);
+        sharedHeartbeats.set(registrationKey, entry);
+      } else {
+        existing.references.set(this.#heartbeatReferenceId, { intervalMs, touch: (): Promise<void> => this.#touchProcessInstance() });
+        existing.state = { ...existing.state, healthy: true, lastSuccessAt: this.#nowIso(), lastError: null };
+        const nextIntervalMs: number = Math.min(...[...existing.references.values()].map((reference: HeartbeatReference): number => reference.intervalMs));
+        if (nextIntervalMs !== existing.intervalMs) {
+          clearInterval(existing.timer);
+          existing.intervalMs = nextIntervalMs;
+          existing.timer = startHeartbeatTimer(registrationKey, existing);
+        }
+      }
       this.#processInstanceRegistered = true;
       return;
     }
@@ -723,7 +819,7 @@ export class ProjectStore {
   }
 
   async #acquireProjectLock(projectId: string, transactionId: string): Promise<RecoveryLock> {
-    await this.#touchProcessInstance();
+    await this.#requireProcessHeartbeat();
     const metadata: StoreLock = this.#lockMetadata(projectId, transactionId, this.#faultInjector?.ownerPid ?? process.pid);
     return this.#acquireOwnedLock(join(this.#directory(projectId), 'write.lock'), metadata);
   }
@@ -1209,11 +1305,41 @@ export class ProjectStore {
 
   async #loadRecoveryBlocks(): Promise<void> {
     this.#recoveryBlocks.clear();
+    this.#invalidRecoveryMarkers.splice(0, this.#invalidRecoveryMarkers.length);
     for (const entry of await this.#fs.entries(this.#recoveryBlocksPath())) {
-      if (!entry.isFile() || !/^[a-f0-9]{64}\.json$/.test(entry.name)) recoveryRequired(`복구 차단 저장소에 올바르지 않은 항목이 있습니다. entry=${entry.name}`);
-      const block: StorageRecoveryBlock = StorageRecoveryBlockSchema.parse(JSON.parse(await this.#fs.readText(join(this.#recoveryBlocksPath(), entry.name))) as unknown);
-      if (`${block.directoryName}.json` !== entry.name) recoveryRequired(`복구 차단 파일 이름과 내용이 다릅니다. entry=${entry.name}`);
-      this.#recoveryBlocks.set(block.directoryName, block);
+      if (entry.name === '.invalid' && entry.isDirectory()) continue;
+      const sourcePath: string = join(this.#recoveryBlocksPath(), entry.name);
+      let raw: unknown = null;
+      try {
+        if (!entry.isFile() || !/^[a-f0-9]{64}\.json$/.test(entry.name)) {
+          throw contractError('INVALID_RECOVERY_MARKER_NAME', `Recovery Marker 파일 이름이 올바르지 않습니다. entry=${entry.name}`, []);
+        }
+        raw = JSON.parse(await this.#fs.readText(sourcePath)) as unknown;
+        const block: StorageRecoveryBlock = StorageRecoveryBlockSchema.parse(raw);
+        if (`${block.directoryName}.json` !== entry.name) {
+          throw contractError('INVALID_RECOVERY_MARKER_IDENTITY', `Recovery Marker 파일 이름과 내용이 다릅니다. entry=${entry.name}`, []);
+        }
+        this.#recoveryBlocks.set(block.directoryName, block);
+      } catch (error: unknown) {
+        const detectedAt: string = this.#nowIso();
+        const quarantinedName: string = `${detectedAt.replaceAll(':', '-')}-${randomUUID()}-${entry.name.replaceAll('/', '_')}`;
+        const quarantinedPath: string = join(this.#invalidRecoveryBlocksPath(), quarantinedName);
+        await this.#fs.ensureDirectory(this.#invalidRecoveryBlocksPath());
+        if (entry.isFile()) await this.#fs.replaceFile(sourcePath, quarantinedPath);
+        else if (entry.isDirectory()) await this.#fs.renameNewDirectory(sourcePath, quarantinedPath);
+        else continue;
+        await this.#fs.syncDirectory(this.#recoveryBlocksPath());
+        await this.#fs.syncDirectory(this.#invalidRecoveryBlocksPath());
+        const marker: InvalidRecoveryMarker = { fileName: entry.name,
+          quarantinedPath: `${RECOVERY_BLOCKS_DIRECTORY}/.invalid/${quarantinedName}`,
+          code: errorCode(error), message: error instanceof Error ? error.message : String(error), detectedAt };
+        this.#invalidRecoveryMarkers.push(marker);
+        const identity = z.object({ projectId: z.string().min(1), transactionId: z.string().min(1) }).safeParse(raw);
+        const projectId: string = identity.success ? identity.data.projectId : `unknown:${entry.name}`;
+        const transactionId: string = identity.success ? identity.data.transactionId : entry.name;
+        await this.#writeRecoveryBlock(projectKey(projectId), projectId, transactionId, error);
+        console.warn(JSON.stringify({ event: 'project-store-recovery-marker-quarantined', projectId, ...marker }));
+      }
     }
   }
 
@@ -1289,6 +1415,14 @@ export class ProjectStore {
     for (const entry of await this.#fs.entries(this.#fs.root())) {
       if ([CREATE_TRANSACTIONS_DIRECTORY, CREATE_LOCKS_DIRECTORY, RECOVERY_BLOCKS_DIRECTORY, PROCESS_INSTANCES_DIRECTORY].includes(entry.name)) continue;
       if (blockedDuringInitialization.has(entry.name)) continue;
+      if (this.#recoveryBlocks.has(entry.name)) {
+        const lockKind: SafePathKind = await this.#fs.kind(this.#fs.path(entry.name, 'write.lock'));
+        const transactionsPath: string = this.#fs.path(entry.name, TRANSACTIONS_DIRECTORY);
+        const transactionsKind: SafePathKind = await this.#fs.kind(transactionsPath);
+        const hasTransactionEvidence: boolean = transactionsKind === 'directory'
+          ? (await this.#fs.entries(transactionsPath)).length > 0 : transactionsKind !== 'missing';
+        if (lockKind === 'missing' && !hasTransactionEvidence) continue;
+      }
       if (!entry.isDirectory()) {
         if (/^[a-f0-9]{64}$/.test(entry.name)) await this.#writeRecoveryBlock(entry.name, `unknown:${entry.name}`, 'directory', contractError('STORE_PATH_UNSAFE', 'Project 저장 경로가 디렉터리가 아닙니다.', []));
         continue;
@@ -1405,7 +1539,8 @@ export class ProjectStore {
     let framesOutputSafe: number = 0;
     for (const frame of project.frames) {
       const decision = reviewFrameOutput(project, frame.id, 'program-monitor');
-      if (!decision.renderBitmap || decision.imageAssetId === null) continue;
+      if (decision.renderMode === 'blocked') continue;
+      if (decision.imageAssetId === null) { framesOutputSafe += 1; continue; }
       try { await this.#assetForProject(project, decision.imageAssetId); framesOutputSafe += 1; }
       catch (error: unknown) { if (assetFailureCode(error) === null) throw error; }
     }
@@ -1447,13 +1582,23 @@ export class ProjectStore {
 
   recoveryEvents(): readonly StorageRecoveryEvent[] { return [...this.#recoveryEvents]; }
   recoveryBlocks(): readonly StorageRecoveryBlock[] { return [...this.#recoveryBlocks.values()]; }
+  invalidRecoveryMarkers(): readonly InvalidRecoveryMarker[] { return [...this.#invalidRecoveryMarkers]; }
   activeCreates(): readonly ActiveCreateState[] { return [...this.#activeCreates.values()]; }
   activeUpdates(): readonly ActiveUpdateState[] { return [...this.#activeUpdates.values()]; }
   processInstanceId(): string { return this.#processInstanceId; }
+  processHeartbeatTimerHasRef(): boolean | null { return processHeartbeatTimerHasRef(this.#fs.root(), this.#processInstanceId); }
+
+  processHeartbeat(): ProcessHeartbeatStatus {
+    const registrationKey: string = processRegistrationKey(this.#fs.root(), this.#processInstanceId);
+    const shared: SharedHeartbeat | undefined = sharedHeartbeats.get(registrationKey);
+    return shared?.state ?? { processInstanceId: this.#processInstanceId, healthy: false, lastSuccessAt: null,
+      lastError: { code: this.#closed ? 'STORE_CLOSED' : 'PROCESS_HEARTBEAT_NOT_STARTED',
+        message: this.#closed ? 'ProjectStore가 종료됐습니다.' : 'Process heartbeat가 아직 시작되지 않았습니다.' } };
+  }
 
   async heartbeat(): Promise<void> {
     await this.initialize();
-    await this.#touchProcessInstance();
+    await this.#requireProcessHeartbeat();
   }
 
   async close(): Promise<void> {
@@ -1461,9 +1606,14 @@ export class ProjectStore {
     if (this.#processInstanceRegistered) {
       const root: string = this.#fs.root();
       const registrationKey: string = processRegistrationKey(root, this.#processInstanceId);
-      const remaining: number = Math.max(0, (processInstanceRegistrations.get(registrationKey) ?? 1) - 1);
-      if (remaining === 0) {
-        processInstanceRegistrations.delete(registrationKey);
+      const shared: SharedHeartbeat | undefined = sharedHeartbeats.get(registrationKey);
+      shared?.references.delete(this.#heartbeatReferenceId);
+      if (shared === undefined || shared.references.size === 0) {
+        if (shared !== undefined) {
+          clearInterval(shared.timer);
+          sharedHeartbeats.delete(registrationKey);
+          if (shared.inFlight !== null) await shared.inFlight;
+        }
         const path: string = this.#processInstancePath(this.#processInstanceId);
         if (await this.#fs.kind(path) === 'file') {
           const record: ProcessInstanceRecord = ProcessInstanceRecordSchema.parse(JSON.parse(await this.#fs.readText(path)) as unknown);
@@ -1474,11 +1624,37 @@ export class ProjectStore {
           }
         }
       } else {
-        processInstanceRegistrations.set(registrationKey, remaining);
+        const nextIntervalMs: number = Math.min(...[...shared.references.values()].map((reference: HeartbeatReference): number => reference.intervalMs));
+        if (nextIntervalMs !== shared.intervalMs) {
+          clearInterval(shared.timer);
+          shared.intervalMs = nextIntervalMs;
+          shared.timer = startHeartbeatTimer(registrationKey, shared);
+        }
       }
       this.#processInstanceRegistered = false;
     }
     this.#closed = true;
+  }
+
+  async statusSnapshot(): Promise<StorageStatusSnapshot> {
+    await this.initialize();
+    const createStates: readonly ActiveCreateState[] = [...this.#activeCreates.values()];
+    for (const state of createStates) {
+      try { await this.#refreshActiveCreate(state.projectId); }
+      catch (error: unknown) {
+        this.#activeCreates.delete(projectKey(state.projectId));
+        await this.#writeRecoveryBlock(projectKey(state.projectId), state.projectId, state.transactionId, error);
+      }
+    }
+    const updateStates: readonly ActiveUpdateState[] = [...this.#activeUpdates.values()];
+    for (const state of updateStates) {
+      try { await this.#refreshActiveUpdate(state.projectId); }
+      catch { this.#activeUpdates.delete(projectKey(state.projectId)); }
+    }
+    return {
+      activeCreates: this.activeCreates(), activeUpdates: this.activeUpdates(), recoveryBlocks: this.recoveryBlocks(),
+      invalidRecoveryMarkers: this.invalidRecoveryMarkers(), processHeartbeat: this.processHeartbeat(),
+    };
   }
 
   async assertMutable(projectId: string): Promise<void> {
@@ -1513,8 +1689,25 @@ export class ProjectStore {
 
   async generationRecordAudit(projectId: string): Promise<GenerationRecordAuditEntry[]> {
     await this.initialize();
-    const current: Project = await this.read(projectId);
-    return auditGenerationRecords(current, await this.#versionProjects(projectId, null));
+    await this.read(projectId);
+    for (let attempt: number = 0; attempt < 2; attempt += 1) {
+      const firstContent: string = await this.#fs.readText(this.#currentPath(projectId));
+      const current: Project = parseProject(JSON.parse(firstContent) as unknown);
+      const versions: Project[] = (await this.#versionProjects(projectId, null))
+        .filter((version: Project): boolean => version.revision <= current.revision);
+      const revisions: ReadonlySet<number> = new Set<number>(versions.map((version: Project): number => version.revision));
+      for (let revision: number = 0; revision <= current.revision; revision += 1) if (!revisions.has(revision)) {
+        recoveryRequired(`Generation Audit에 필요한 revision snapshot이 없습니다. projectId=${projectId}, revision=${revision}`);
+      }
+      await this.#fault('before-audit-current-recheck');
+      const secondContent: string = await this.#fs.readText(this.#currentPath(projectId));
+      const second: Project = parseProject(JSON.parse(secondContent) as unknown);
+      if (current.revision === second.revision && sha256Text(firstContent) === sha256Text(secondContent)) {
+        return auditGenerationRecords(current, versions);
+      }
+    }
+    throw contractError('AUDIT_SNAPSHOT_CHANGED',
+      `Generation Audit 중 Current Project가 반복해서 변경됐습니다. projectId=${projectId}`, []);
   }
 
   async create(project: Project): Promise<Project> {
@@ -1528,7 +1721,7 @@ export class ProjectStore {
     const directory: string = this.#directory(valid.projectId);
     const transactionId: string = randomUUID();
     const owner: z.infer<typeof TransactionOwnerSchema> = this.#owner(transactionId);
-    await this.#touchProcessInstance();
+    await this.#requireProcessHeartbeat();
     const lockMetadata: StoreLock = this.#lockMetadata(valid.projectId, transactionId, owner.pid);
     const transactionPath: string = this.#createTransactionPath(transactionId);
     const stagedDirectory: string = join(transactionPath, CREATE_STAGED_PROJECT_DIRECTORY);
@@ -1739,6 +1932,41 @@ export class ProjectStore {
     return result;
   }
 
+  async currentAssetIntegrityIssues(projectId: string): Promise<AssetIntegrityIssue[]> {
+    const project: Project = await this.read(projectId);
+    const targetIdsByAssetId: Map<string, Set<string>> = new Map<string, Set<string>>();
+    const remember = (assetId: string, targetId: string): void => {
+      const targets: Set<string> = targetIdsByAssetId.get(assetId) ?? new Set<string>();
+      targets.add(targetId); targetIdsByAssetId.set(assetId, targets);
+    };
+    for (const frame of project.frames) {
+      const decision = reviewFrameOutput(project, frame.id, 'program-monitor');
+      if (decision.renderMode !== 'blocked' && decision.imageAssetId !== null) remember(decision.imageAssetId, `frame:${frame.id}`);
+    }
+    for (const cue of project.audioCues) if (cue.assetId !== null) remember(cue.assetId, `audio:${cue.id}`);
+    for (const shot of project.shots) {
+      for (const assetId of shot.propIds) remember(assetId, `shot:${shot.id}:prop`);
+      for (const continuity of [...shot.continuityBefore, ...shot.continuityAfter]) remember(continuity.assetId, `shot:${shot.id}:continuity`);
+      const subjectIds: ReadonlySet<string> = new Set<string>([
+        ...(shot.visualLocationId === null ? [] : [shot.visualLocationId]),
+        ...shot.presence.map((presence): string => presence.personId),
+      ]);
+      for (const asset of project.assets) if (asset.subjectId !== null && subjectIds.has(asset.subjectId)
+        && ['character', 'location'].includes(asset.kind)) remember(asset.id, `shot:${shot.id}:visual-reference`);
+    }
+    const issues: AssetIntegrityIssue[] = [];
+    for (const [assetId, targetIds] of targetIdsByAssetId) {
+      try { await this.#assetForProject(project, assetId); }
+      catch (error: unknown) {
+        const code: string | null = assetFailureCode(error);
+        if (code === null) throw error;
+        issues.push({ projectId, assetId, outputTargetIds: [...targetIds].sort(), code,
+          message: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    return issues.sort((left: AssetIntegrityIssue, right: AssetIntegrityIssue): number => left.assetId.localeCompare(right.assetId));
+  }
+
   async audioRecoverySource(project: Project, cueId: string): Promise<AudioAssetRecoverySource> {
     const cue = project.audioCues.find((candidate): boolean => candidate.id === cueId);
     if (cue === undefined) throw contractError('AUDIO_CUE_NOT_FOUND', `오디오 큐를 찾을 수 없습니다. cueId=${cueId}`, []);
@@ -1758,12 +1986,15 @@ export class ProjectStore {
     return { content, asset, inspection };
   }
 
-  async safeFrame(projectId: string, frameId: string): Promise<StoredAsset> {
+  async safeFrame(projectId: string, frameId: string): Promise<SafeFrameOutput> {
     const project: Project = await this.read(projectId); const decision = reviewFrameOutput(project, frameId, 'program-monitor');
-    if (!decision.renderBitmap || decision.imageAssetId === null) throw contractError('FRAME_OUTPUT_BLOCKED', decision.issues.map((value): string => `${value.code}: ${value.message}`).join('\n'), decision.issues);
+    if (decision.renderMode === 'black' || (decision.renderMode === 'hold-previous' && decision.imageAssetId === null)) {
+      return { content: BLACK_FRAME_PNG, mimeType: 'image/png', asset: null, sourceFrameId: decision.sourceFrameId };
+    }
+    if (decision.renderMode === 'blocked' || decision.imageAssetId === null) throw contractError('FRAME_OUTPUT_BLOCKED', decision.issues.map((value): string => `${value.code}: ${value.message}`).join('\n'), decision.issues);
     const stored: StoredAsset = await this.#assetForProject(project, decision.imageAssetId);
     if (stored.asset.kind !== 'image') throw contractError('FRAME_OUTPUT_BLOCKED', `프레임 출력 자산이 이미지가 아닙니다. frameId=${frameId}`, []);
-    return stored;
+    return { ...stored, sourceFrameId: decision.sourceFrameId };
   }
 
   async safeAudio(projectId: string, cueId: string): Promise<StoredAsset> {

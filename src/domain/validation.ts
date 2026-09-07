@@ -3,7 +3,7 @@ import { assetReferenceIssues } from './asset-references.js';
 import { issue } from './errors.js';
 import { generationRecordIssues } from './generation-records.js';
 import type { Dataset, InformationRule, Issue, Project, Segment, Shot, ShotSourceLink, Snapshot, SourceRef, SourceUnit, TextMappingDecision, TextPlacement, TextPlacementInformationDecision } from './schema.js';
-import { sourcePolicyIssues } from './source-policy.js';
+import { shotVisualCoverageIssues, sourcePolicyIssues } from './source-policy.js';
 
 function duplicateIssues(ids: readonly string[], entity: string): Issue[] {
   return [...new Set(ids.filter((id: string, index: number): boolean => ids.indexOf(id) !== index))]
@@ -185,6 +185,15 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
       ...duplicateIssues(frames.map((frame): string => String(frame.offsetMs)), `${shot.id}.frameOffsets`),
     ];
   });
+  const visualCoverageIssues: Issue[] = project.shots.flatMap((shot: Shot): Issue[] => shotVisualCoverageIssues(project, shot));
+  const holdPreviousIssues: Issue[] = project.shots.flatMap((shot: Shot, index: number): Issue[] => {
+    if (shot.visualMode !== 'hold-previous') return [];
+    const previous: Shot | undefined = project.shots[index - 1];
+    return previous !== undefined && previous.endMs === shot.startMs ? [] : [issue(
+      'HOLD_PREVIOUS_SOURCE_UNAVAILABLE', 'conflict', shot.id, 'visualMode',
+      'hold-previous 컷은 시간상 인접한 직전 컷이 필요합니다.', 'contiguous previous shot', previous?.id ?? null, [],
+    )];
+  });
   const audioKinds: { unit: SourceUnit['kind']; cue: Project['audioCues'][number]['kind'] }[] = [
     { unit: 'DIALOGUE', cue: 'dialogue' }, { unit: 'NARRATION', cue: 'voiceover' }, { unit: 'PANEL', cue: 'panel' }, { unit: 'SOUND', cue: 'sfx' }, { unit: 'MUSIC', cue: 'music' },
   ];
@@ -283,5 +292,5 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
       : asset.kind === 'location' ? dataset.locations.some((location): boolean => location.id === asset.subjectId) : true;
     return referenceIssue(exists, asset.id, 'subjectId', asset.subjectId, []);
   });
-  return [...sourceIssues, ...projectIssues, ...groups.flatMap((group): Issue[] => duplicateIssues(group.ids, group.name)), ...shotIssues, ...coverageIssues, ...unitCoverage, ...sourceOrderIssues(project), ...frameIssues, ...frameGroupIssues, ...audioIssues, ...textIssues, ...sourceUnitTextCueIssues, ...placementCoverage, ...mappingIssues, ...decisionCoverage, ...placementInformationIssues, ...placementInformationCoverage, ...orderIssues, ...continuityIssues, ...generationIssues, ...assetClosureIssues, ...assetSubjectIssues];
+  return [...sourceIssues, ...projectIssues, ...groups.flatMap((group): Issue[] => duplicateIssues(group.ids, group.name)), ...shotIssues, ...coverageIssues, ...unitCoverage, ...sourceOrderIssues(project), ...frameIssues, ...frameGroupIssues, ...visualCoverageIssues, ...holdPreviousIssues, ...audioIssues, ...textIssues, ...sourceUnitTextCueIssues, ...placementCoverage, ...mappingIssues, ...decisionCoverage, ...placementInformationIssues, ...placementInformationCoverage, ...orderIssues, ...continuityIssues, ...generationIssues, ...assetClosureIssues, ...assetSubjectIssues];
 }

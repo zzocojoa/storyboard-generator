@@ -8,12 +8,13 @@ import type { EffectiveInformationGate } from '../domain/mapping.js';
 import { reviewAudioPlaybackAt } from '../domain/playback.js';
 import type { BlockedCue } from '../domain/playback.js';
 import type { Issue, Project, Shot, StoryboardFrame, TextCue, Timebase } from '../domain/schema.js';
-import { formatProjectTimecode, frameDisplayAbsoluteMs, frameEvaluationAbsoluteMs } from '../domain/time.js';
+import { formatAbsoluteProjectTimecode, frameDisplayAbsoluteMs, frameEvaluationAbsoluteMs } from '../domain/time.js';
 
 export type AssetLoader = (assetId: string) => Promise<Buffer>;
 
 type FramePageItem = {
-  frame: StoryboardFrame; shot: Shot; image: Buffer | null; sourceText: string; gateText: string; outputText: string; placeholderText: string;
+  frame: StoryboardFrame; shot: Shot; image: Buffer | null; renderMode: FrameOutputDecision['renderMode'];
+  sourceText: string; gateText: string; outputText: string; placeholderText: string;
 };
 type FrameRect = { x: number; y: number; width: number; height: number };
 
@@ -55,7 +56,7 @@ async function pageItems(project: Project, loadAsset: AssetLoader): Promise<Fram
     const outputText: string = codes.length === 0 ? 'OUTPUT SAFE' : `DRAFT · OUTPUT INTERLOCK REVIEW REQUIRED · ${codes.join(', ')}`;
     const placeholderText: string = integrityCode === null ? frameOutputPlaceholderText(frameDecision, frame.description)
       : `Frame ID: ${frame.id}\nAsset ID: ${frameDecision.imageAssetId ?? 'NONE'}\nIssue: ${integrityCode}`;
-    return { frame, shot, image,
+    return { frame, shot, image, renderMode: frameDecision.renderMode,
       sourceText, gateText, outputText, placeholderText };
   }));
 }
@@ -91,12 +92,13 @@ function drawCard(document: PDFKit.PDFDocument, item: FramePageItem, index: numb
   const width: number = 381;
   const frame: FrameRect = frameRect(x, y, aspectWidth, aspectHeight);
   document.roundedRect(x, y, width, 230, 5).lineWidth(0.8).strokeColor('#b6bcc2').stroke();
-  if (item.image === null) drawPlaceholder(document, frame.x, frame.y, frame.width, frame.height, item.placeholderText);
+  if (item.renderMode === 'black' || (item.renderMode === 'hold-previous' && item.image === null)) document.rect(frame.x, frame.y, frame.width, frame.height).fill('#000000');
+  else if (item.image === null) drawPlaceholder(document, frame.x, frame.y, frame.width, frame.height, item.placeholderText);
   else document.image(item.image, frame.x, frame.y, { fit: [frame.width, frame.height], align: 'center', valign: 'center' });
-  const time: string = `${formatProjectTimecode(item.shot.startMs, timebase)} – ${formatProjectTimecode(item.shot.endMs, timebase)}`;
+  const time: string = `${formatAbsoluteProjectTimecode(item.shot.startMs, timebase)} – ${formatAbsoluteProjectTimecode(item.shot.endMs, timebase)}`;
   document.fillColor('#d34b2e').fontSize(8).text(time, x + 228, y + 10, { width: 143 });
   document.fillColor('#101820').fontSize(10).text(item.shot.id, x + 228, y + 28, { width: 143, height: 27, ellipsis: true });
-  document.fillColor('#59636d').fontSize(8).text(`${item.shot.camera.size} · ${item.shot.camera.angle} · ${item.shot.camera.move}\n${item.shot.transitionOut.kind.toUpperCase()} ${item.shot.transitionOut.durationMs}ms`, x + 228, y + 59, { width: 143, height: 31, ellipsis: true });
+  document.fillColor('#59636d').fontSize(8).text(`${item.shot.visualMode.toUpperCase()} · ${item.shot.camera.size} · ${item.shot.camera.angle} · ${item.shot.camera.move}\n${item.shot.transitionOut.kind.toUpperCase()} ${item.shot.transitionOut.durationMs}ms`, x + 228, y + 59, { width: 143, height: 31, ellipsis: true });
   document.fillColor('#101820').fontSize(8.5).text(item.shot.action, x + 228, y + 95, { width: 143, height: 61, ellipsis: true });
   document.moveTo(x + 8, y + 166).lineTo(x + width - 8, y + 166).lineWidth(0.5).strokeColor('#d8dce0').stroke();
   document.fillColor('#59636d').fontSize(7).text('SOURCE', x + 8, y + 174, { width: 50 });

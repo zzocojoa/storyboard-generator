@@ -11,11 +11,15 @@ const StorageRecoveryBlockSchema = z.strictObject({ version: z.literal(1), proje
   transactionId: z.string(), code: z.string(), message: z.string(), detectedAt: z.string() });
 const ActiveStorageSchema = z.strictObject({ projectId: z.string(), transactionId: z.string(), host: z.string(), pid: z.number().int().positive(),
   processInstanceId: z.string().nullable(), detectedAt: z.string() });
+const InvalidRecoveryMarkerSchema = z.strictObject({ fileName: z.string(), quarantinedPath: z.string(), code: z.string(), message: z.string(), detectedAt: z.string() });
+const ProcessHeartbeatSchema = z.strictObject({ processInstanceId: z.string(), healthy: z.boolean(), lastSuccessAt: z.string().nullable(),
+  lastError: z.strictObject({ code: z.string(), message: z.string() }).nullable() });
 const StatusSchema = z.strictObject({ provider: z.literal('codex-app'), totalRequests: z.number().int().nonnegative(), completedRequests: z.number().int().nonnegative(),
   pendingRequests: z.number().int().nonnegative(), failedRequests: z.number().int().nonnegative(), repeatedRequests: z.number().int().nonnegative(),
   averageLatencyMs: z.number().int().nonnegative().nullable(), maximumLatencyMs: z.number().int().nonnegative().nullable(), apiCostUsd: z.null(), costNote: z.string(),
   recentFailures: z.array(RequestFailureSchema), generationInstruction: z.string(), aiVoiceDisclosure: z.string(),
   storageRecovery: z.array(StorageRecoverySchema), storageRecoveryBlocks: z.array(StorageRecoveryBlockSchema),
+  invalidRecoveryMarkers: z.array(InvalidRecoveryMarkerSchema), processHeartbeat: ProcessHeartbeatSchema,
   activeCreates: z.array(ActiveStorageSchema), activeUpdates: z.array(ActiveStorageSchema) });
 const SummarySchema = z.strictObject({ projectId: z.string(), title: z.string(), revision: z.number(), durationMs: z.number(), shots: z.number(),
   frameRateNumerator: z.number().int().positive(), frameRateDenominator: z.number().int().positive(), dropFrame: z.boolean(), startTimecode: z.string(),
@@ -33,6 +37,7 @@ export type AppStatus = z.infer<typeof StatusSchema>;
 export type ProjectSummary = z.infer<typeof SummarySchema>;
 export type CodexRequest = z.infer<typeof CodexRequestSchema>;
 export type SourceImpact = z.infer<typeof SourceImpactSchema>;
+export type AssetIntegrityIssue = { projectId: string; assetId: string; outputTargetIds: string[]; code: string; message: string };
 export type ApiErrorCategory = 'validation' | 'not-found' | 'conflict' | 'locked' | 'unavailable' | 'internal';
 export type ApiErrorScope = 'request' | 'project' | 'asset' | 'service';
 
@@ -130,6 +135,12 @@ export async function listProjects(): Promise<ProjectSummary[]> {
 
 export async function fetchProject(projectId: string): Promise<Project> {
   return z.strictObject({ project: ProjectSchema }).parse(await request(`/api/projects/${encodeURIComponent(projectId)}`, {})).project;
+}
+
+export async function fetchAssetIntegrity(projectId: string): Promise<AssetIntegrityIssue[]> {
+  const IssueSchema = z.strictObject({ projectId: z.string(), assetId: z.string(), outputTargetIds: z.array(z.string()), code: z.string(), message: z.string() });
+  return z.strictObject({ issues: z.array(IssueSchema) })
+    .parse(await request(`/api/projects/${encodeURIComponent(projectId)}/asset-integrity`, {})).issues;
 }
 
 export async function importProject(handoffPath: string, proposedTextHoldMs: number): Promise<Project> {
