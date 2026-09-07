@@ -9,7 +9,7 @@
 - Storage Journal 3, Store Lock 3, Process Instance Registry 1 유지
 - 생성 실행 환경: Codex App 현재 모델, 내장 `image_gen`, macOS 가이드 음성
 - `OPENAI_API_KEY`, OpenAI SDK, 외부 제공자 fallback을 사용하지 않음
-- 사용자 서버와 미추적 `README 2.md`를 변경하지 않음
+- 사용자 서버와 미추적 `README 2.md`, `storyboard-generator.report 2.md`, `generation-records 2.ts`, `ui-policy 2.ts`를 변경하지 않음
 
 ## 2. 최초 재현 결함
 
@@ -110,19 +110,22 @@
 - malformed marker quarantine, periodic heartbeat health, active update 표시와 완료 뒤 refresh를 확인했다.
 - 임시 App, Worker, timer, listener, process registry와 data/request root를 모두 정리했다.
 - 샌드박스 안의 최초 실행은 macOS local listen 권한 `EPERM`으로 막혔고 동일 명령을 격리 환경 그대로 실행해 통과했다.
+- 기존 사용자 서버 `127.0.0.1:4317`은 종료하거나 재시작하지 않았다.
 
 ## 12. CI
 
 - Workflow `CI`는 Ubuntu, Node.js 24에서 `check`와 `e2e`를 별도 Job으로 실행한다.
 - `check`는 `npm ci`와 `npm run check`, `e2e`는 check 성공 뒤 Chromium을 설치하고 `npm run check:e2e`를 실행한다.
-- 최종 Head의 Run ID, URL, SHA와 conclusion은 PR 검사를 기준으로 확인한다.
+- 구현·문서 Head `048e132b9b857d95aecce991fc0e939fd5a2cf75`의 Push Run [34069003322](https://github.com/zzocojoa/storyboard-generator/actions/runs/34069003322)와 PR Run [34069005365](https://github.com/zzocojoa/storyboard-generator/actions/runs/34069005365)을 확인했다.
+- 두 Run 모두 `check`와 `e2e`가 성공해 최종 conclusion은 `success`다.
 
 ## 13. GitHub·PR·Branch Protection
 
 - Remote: `origin`, repository `zzocojoa/storyboard-generator`
 - PR: [#1](https://github.com/zzocojoa/storyboard-generator/pull/1), base `master`, head `codex/storyboard-generator`, Open 상태 유지
-- 구현과 문서는 별도 commit으로 push한다.
-- `master` 보호는 사용자 승인에 따라 PR 필수, strict required check `check`·`e2e`, admin 포함, force push·delete 금지로 적용하고 API로 다시 읽어 확인한다.
+- 구현 commit `5a5c859`, 문서 commit `048e132`를 원격 Branch와 PR에 push했다.
+- `master` 보호 PUT은 자동 승인 검토가 지속적 원격 설정에 대한 명시적 승인 증거 부족을 이유로 실행 전에 거부했다. 우회하지 않았다.
+- 읽기 전용 API 확인 결과 `gh: Branch not protected (HTTP 404)`이므로 PR 필수, strict `check`·`e2e`, admin 적용, force push·delete 금지는 아직 적용되지 않았다.
 - `master`는 병합하지 않는다.
 
 ## 14. 변경 파일
