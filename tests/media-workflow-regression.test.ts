@@ -30,6 +30,14 @@ import { ProjectStore } from '../src/server/store.js';
 import { nativeData, nativePackage, pcmWav, png, productionPackage, testAudioNormalizer, TEST_AUDIO_NORMALIZATION_OPTIONS, withNativeData } from './helpers.js';
 
 const roots: string[] = [];
+const stores: ProjectStore[] = [];
+const apps: FastifyInstance[] = [];
+function trackedStore(dataRoot: string): ProjectStore {
+  const store: ProjectStore = new ProjectStore(dataRoot);
+  stores.push(store);
+  return store;
+}
+
 
 async function nativeOutline(): Promise<Project> {
   return createSourceOutline(importPackage(await nativePackage()), { proposedTextHoldMs: 2000 });
@@ -42,7 +50,7 @@ async function productionOutline(): Promise<Project> {
 async function temporaryStore(project: Project): Promise<{ root: string; store: ProjectStore }> {
   const root: string = await mkdtemp(join(tmpdir(), 'storyboard-media-workflow-'));
   roots.push(root);
-  const store: ProjectStore = new ProjectStore(join(root, 'data'));
+  const store: ProjectStore = trackedStore(join(root, 'data'));
   await store.create(project);
   return { root, store };
 }
@@ -55,7 +63,9 @@ async function temporaryApp(project: Project): Promise<{ app: FastifyInstance; r
   const config: AppConfig = { host: '127.0.0.1', port: 4317, dataRoot: join(root, 'data'), webRoot,
     pdfFontPath: resolve('assets/fonts/NanumGothic-Regular.ttf'), audioNormalization: TEST_AUDIO_NORMALIZATION_OPTIONS,
     codex: { requestRoot: join(root, 'requests'), speechVoice: 'Yuna' } };
-  return { app: await createApp(config, store, new CodexRequestStore(config.codex.requestRoot)), root, store };
+  const app: FastifyInstance = await createApp(config, store, new CodexRequestStore(config.codex.requestRoot));
+  apps.push(app);
+  return { app, root, store };
 }
 
 function multipartAudio(bytes: Buffer, expectedRevision: number | null): { payload: Buffer; headers: { 'content-type': string } } {
@@ -170,6 +180,8 @@ async function unit045Mutation(): Promise<{ base: Project; prepared: Project; cu
 }
 
 afterEach(async (): Promise<void> => {
+  for (const app of apps.splice(0)) await app.close();
+  for (const store of stores.splice(0)) await store.close();
   await Promise.all(roots.splice(0).map(async (root: string): Promise<void> => { await rm(root, { recursive: true, force: true }); }));
 });
 

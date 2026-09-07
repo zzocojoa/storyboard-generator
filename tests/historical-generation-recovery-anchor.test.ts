@@ -35,6 +35,13 @@ import type { RecoveryUiError, RecoveryUiState } from '../web/src/ui-policy.js';
 import { nativeData, nativePackage, productionPackage, withNativeData } from './helpers.js';
 
 const roots: string[] = [];
+const stores: ProjectStore[] = [];
+function trackedStore(dataRoot: string, injector?: StorageFaultInjector, runtime?: StorageRuntime): ProjectStore {
+  const store: ProjectStore = new ProjectStore(dataRoot, injector, runtime);
+  stores.push(store);
+  return store;
+}
+
 const DEAD_PROCESS_ID: number = 2_147_483_647;
 let nativeProject: Project;
 let productionProject: Project;
@@ -49,6 +56,7 @@ beforeAll(async (): Promise<void> => {
 });
 
 afterEach(async (): Promise<void> => {
+  for (const store of stores.splice(0)) await store.close();
   await Promise.all(roots.splice(0).map((root: string): Promise<void> => rm(root, { recursive: true, force: true })));
 });
 
@@ -139,7 +147,7 @@ async function changedProductionOutline(projectId: string): Promise<Project> {
 async function storedHistoricalAudit(prefix: string): Promise<{ dataRoot: string; store: ProjectStore; current: Project }> {
   const dataRoot: string = await temporaryDataRoot(prefix);
   const projectId: string = `audit-${randomUUID()}`;
-  const store: ProjectStore = new ProjectStore(dataRoot);
+  const store: ProjectStore = trackedStore(dataRoot);
   const created: Project = await store.create(await nativeOutlineFor(projectId));
   const introduced: Project = await store.update(projectId, created.revision, (current: Project): Project => {
     const split: Project = splitShot(current, 'shot-2', 8000, 'audit-removed-shot', 'audit-removed-frame');
@@ -305,7 +313,7 @@ describe('C. historical audit', (): void => {
     if (name === 'audit_survives_restart') {
       const fixture = await storedHistoricalAudit('storyboard-audit-restart-');
       await fixture.store.close();
-      const reopened: ProjectStore = new ProjectStore(fixture.dataRoot);
+      const reopened: ProjectStore = trackedStore(fixture.dataRoot);
       expect(await reopened.generationRecordAudit(fixture.current.projectId)).toContainEqual(expect.objectContaining({
         recordId: 'audit-record', introducedRevision: 1, validAtIntroduction: true, currentTargetState: 'historical',
       }));
@@ -372,7 +380,7 @@ describe('D. generation record normalization', (): void => {
     if (name === 'new_record_id_must_be_unique') current = { ...nativeProject, generationRecords: [generationRecord('new', [shotId], [], 'old-request')] };
     if (name === 'generation_failure_creates_no_journal') {
       const dataRoot: string = await temporaryDataRoot('storyboard-generation-failure-');
-      const store: ProjectStore = new ProjectStore(dataRoot);
+      const store: ProjectStore = trackedStore(dataRoot);
       const created: Project = await store.create(await nativeOutlineFor(`generation-${randomUUID()}`));
       await expect(store.update(created.projectId, created.revision, (project: Project): Project => ({ ...project,
         generationRecords: [...project.generationRecords, { ...record, shotIds: [shotId, shotId] }],
@@ -477,7 +485,7 @@ describe('I. create journal isolation', (): void => {
   it.each(names)('%s', async (name: string): Promise<void> => {
     const dataRoot: string = await temporaryDataRoot('storyboard-isolation-');
     const healthyId: string = `healthy-${randomUUID()}`;
-    const seed: ProjectStore = new ProjectStore(dataRoot);
+    const seed: ProjectStore = trackedStore(dataRoot);
     await seed.create(await nativeOutlineFor(healthyId));
     await seed.close();
 
@@ -493,7 +501,7 @@ describe('I. create journal isolation', (): void => {
       createdAt: '2026-09-06T00:00:00.000Z', processInstanceId: randomUUID(), processStartedAt: '2026-09-06T00:00:00.000Z',
     }), 'utf8');
 
-    const observer: ProjectStore = new ProjectStore(dataRoot, undefined, { processProbe: (pid: number): boolean => pid !== DEAD_PROCESS_ID });
+    const observer: ProjectStore = trackedStore(dataRoot, undefined, { processProbe: (pid: number): boolean => pid !== DEAD_PROCESS_ID });
     await observer.initialize();
     expect(observer.recoveryBlocks()).toContainEqual(expect.objectContaining({ projectId: `unknown:${brokenTransactionId}` }));
     expect(await pathExists(join(dataRoot, '.create-locks', `${sha256Text(orphanProjectId)}.lock`))).toBe(false);
@@ -525,10 +533,10 @@ describe('J. project-scoped live update', (): void => {
     const second: Project = await nativeOutlineFor(secondId);
 
     if (name === 'dead_update_lock_is_recovered' || name === 'foreign_update_lock_is_not_removed') {
-      const seed: ProjectStore = new ProjectStore(dataRoot);
+      const seed: ProjectStore = trackedStore(dataRoot);
       await seed.create(first);
       await seed.close();
-      const crashing: ProjectStore = new ProjectStore(dataRoot, {
+      const crashing: ProjectStore = trackedStore(dataRoot, {
         ownerPid: DEAD_PROCESS_ID,
         trigger(point: StorageFaultPoint): void {
           if (point === 'after-update-journal-prepared') throw new SimulatedStorageCrash(point);
@@ -543,7 +551,7 @@ describe('J. project-scoped live update', (): void => {
         const lock = JSON.parse(await readFile(lockPath, 'utf8')) as Record<string, unknown>;
         await writeFile(lockPath, JSON.stringify({ ...lock, host: 'foreign.example' }), 'utf8');
       }
-      const observer: ProjectStore = new ProjectStore(dataRoot, undefined, { processProbe: (): boolean => false });
+      const observer: ProjectStore = trackedStore(dataRoot, undefined, { processProbe: (): boolean => false });
       await observer.initialize();
       if (name === 'dead_update_lock_is_recovered') {
         expect(await pathExists(lockPath)).toBe(false);
@@ -557,12 +565,12 @@ describe('J. project-scoped live update', (): void => {
     }
 
     const gate: Barrier = barrier('after-update-current-read', process.pid);
-    const writer: ProjectStore = new ProjectStore(dataRoot, gate.injector);
+    const writer: ProjectStore = trackedStore(dataRoot, gate.injector);
     await writer.create(first);
     await writer.create(second);
     const pending: Promise<Project> = writer.update(firstId, 0, (project: Project): Project => ({ ...project, title: '진행 중 변경' }), []);
     await gate.reached;
-    const observer: ProjectStore = new ProjectStore(dataRoot);
+    const observer: ProjectStore = trackedStore(dataRoot);
     try {
       await observer.initialize();
       expect(observer.activeUpdates()).toContainEqual(expect.objectContaining({ projectId: firstId }));
@@ -604,7 +612,7 @@ describe('K. process instance identity', (): void => {
       'reused_pid_does_not_validate_old_lock_owner', 'dead_instance_allows_recovery',
       'foreign_host_instance_is_not_recovered', 'legacy_lock_v2_is_read_conservatively'].includes(name)) {
       const projectId: string = `instance-${randomUUID()}`;
-      const seed: ProjectStore = new ProjectStore(dataRoot);
+      const seed: ProjectStore = trackedStore(dataRoot);
       await seed.create(await nativeOutlineFor(projectId));
       await seed.close();
       const ownerPid: number = 31_337;
@@ -632,7 +640,7 @@ describe('K. process instance identity', (): void => {
         processInstanceId: randomUUID(), processStartedAt: nowIso, now: (): Date => new Date(nowIso),
         processProbe: (): boolean => name !== 'dead_instance_allows_recovery', heartbeatFreshnessMs: 30_000,
       };
-      const observer: ProjectStore = new ProjectStore(dataRoot, undefined, runtime);
+      const observer: ProjectStore = trackedStore(dataRoot, undefined, runtime);
       await observer.initialize();
       if (name === 'matching_live_instance_is_busy' || legacy) {
         expect(observer.activeUpdates()).toContainEqual(expect.objectContaining({ projectId }));
@@ -647,7 +655,7 @@ describe('K. process instance identity', (): void => {
       await observer.close();
       return;
     }
-    const first: ProjectStore = new ProjectStore(dataRoot); const second: ProjectStore = new ProjectStore(dataRoot);
+    const first: ProjectStore = trackedStore(dataRoot); const second: ProjectStore = trackedStore(dataRoot);
     await first.initialize(); await second.initialize(); expect(first.processInstanceId()).toBe(second.processInstanceId());
     const entries: string[] = await readdir(join(dataRoot, '.process-instances')); expect(entries).toHaveLength(1);
     const before = JSON.parse(await readFile(join(dataRoot, '.process-instances', entries[0] as string), 'utf8')) as Record<string, unknown>;
@@ -747,17 +755,17 @@ describe('N. existing storage regression additions', (): void => {
   it('concurrent_create_still_commits_exactly_once', async (): Promise<void> => {
     const root: string = await mkdtemp(join(tmpdir(), 'storyboard-create-once-')); roots.push(root); const dataRoot: string = join(root, 'data');
     const payload = await nativePackage(); const data = nativeData(payload); const project = createSourceOutline(importPackage(withNativeData(payload, { ...data, projectId: randomUUID() })), { proposedTextHoldMs: 2000 });
-    const results = await Promise.allSettled([new ProjectStore(dataRoot).create(project), new ProjectStore(dataRoot).create(project)]);
+    const results = await Promise.allSettled([trackedStore(dataRoot).create(project), trackedStore(dataRoot).create(project)]);
     expect(results.filter((result): boolean => result.status === 'fulfilled')).toHaveLength(1);
   });
 
   it('concurrent_update_still_commits_exactly_once', async (): Promise<void> => {
-    const root: string = await mkdtemp(join(tmpdir(), 'storyboard-update-once-')); roots.push(root); const store = new ProjectStore(join(root, 'data'));
+    const root: string = await mkdtemp(join(tmpdir(), 'storyboard-update-once-')); roots.push(root); const store = trackedStore(join(root, 'data'));
     const payload = await nativePackage(); const data = nativeData(payload); const projectId: string = randomUUID();
     const project = await store.create(createSourceOutline(importPackage(withNativeData(payload, { ...data, projectId })), { proposedTextHoldMs: 2000 }));
     const results = await Promise.allSettled([
       store.update(project.projectId, 0, (current: Project): Project => ({ ...current, title: 'first' }), []),
-      new ProjectStore(join(root, 'data')).update(project.projectId, 0, (current: Project): Project => ({ ...current, title: 'second' }), []),
+      trackedStore(join(root, 'data')).update(project.projectId, 0, (current: Project): Project => ({ ...current, title: 'second' }), []),
     ]);
     expect(results.filter((result): boolean => result.status === 'fulfilled')).toHaveLength(1);
   });
@@ -770,7 +778,7 @@ describe('O. PRJ-007 regression additions', (): void => {
 
   it('prj007_historical_generation_audit_succeeds', { timeout: 30_000 }, async (): Promise<void> => {
     const dataRoot: string = await temporaryDataRoot('storyboard-prj007-integration-');
-    const store: ProjectStore = new ProjectStore(dataRoot);
+    const store: ProjectStore = trackedStore(dataRoot);
     const created: Project = await store.create(productionProject);
     const initialInformationRules: string = JSON.stringify(created.dataset.informationRules);
     const splitWithRecord: Project = await store.update(created.projectId, created.revision, (current: Project): Project => {
