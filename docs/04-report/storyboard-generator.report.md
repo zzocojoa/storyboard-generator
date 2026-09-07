@@ -64,7 +64,7 @@ Build Manifest는 Commit SHA 또는 null, App·Schema 버전, builtAt, sourceTre
 
 읽기 전용 번들의 9개 기본 파일은 project.json, shots.csv, storyboard.pdf, final-readiness.json, generation-audit.json, asset-integrity.json, asset-manifest.json, build-manifest.json, bundle-manifest.json이다. 기본값에서 별도 원본 미디어 파일은 제외하고 명시적인 include-media에서만 추가한다. PDF는 콘티 이미지를 포함한다. Manifest의 파일 SHA-256·크기와 원본 Snapshot 해시, Asset 사용처·생성 Record·Build·감사 파일 연결을 검사한다. 고정 시각·같은 Build와 Snapshot에서 PRJ-007 번들 체크섬 재현을 확인한다.
 
-검증 결과는 현재 worktree의 `.local/reviews/final-readiness/verified-current/`에 있으며 최종 Commit Build의 별도 재출력은 `verified-head/`를 사용한다. 원본 저장 영역 안의 출력과 기존 Bundle 덮어쓰기를 거부한다. PDF의 Final 10개 페이지와 Draft 차단 페이지를 렌더링해 검토했다. 긴 Draft Issue 표시는 카드 영역 안에서 생략 기호로 제한하고 전체 Issue는 동봉 JSON·CSV에서 제공한다.
+검증 결과는 현재 worktree의 `.local/reviews/final-readiness/verified-current/`에 있으며 최종 Commit Build의 별도 재출력은 `verified-<HEAD>/`를 사용하고 각각의 build-manifest에서 정확한 Commit을 확인한다. 원본 저장 영역 안의 출력과 기존 Bundle 덮어쓰기를 거부한다. PDF의 Final 10개 페이지와 Draft 차단 페이지를 렌더링해 검토했다. 긴 Draft Issue 표시는 카드 영역 안에서 생략 기호로 제한하고 전체 Issue는 동봉 JSON·CSV에서 제공한다.
 
 ## 11. 기존 생성 콘티 읽기 전용 검사
 
@@ -104,7 +104,7 @@ Build Manifest는 Commit SHA 또는 null, App·Schema 버전, builtAt, sourceTre
 
 ## 14. GitHub CI
 
-[기능 Branch의 CI](https://github.com/zzocojoa/storyboard-generator/actions?query=branch%3Acodex%2Fstoryboard-final-readiness)를 확인한다. Required Checks는 strict check·e2e이며 이전 Commit의 성공을 새 HEAD의 성공으로 대체하지 않는다. Workflow는 Ubuntu·Node 24에서 전체 check 뒤 Chromium E2E를 실행한다. 최종 PR 설명과 작업 완료 보고에 정확한 Head SHA·Run ID·두 Job 결과를 기록한다. PR은 master 대상이며 병합하지 않는다.
+[PR #4 Checks](https://github.com/zzocojoa/storyboard-generator/pull/4/checks)에서 현재 HEAD의 CI를 확인한다. 최초 CI의 MISSING_WEB_BUILD는 HTTP 테스트 fixture가 기존 dist/web에 의존한 문제였으며, fixture 자체의 임시 web root를 생성하도록 수정해 빌드 순서 의존성을 제거했다. Required Checks는 strict check·e2e이며 이전 Commit의 성공을 새 HEAD의 성공으로 대체하지 않는다. Workflow는 Ubuntu·Node 24에서 전체 check 뒤 Chromium E2E를 실행한다. 최종 PR 설명과 작업 완료 보고에 정확한 Head SHA·Run ID·두 Job 결과를 기록한다. PR은 master 대상이며 병합하지 않는다.
 
 ## 15. 변경 파일
 

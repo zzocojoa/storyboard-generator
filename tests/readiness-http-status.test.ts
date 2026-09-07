@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -21,16 +21,24 @@ afterEach(async (): Promise<void> => { for (const fixture of fixtures.splice(0))
 
 async function fixture(): Promise<HttpFixture> {
   const root: string = await mkdtemp(join(tmpdir(), 'storyboard-readiness-http-')); const dataRoot: string = join(root, 'data');
-  const store: ProjectStore = new ProjectStore(dataRoot); const base: Project = await store.create(await readinessOutline());
-  const ready = await finalFixture();
-  const project: Project = await store.update(base.projectId, base.revision, (): Project => ready.project,
-    ready.project.assets.map((asset) => ({ relativePath: asset.path, content: ready.media.get(asset.id) as Buffer })));
-  const payload = await nativePackage(); const other: Project = await store.create(createSourceOutline(importPackage(withNativeData(payload, { ...nativeData(payload), projectId: 'independent' })), { proposedTextHoldMs: 2000 }));
-  const requestRoot: string = join(root, 'requests');
-  const app: FastifyInstance = await createApp({ host: '127.0.0.1', port: 0, dataRoot, webRoot: resolve('dist/web'),
-    pdfFontPath: resolve('assets/fonts/NanumGothic-Regular.ttf'), audioNormalization: TEST_AUDIO_NORMALIZATION_OPTIONS,
-    codex: { requestRoot, speechVoice: 'Yuna' } }, store, new CodexRequestStore(requestRoot));
-  fixtures.push({ app, root }); return { app, store, dataRoot, project, other, lockPath: join(dataRoot, sha256Text(project.projectId), 'write.lock') };
+  const store: ProjectStore = new ProjectStore(dataRoot);
+  try {
+    const webRoot: string = join(root, 'web');
+    await mkdir(join(webRoot, 'assets'), { recursive: true });
+    await writeFile(join(webRoot, 'index.html'), '<div id="root"></div>');
+    const base: Project = await store.create(await readinessOutline());
+    const ready = await finalFixture();
+    const project: Project = await store.update(base.projectId, base.revision, (): Project => ready.project,
+      ready.project.assets.map((asset) => ({ relativePath: asset.path, content: ready.media.get(asset.id) as Buffer })));
+    const payload = await nativePackage(); const other: Project = await store.create(createSourceOutline(importPackage(withNativeData(payload, { ...nativeData(payload), projectId: 'independent' })), { proposedTextHoldMs: 2000 }));
+    const requestRoot: string = join(root, 'requests');
+    const app: FastifyInstance = await createApp({ host: '127.0.0.1', port: 0, dataRoot, webRoot,
+      pdfFontPath: resolve('assets/fonts/NanumGothic-Regular.ttf'), audioNormalization: TEST_AUDIO_NORMALIZATION_OPTIONS,
+      codex: { requestRoot, speechVoice: 'Yuna' } }, store, new CodexRequestStore(requestRoot));
+    fixtures.push({ app, root }); return { app, store, dataRoot, project, other, lockPath: join(dataRoot, sha256Text(project.projectId), 'write.lock') };
+  } catch (error: unknown) {
+    await store.close(); await rm(root, { recursive: true, force: true }); throw error;
+  }
 }
 async function writeLiveLock(value: HttpFixture): Promise<string> {
   const transactionId: string = randomUUID();
