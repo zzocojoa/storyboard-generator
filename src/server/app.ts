@@ -119,7 +119,7 @@ function isValidationError(error: Error, code: string): boolean {
 export function httpErrorPolicy(error: Error): HttpErrorPolicy {
   const code: string = 'code' in error && typeof error.code === 'string' ? error.code : error.name;
   if (code === 'CODEX_REQUEST_RECOVERY_REQUIRED' || code === 'REVIEW_BUNDLE_CLAIM_RECOVERY_REQUIRED') return { status: 423, category: 'locked', scope: 'request', retryable: false, operatorActionRequired: true, mutationBlocked: false };
-  if (code === 'CODEX_REQUEST_STORE_UNAVAILABLE') return { status: 503, category: 'unavailable', scope: 'service', retryable: true, operatorActionRequired: false, mutationBlocked: false };
+  if (code === 'CODEX_REQUEST_STORE_UNAVAILABLE' || code === 'REVIEW_BUNDLE_WRITE_FAILED') return { status: 503, category: 'unavailable', scope: 'service', retryable: true, operatorActionRequired: false, mutationBlocked: false };
   if (storedAssetCodes.has(code)) {
     return { status: 423, category: 'locked', scope: 'asset', retryable: false, operatorActionRequired: true, mutationBlocked: false };
   }

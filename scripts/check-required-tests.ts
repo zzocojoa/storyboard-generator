@@ -3,6 +3,20 @@ import { extname, join } from 'node:path';
 import { contractError } from '../src/domain/errors.js';
 
 const REQUIRED_TEST_NAMES: readonly string[] = [
+  'review_bundle_unknown_claim_is_not_deleted',
+  'review_bundle_output_claim_is_atomic',
+  'concurrent_review_bundle_same_output_commits_exactly_once',
+  'concurrent_review_bundle_loser_returns_review_bundle_exists',
+  'concurrent_review_bundle_loser_does_not_replace_winner',
+  'concurrent_review_bundle_loser_does_not_delete_winner',
+  'review_bundle_source_project_remains_unchanged_during_race',
+  'review_bundle_output_claim_is_cleaned_after_failure',
+  'review_bundle_staging_is_cleaned_after_failure',
+  'review_bundle_cross_host_claim_requires_operator_action',
+  'review_bundle_final_publish_syncs_parent_directory',
+  'review_bundle_existing_output_is_never_overwritten',
+  'review_bundle_crashed_claim_preserves_staging_and_requires_operator',
+
   'concurrent_same_build_request_creates_exactly_one_pending',
   'concurrent_same_build_request_returns_same_request_id',
   'concurrent_new_build_request_supersedes_once',

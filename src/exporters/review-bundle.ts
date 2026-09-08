@@ -1,5 +1,4 @@
-import { mkdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
+import { mkdir, realpath } from 'node:fs/promises';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import type { BuildManifest } from '../build.js';
 import { collectProjectAssetReferences, currentVisualReferenceAssets } from '../domain/asset-references.js';
@@ -23,6 +22,7 @@ import { redactReviewBuild, redactCsvProjection, redactPdfProjection, redactRevi
 import type { RedactionEntry, RedactionPattern, ReviewProfile } from './review-redaction.js';
 import { assertReviewStorageQuiescent, assertReviewStorageUnchanged, inspectReviewStorageHealth } from './review-storage-health.js';
 import type { ReviewStorageHealth, ReviewStorageSnapshot } from './review-storage-health.js';
+import { ReviewBundlePublisher } from './review-output.js';
 import { generationIntroductions, summarizeGenerationBuilds } from './generation-build-summary.js';
 import type { GenerationBuildSummary } from './generation-build-summary.js';
 
@@ -239,17 +239,7 @@ export async function writeReviewBundle(archive: ReviewArchive, options: ReviewB
   const output: string = outputFs.path(basename(configuredOutput));
   if (output === archive.sourceRoot || output.startsWith(`${archive.sourceRoot}${sep}`)) throw contractError('REVIEW_OUTPUT_INSIDE_SOURCE',
     '읽기 전용 검토 Bundle은 원본 Data Root 밖의 경로에 출력하세요.', []);
-  if (await outputFs.kind(output) !== 'missing') throw contractError('REVIEW_BUNDLE_EXISTS', `${output}: 출력 폴더가 이미 있습니다. 새 경로를 지정하세요.`, []);
-  const staging: string = join(parent, `.review-${randomUUID()}`);
-  await mkdir(staging);
-  try {
-    for (const file of [...files, jsonFile('bundle-manifest.json', manifest)]) {
-      await mkdir(dirname(join(staging, file.path)), { recursive: true });
-      await writeFile(join(staging, file.path), file.content, { flag: 'wx' });
-    }
-    await archive.assertUnchanged();
-    if (await outputFs.kind(output) !== 'missing') throw contractError('REVIEW_BUNDLE_EXISTS', `${output}: 작성 중 같은 출력 폴더가 생겼습니다.`, []);
-    await rename(staging, output);
-  } catch (error: unknown) { await rm(staging, { recursive: true, force: true }); throw error; }
+  const publisher: ReviewBundlePublisher = new ReviewBundlePublisher(outputFs, output);
+  await publisher.publish([...files, jsonFile('bundle-manifest.json', manifest)], archive.assertUnchanged);
   return manifest;
 }
