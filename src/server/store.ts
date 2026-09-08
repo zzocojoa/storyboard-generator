@@ -1576,36 +1576,38 @@ export class ProjectStore {
     return { entries: this.#summaryIntegrityCache.size, hits: this.#summaryIntegrityHits, misses: this.#summaryIntegrityMisses };
   }
 
-  #invalidateSummaryIntegrity(projectId: string): void {
-    for (const [key, entry] of this.#summaryIntegrityCache) if (entry.projectId === projectId) this.#summaryIntegrityCache.delete(key);
-  }
-
-  /** 목록·Rail의 통계만 재사용한다. Final과 안전 출력은 #assetForProject를 직접 호출한다. */
+  /** 목록은 불변 Asset과 파일 identity로만 재사용한다. 변경 중인 파일은 최대 두 번 검사하고 비검증으로 닫는다. */
   async #summaryAssetIntegrity(project: Project, asset: Asset): Promise<string> {
     const key: string = JSON.stringify([project.projectId, asset.id]);
     try {
       const path: string = this.#safeAssetPath(project.projectId, asset);
       if (await this.#fs.kind(path) === 'missing') throw contractError('ASSET_FILE_MISSING', `목록 자산 파일이 없습니다. assetId=${asset.id}, path=${asset.path}`, []);
-      const before: SafeFileMetadata = await this.#fs.fileMetadata(path);
-      const fingerprint: string = sha256Text(JSON.stringify([project.projectId, project.revision, asset, before]));
-      const cached: SummaryIntegrityEntry | undefined = this.#summaryIntegrityCache.get(key);
-      if (cached?.fingerprint === fingerprint) {
-        this.#summaryIntegrityHits += 1; this.#summaryIntegrityCache.delete(key); this.#summaryIntegrityCache.set(key, cached); return cached.status;
+      for (let attempt: number = 0; attempt < 2; attempt += 1) {
+        const before: SafeFileMetadata = await this.#fs.fileMetadata(path);
+        const fingerprint: string = sha256Text(JSON.stringify([project.projectId, asset, before,
+          asset.kind === 'audio' ? project.handoff.timebase.sampleRate : null]));
+        const cached: SummaryIntegrityEntry | undefined = this.#summaryIntegrityCache.get(key);
+        let status: string = 'verified';
+        if (cached?.fingerprint === fingerprint) status = cached.status;
+        else {
+          this.#summaryIntegrityMisses += 1;
+          try { await this.#assetForProject(project, asset.id); }
+          catch (error: unknown) { const code: string | null = assetFailureCode(error); if (code === null) throw error; status = code; }
+        }
+        const after: SafeFileMetadata = await this.#fs.fileMetadata(path);
+        this.#summaryIntegrityCache.delete(key);
+        if (JSON.stringify(before) !== JSON.stringify(after)) continue;
+        if (cached?.fingerprint === fingerprint) this.#summaryIntegrityHits += 1;
+        this.#summaryIntegrityCache.set(key, { projectId: project.projectId, fingerprint, status, checkedAt: this.#nowIso(), file: after });
+        while (this.#summaryIntegrityCache.size > SUMMARY_INTEGRITY_CACHE_LIMIT) {
+          const oldest: string | undefined = this.#summaryIntegrityCache.keys().next().value;
+          if (oldest === undefined) throw contractError('SUMMARY_INTEGRITY_CACHE_INCONSISTENT', '목록 캐시의 최대 항목 수를 확인할 수 없습니다.', []);
+          this.#summaryIntegrityCache.delete(oldest);
+        }
+        return status;
       }
-      this.#summaryIntegrityMisses += 1;
-      let status: string = 'verified';
-      try { await this.#assetForProject(project, asset.id); }
-      catch (error: unknown) { const code: string | null = assetFailureCode(error); if (code === null) throw error; status = code; }
-      const after: SafeFileMetadata = await this.#fs.fileMetadata(path);
-      if (JSON.stringify(before) !== JSON.stringify(after)) { this.#summaryIntegrityCache.delete(key); return status; }
-      this.#summaryIntegrityCache.delete(key);
-      this.#summaryIntegrityCache.set(key, { projectId: project.projectId, fingerprint, status, checkedAt: this.#nowIso(), file: after });
-      while (this.#summaryIntegrityCache.size > SUMMARY_INTEGRITY_CACHE_LIMIT) {
-        const oldest: string | undefined = this.#summaryIntegrityCache.keys().next().value;
-        if (oldest === undefined) throw contractError('SUMMARY_INTEGRITY_CACHE_INCONSISTENT', '목록 캐시의 최대 항목 수를 확인할 수 없습니다.', []);
-        this.#summaryIntegrityCache.delete(oldest);
-      }
-      return status;
+      throw contractError('STORED_ASSET_CHANGED_DURING_CHECK',
+        `두 번의 검사 중 Asset 파일이 계속 변경됐습니다. projectId=${project.projectId}, assetId=${asset.id}`, []);
     } catch (error: unknown) {
       this.#summaryIntegrityCache.delete(key);
       const mapped: Error = mapStoredAssetIntegrityError(error, project.projectId, asset.id);
@@ -2027,7 +2029,6 @@ export class ProjectStore {
       await this.#fault('before-update-cleanup');
       await this.#removeVerifiedTransaction(projectId, transactionId, normalizeJournal(journal));
       await this.#removeRecoveryLock(lock);
-      this.#invalidateSummaryIntegrity(projectId);
       return next;
     } catch (error: unknown) {
       if (isSimulatedCrash(error)) throw error;

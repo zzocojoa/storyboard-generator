@@ -3,6 +3,25 @@ import { extname, join } from 'node:path';
 import { contractError } from '../src/domain/errors.js';
 
 const REQUIRED_TEST_NAMES: readonly string[] = [
+  'summary_integrity_retries_when_file_changes_during_check',
+  'summary_integrity_fails_closed_when_file_keeps_changing',
+  'summary_never_returns_verified_for_changed_during_check',
+  'summary_changed_during_check_sets_final_output_ready_false',
+  'summary_changed_during_check_excludes_safe_counts',
+  'non_asset_revision_reuses_integrity_cache',
+  'asset_catalog_append_preserves_existing_cache_entries',
+  'cache_key_does_not_depend_on_project_revision',
+  'cache_invalidates_on_inode_change',
+  'cache_invalidates_on_size_change',
+  'cache_invalidates_on_mtime_change',
+  'cache_invalidates_on_ctime_change',
+  'final_readiness_still_forces_asset_revalidation',
+  'safe_visual_still_forces_asset_revalidation',
+  'safe_frame_still_forces_asset_revalidation',
+  'safe_audio_still_forces_asset_revalidation',
+  'review_bundle_still_forces_asset_revalidation',
+  'changed_integrity_snapshot_uses_stored_asset_error_contract',
+
   'internal_bundle_preserves_full_review_content',
   'external_bundle_removes_source_snapshot_content',
   'external_bundle_removes_generation_prompts',
