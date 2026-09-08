@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { expect, test } from '@playwright/test';
-import type { Page } from '@playwright/test';
+import type { Page, Response } from '@playwright/test';
 import type { FastifyInstance } from 'fastify';
 import { CodexRequestStore } from '../../src/codex/requests.js';
 import type { Asset, AudioCue, Project } from '../../src/domain/schema.js';
@@ -16,6 +16,7 @@ import { nativeData, nativePackage, withNativeData, pcmWav, TEST_AUDIO_NORMALIZA
 import { readinessOutline } from '../readiness-fixtures.js';
 
 type AudioObservation = { element: HTMLAudioElement; metadataCount: number; mediaErrors: number };
+type AudioLoadProbe = { metadataSeen: boolean; playhead: string | null; activeAudioElements: number; httpStatuses: number[] };
 declare global { interface Window { audioObservation: AudioObservation | null } }
 type RunningAudioApp = { root: string; app: FastifyInstance; url: string; cue: AudioCue };
 
@@ -44,6 +45,8 @@ async function startAudioApp(): Promise<RunningAudioApp> {
 }
 
 async function prepare(page: Page, running: RunningAudioApp, atMs: number): Promise<void> {
+  const httpStatuses: number[] = [];
+  page.on('response', (response: Response): void => { if (response.url().includes('/output/audio/')) httpStatuses.push(response.status()); });
   await page.addInitScript((): void => {
     const mediaWindow = window; mediaWindow.audioObservation = null;
     document.addEventListener('loadedmetadata', (event: Event): void => {
@@ -60,7 +63,12 @@ async function prepare(page: Page, running: RunningAudioApp, atMs: number): Prom
   await expect(page.getByRole('heading', { name: 'Real Audio A' })).toBeVisible();
   await page.getByRole('slider', { name: '재생 위치' }).fill(String(atMs));
   await page.getByRole('button', { name: '시간순 재생', exact: true }).click();
-  await expect.poll(async (): Promise<boolean> => page.evaluate((): boolean => window.audioObservation !== null)).toBe(true);
+  await expect.poll(async (): Promise<AudioLoadProbe> => ({
+    ...await page.evaluate((): Omit<AudioLoadProbe, 'httpStatuses'> => ({ metadataSeen: window.audioObservation !== null,
+      playhead: document.querySelector<HTMLInputElement>('input[type="range"]')?.value ?? null,
+      activeAudioElements: document.querySelectorAll('audio[data-storyboard-audio]').length })),
+    httpStatuses: [...httpStatuses],
+  })).toEqual(expect.objectContaining({ metadataSeen: true }));
 }
 
 async function audioState(page: Page): Promise<{ native: boolean; duration: number; currentTime: number; paused: boolean; readyState: number; errors: number; metadataCount: number; connected: boolean; src: string }> {
@@ -105,8 +113,8 @@ async function checkRealAudio(page: Page, chromium: string, name: string): Promi
     expect((await audioState(page)).errors).toBe(0);
     return { chromium, initial: state, final: await audioState(page) };
   } finally {
-    // 실제 미디어 검증 뒤 브라우저 연결을 닫고 서버와 임시 자원을 정리한다.
-    try { await page.close(); }
+    // 실제 미디어 검증 뒤 브라우저 Context의 연결 풀까지 닫고 서버와 임시 자원을 정리한다.
+    try { await page.context().close(); }
     finally { await running.app.close(); await rm(running.root, { recursive: true, force: true }); }
   }
 }

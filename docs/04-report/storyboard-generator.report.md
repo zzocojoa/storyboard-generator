@@ -74,6 +74,7 @@ PRJ-007 회귀 fixture는 12 Scene·32 Segment·79 screenplay Unit·16 Panel Tur
 | npm run build:web | 성공 | - | - | Vite |
 | npm run test:e2e | 성공 | 2 | 15 | 실제 Chromium |
 | 실제 Audio 반복 | 성공 | 1 | 6 × 3 | mock 없는 HTMLAudioElement |
+| 전체 Chromium 반복 | 성공 | 2 | 15 × 3 | Context 연결 풀 종료·App/Root 정리 |
 | 주기 Heartbeat 반복 | 성공 | 1 | 5 × 3 | 나머지는 이름 필터로 미선택 |
 | Bundle Hardening 반복 | 성공 | 1 | 13 × 3 | 각 실행에서 3개 shuffled 순서 × 3회 |
 | Review CLI·Redaction | 성공 | 1 | 15 | JSON·CSV·실제 PDF text/images·오류 계약 |
@@ -81,13 +82,13 @@ PRJ-007 회귀 fixture는 12 Scene·32 Segment·79 screenplay Unit·16 Panel Tur
 | npm run check | 성공 | 48 | 1,054 | 타입·이름·Schema·빌드 포함 |
 | git diff --check | 성공 | - | - | 공백 오류 0 |
 
-Required Registry에는 모든 신규 필수 계약을 등록했다. `.skip`·`.only` 선언과 누락·중복은 0이며 반복 시험의 이름 필터 제외와 구분한다. 의도하지 않은 Heartbeat 오류는 없고 fault injection의 예상 경고는 별도다. 실제 PRJ-007 Final PDF 10개 페이지의 Internal 첫/끝 페이지와 External 첫 페이지를 렌더링해 검토했다. External 전체 페이지의 Label과 원본 image operator 0개도 확인했다. PDF Redaction 검증은 pdfjs-dist 6.3.289로 실제 text를 추출하고 image operator 수를 검사한다. 기존 Playwright 1.55.0의 npm audit High 2개는 브라우저 다운로드 인증서 검증 관련 기존 전이 의존성 경고이며 이번 새 PDF 검증 의존성에서 발생하지 않았다. 임의 force upgrade는 하지 않았다.
+Required Registry에는 모든 신규 필수 계약을 등록했다. `.skip`·`.only` 선언과 누락·중복은 0이며 반복 시험의 이름 필터 제외와 구분한다. 의도하지 않은 Heartbeat 오류는 없고 fault injection의 예상 경고는 별도다. Audio 초기 로딩 오류는 metadata 관측 여부·재생 위치·Audio 요소 수·HTTP 응답 상태를 함께 표시해 지연과 재생 차단을 구분한다. 실제 PRJ-007 Final PDF 10개 페이지의 Internal 첫/끝 페이지와 External 첫 페이지를 렌더링해 검토했다. External 전체 페이지의 Label과 원본 image operator 0개도 확인했다. PDF Redaction 검증은 pdfjs-dist 6.3.289로 실제 text를 추출하고 image operator 수를 검사한다. 기존 Playwright 1.55.0의 npm audit High 2개는 브라우저 다운로드 인증서 검증 관련 기존 전이 의존성 경고이며 이번 새 PDF 검증 의존성에서 발생하지 않았다. 임의 force upgrade는 하지 않았다.
 
 ## Runtime Smoke·자원 정리
 
 실제 동적 포트 55552, 55561, 55567, 55571, 55573, 55584에서 54개 점검을 통과했다. 정상 200/201/202, Visual Plan·Temporal 정책 실패 400, revision·Final 충돌 409, Project/Asset 무결성 423, 일시 Store 503, Invalid Range 416·Content-Range, 정상 Partial 206·Full 200을 확인했다.
 
-sourced→black→sourced, sourced→hold→sourced를 실제 API로 왕복했고 각 성공의 단일 revision과 실패 불변을 확인했다. 7개 Transition 정책, 초기화 뒤 외부 Create/Update 탐지, 이전 Build Pending Supersede, Non-quiescent Draft/Final, Internal/External·media 거부, 목록 cache hit 뒤 손상 Asset의 실제 안전 출력 차단을 검사했다. 브라우저 회귀는 페이지를 먼저 닫아 활성 연결의 서버 종료 대기를 없앤다. 모든 임시 App·Store·Worker·Timer·Listener를 종료하고 Process Registry가 비어 있음을 확인한 뒤 Root를 삭제했다. `cleaned:true`는 삭제 뒤 출력한다. 여섯 포트는 모두 닫혔고 기존 4317/PID 89219는 유지됐다.
+sourced→black→sourced, sourced→hold→sourced를 실제 API로 왕복했고 각 성공의 단일 revision과 실패 불변을 확인했다. 7개 Transition 정책, 초기화 뒤 외부 Create/Update 탐지, 이전 Build Pending Supersede, Non-quiescent Draft/Final, Internal/External·media 거부, 목록 cache hit 뒤 손상 Asset의 실제 안전 출력 차단을 검사했다. 브라우저 회귀는 페이지가 속한 독립 Context의 연결 풀까지 먼저 닫아 서버 종료 대기를 없앤다. 모든 임시 App·Store·Worker·Timer·Listener를 종료하고 Process Registry가 비어 있음을 확인한 뒤 Root를 삭제했다. `cleaned:true`는 삭제 뒤 출력한다. 여섯 포트는 모두 닫혔고 기존 4317/PID 89219는 유지됐다.
 
 ## CI와 병합 경계
 

@@ -43,8 +43,8 @@ async function startApp(rootPath: string, store: ProjectStore): Promise<RunningA
 }
 
 async function stopApp(running: RunningApp, page: Page): Promise<void> {
-  // 브라우저 연결을 먼저 닫아 서버 종료가 미완 연결을 기다리지 않게 한다.
-  try { await page.close(); }
+  // 브라우저 Context의 연결 풀까지 먼저 닫아 서버 종료가 미완 연결을 기다리지 않게 한다.
+  try { await page.context().close(); }
   finally { await running.app.close(); await rm(running.root, { recursive: true, force: true }); }
 }
 
