@@ -2,7 +2,7 @@ import { constants } from 'node:fs';
 import type { Dirent } from 'node:fs';
 import { link, lstat, mkdir, open, readdir, realpath, rename, rmdir, unlink } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { contractError } from '../domain/errors.js';
 import { isMissingFile } from '../io/package.js';
 
@@ -174,6 +174,45 @@ export class SafeStoreFilesystem {
     const targetIdentity: FileIdentity = await this.identity(target);
     if (!sameFileIdentity(sourceIdentity, targetIdentity)) unsafe(target, 'hard link identity mismatch');
     return targetIdentity;
+  }
+
+  /** 완성·fsync된 같은 디렉터리 임시 파일을 no-replace link로 공개하고 자기 inode만 정리한다. */
+  async publishExclusiveFileWithIdentity(finalPath: string, content: string | Buffer, temporaryToken: string): Promise<FileIdentity> {
+    if (!/^[a-zA-Z0-9.-]{1,100}$/.test(temporaryToken)) unsafe(finalPath, 'invalid publication token');
+    this.#assertWithin(finalPath);
+    const parent: string = dirname(finalPath);
+    const temporary: string = join(parent, `.publish-${basename(finalPath)}-${temporaryToken}.tmp`);
+    let identity: FileIdentity | null = null;
+    let published: boolean = false;
+    try {
+      identity = await this.writeExclusiveWithIdentity(temporary, content);
+      await this.requireDirectory(parent);
+      await link(temporary, finalPath);
+      published = true;
+      if (!sameFileIdentity(identity, await this.identity(finalPath))) unsafe(finalPath, 'published identity changed');
+      await this.syncDirectory(parent);
+      await this.unlinkFile(temporary, identity);
+      await this.syncDirectory(parent);
+      if (!sameFileIdentity(identity, await this.identity(finalPath))) unsafe(finalPath, 'published identity changed after sync');
+      return identity;
+    } catch (error: unknown) {
+      if (identity !== null) {
+        try {
+          if (published) {
+            if (!(await this.read(finalPath)).equals(Buffer.from(content))) unsafe(finalPath, 'published bytes changed before cleanup');
+            await this.unlinkFile(finalPath, identity);
+          }
+          await this.unlinkFile(temporary, identity);
+          await this.syncDirectory(parent);
+        } catch (cleanupError: unknown) {
+          throw new AggregateError([error, cleanupError], `원자 게시 실패 후 소유 파일을 정리할 수 없습니다. path=${finalPath}`);
+        }
+      }
+      if (error instanceof Error && 'code' in error && error.code === 'EEXIST') {
+        throw contractError('EXCLUSIVE_FILE_EXISTS', `원자 게시 대상이 이미 존재합니다. path=${finalPath}`, []);
+      }
+      throw error;
+    }
   }
 
   async identity(path: string): Promise<FileIdentity> {

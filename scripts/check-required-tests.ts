@@ -3,6 +3,18 @@ import { extname, join } from 'node:path';
 import { contractError } from '../src/domain/errors.js';
 
 const REQUIRED_TEST_NAMES: readonly string[] = [
+  'lock_metadata_is_atomically_visible',
+  'root_create_lock_metadata_is_atomically_visible',
+  'concurrent_reader_never_observes_partial_live_lock',
+  'status_does_not_block_project_for_partially_published_lock',
+  'lock_publish_eexist_is_project_busy',
+  'failed_lock_publish_removes_only_owned_temporary_file',
+  'crashed_lock_temporary_file_is_detected',
+  'unknown_lock_temporary_file_is_not_deleted',
+  'dead_known_lock_publication_is_recovered_idempotently',
+  'atomic_lock_publication_preserves_identity',
+  'atomic_lock_publication_syncs_parent_directory',
+
   'build_without_git_reports_git_state_unavailable',
   'build_without_git_does_not_report_clean_worktree',
   'build_without_git_does_not_report_clean_generation_inputs',
