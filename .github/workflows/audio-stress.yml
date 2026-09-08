@@ -50,4 +50,5 @@ jobs:
             test-results/
             .local/audio-stress/
           if-no-files-found: warn
+          include-hidden-files: true
           retention-days: 14

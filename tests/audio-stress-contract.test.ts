@@ -30,6 +30,7 @@ it('audio_stress_workflow_supports_50_to_100_repetitions', async (): Promise<voi
 it('audio_stress_failure_uploads_trace_and_logs', async (): Promise<void> => {
   const value: string = await workflow(); for (const part of ['actions/upload-artifact@v4', 'if: failure()', 'test-results/', '.local/audio-stress/', 'audio-stress-reporter.ts']) expect(value).toContain(part);
   expect(await readFile('playwright.config.ts', 'utf8')).toContain("trace: 'retain-on-failure'");
+  expect(value).toContain('include-hidden-files: true');
 });
 it('audio_diagnostics_record_request_send_finish_close', async (): Promise<void> => {
   const value: string = await diagnostics(); for (const part of ["'request'", "'send'", "'finish'", "'close'", "'aborted'", "'socket-error'", 'rangePresent', 'elapsedMs']) expect(value).toContain(part);
