@@ -1,7 +1,7 @@
 import { intrinsicIncomingExposure, transitionVisualPolicy } from '../../src/domain/transition.js';
 import type { TransitionVisualPolicy } from '../../src/domain/transition.js';
-import { reviewShotVisualPlan } from '../../src/domain/edit.js';
-import type { ShotVisualPlanInput } from '../../src/domain/edit.js';
+import { reviewShotVisualPlanChange } from '../../src/domain/edit.js';
+import type { ShotVisualPlanInput, VisualPlanChangeReview } from '../../src/domain/edit.js';
 import { sourceRevealEvidenceMs } from '../../src/domain/source-anchor.js';
 import type { FinalReadinessReport } from '../../src/domain/final-readiness.js';
 import { reviewTextOutput } from '../../src/domain/output-policy.js';
@@ -432,7 +432,8 @@ function VisualPlanEditor(props: { project: Project; shot: Shot; working: boolea
   useEffect((): void => { setDraft({ visualMode: props.shot.visualMode, sourceLinks: props.shot.sourceLinks }); }, [props.shot, props.project.revision]);
   const nextShot: Shot = { ...props.shot, ...draft };
   const nextProject: Project = { ...props.project, shots: props.project.shots.map((shot: Shot): Shot => shot.id === nextShot.id ? nextShot : shot) };
-  const issues: Issue[] = reviewShotVisualPlan(props.project, props.shot.id, draft);
+  const review: VisualPlanChangeReview = reviewShotVisualPlanChange(props.project, props.shot.id, draft);
+  const issues: Issue[] = review.blockingIssues;
   const coverageIssues: Issue[] = issues.filter((value: Issue): boolean => value.code === 'SHOT_VISUAL_COVERAGE_GAP');
   const frames: StoryboardFrame[] = props.project.frames.filter((frame: StoryboardFrame): boolean => frame.shotId === props.shot.id);
   const units: SourceUnit[] = props.project.dataset.units.filter((unit: SourceUnit): boolean => unit.segmentId === props.shot.segmentId);
@@ -459,6 +460,8 @@ function VisualPlanEditor(props: { project: Project; shot: Shot; working: boolea
       if (event.target.value !== '') setDraft({ ...draft, sourceLinks: [...draft.sourceLinks, { unitId: event.target.value, usage: 'context-only', status: 'mapping-required', temporalAnchor: { kind: 'unresolved', basis: 'estimated', status: 'review-required' } }] });
     }}><option value="">원문 선택</option>{available.map((unit: SourceUnit): ReactElement => <option key={unit.id} value={unit.id}>{unit.order} · {unit.id} · {unit.kind}</option>)}</select></label>}
     {issues.length > 0 && <div className="approval-review" aria-live="polite">{issues.map((value: Issue, issueIndex: number): ReactElement => <p key={`${value.code}:${issueIndex}`}>{value.code} · {value.entityId} · {value.message}</p>)}</div>}
+    {review.existingUnrelatedIssues.length > 0 && <div className="existing-segment-review" aria-live="polite"><p>기존 구간 검토 항목 · 이번 수정은 저장 가능하며 승인·Final 검사는 유지됩니다.</p>
+      {review.existingUnrelatedIssues.map((value: Issue, issueIndex: number): ReactElement => <p key={`${value.code}:${issueIndex}`}>{value.code} · {value.entityId} · {value.message}</p>)}</div>}
     <button className="primary" disabled={props.working || !dirty || issues.length > 0} onClick={(): void => { void props.onSave(draft); }}>Visual Plan 저장</button>
   </section>;
 }

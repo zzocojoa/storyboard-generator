@@ -306,15 +306,15 @@ function requireEditableSourceShot(project: Project, shotId: string): Shot {
   return shot;
 }
 
-function sourcePolicyReviewIssues(project: Project, segmentId: string): Issue[] {
+export function sourcePolicyReviewIssues(project: Project, segmentId: string): Issue[] {
   return [...sourcePolicyIssues(
     project.dataset.units.filter((unit: SourceUnit): boolean => unit.segmentId === segmentId),
     project.shots.filter((shot: Shot): boolean => shot.segmentId === segmentId),
   ), ...firstVisualRevealOrderIssues(project, segmentId)];
 }
 
-function sourcePolicyIssueKey(value: Issue): string {
-  return `${value.code}\u0000${value.entityId}\u0000${value.expected ?? ''}\u0000${value.actual ?? ''}`;
+export function sourcePolicyIssueKey(value: Issue): string {
+  return JSON.stringify([value.code, value.severity, value.entityId, value.field, value.expected, value.actual]);
 }
 
 function assertSourcePolicyChange(current: Project, next: Project, segmentId: string): void {
@@ -481,7 +481,9 @@ export function approvalIssuesForShot(project: Project, shotId: string): Issue[]
   if (shot === undefined) return reviewIssuesForShot(project, shotId);
   const frameIssues: Issue[] = shot.visualMode === 'sourced' && !project.frames.some((frame: StoryboardFrame): boolean => frame.shotId === shot.id && frame.offsetMs === 0 && frame.role === 'start')
     ? [issue('SHOT_START_FRAME_REQUIRED', 'conflict', shot.id, 'frames', 'sourced 컷에는 시작 Frame이 필요합니다.', 'start frame at zero', null, [])] : [];
-  return [...reviewIssuesForShot(project, shotId), ...shotVisualCoverageIssues(project, shot), ...visualModeStructureIssues(project, shot), ...reviewTransitionInformationIssues(project, shot), ...frameIssues];
+  return [...reviewIssuesForShot(project, shotId),
+    ...sourcePolicyReviewIssues(project, shot.segmentId).filter((value: Issue): boolean => value.entityId !== shot.id),
+    ...shotVisualCoverageIssues(project, shot), ...visualModeStructureIssues(project, shot), ...reviewTransitionInformationIssues(project, shot), ...frameIssues];
 }
 
 /** 다음 컷의 시작 영상이 실제 전환 시각에 먼저 공개돼도 되는지 같은 Gate로 검사한다. */

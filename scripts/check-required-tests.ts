@@ -3,6 +3,18 @@ import { extname, join } from 'node:path';
 import { contractError } from '../src/domain/errors.js';
 
 const REQUIRED_TEST_NAMES: readonly string[] = [
+  'visual_plan_ignores_unchanged_unrelated_segment_issue',
+  'visual_plan_can_repair_two_invalid_shots_sequentially',
+  'visual_plan_reports_unchanged_unrelated_issue_as_nonblocking',
+  'visual_plan_may_reduce_existing_segment_issue',
+  'visual_plan_rejects_new_segment_first_reveal_issue',
+  'visual_plan_rejects_worsened_segment_first_reveal_issue',
+  'visual_plan_rejects_new_source_policy_issue_only',
+  'visual_plan_preview_and_save_share_change_policy',
+  'visual_plan_failure_leaves_project_byte_equivalent',
+  'approval_still_blocks_legacy_segment_issue',
+  'final_readiness_still_blocks_legacy_segment_issue',
+
   'summary_integrity_retries_when_file_changes_during_check',
   'summary_integrity_fails_closed_when_file_keeps_changing',
   'summary_never_returns_verified_for_changed_during_check',
