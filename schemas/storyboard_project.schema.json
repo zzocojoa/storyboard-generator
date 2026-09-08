@@ -4,7 +4,7 @@
   "properties": {
     "schemaVersion": {
       "type": "string",
-      "const": "1.8.0"
+      "const": "1.9.0"
     },
     "projectId": {
       "$ref": "#/$defs/__schema0"
@@ -1460,6 +1460,12 @@
               {
                 "type": "object",
                 "properties": {
+                  "gitStateAvailable": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
                   "provenanceVersion": {
                     "type": "integer",
                     "exclusiveMinimum": 0,
@@ -1551,6 +1557,7 @@
                   }
                 },
                 "required": [
+                  "gitStateAvailable",
                   "provenanceVersion",
                   "headCommitSha",
                   "worktreeDirty",

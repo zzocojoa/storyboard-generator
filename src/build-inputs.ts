@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { contractError } from './domain/errors.js';
 import type { BuildInput } from './build-fingerprint.js';
 
-export type BuildGitState = { headCommitSha: string | null; worktreeDirty: boolean; generationInputsDirty: boolean };
+export type BuildGitState = { gitStateAvailable: boolean; headCommitSha: string | null; worktreeDirty: boolean | null; generationInputsDirty: boolean | null };
 const generationDirectories: readonly string[] = ['.agents/skills/storyboard-workbench', 'src/codex', 'src/proposal', 'src/domain', 'schemas', 'src/prompts'];
 const generationFiles: readonly string[] = ['AGENTS.md', 'package-lock.json', 'package.json'];
 
@@ -43,9 +43,14 @@ export function readBuildGitState(root: string): BuildGitState {
     headCommitSha = z.string().regex(/^[a-f0-9]{40}$/u).parse(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim());
   } catch (error: unknown) {
     process.stderr.write(`${JSON.stringify({ level: 'warn', code: 'BUILD_COMMIT_UNKNOWN', message: error instanceof Error ? error.message : String(error) })}\n`);
-    return { headCommitSha: null, worktreeDirty: false, generationInputsDirty: false };
+    return { gitStateAvailable: false, headCommitSha: null, worktreeDirty: null, generationInputsDirty: null };
   }
-  const status: string = execFileSync('git', ['status', '--porcelain=v1', '-z', '--untracked-files=all'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  let status: string;
+  try { status = execFileSync('git', ['status', '--porcelain=v1', '-z', '--untracked-files=all'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); }
+  catch (error: unknown) {
+    process.stderr.write(`${JSON.stringify({ level: 'warn', code: 'BUILD_GIT_STATUS_UNKNOWN', message: error instanceof Error ? error.message : String(error) })}\n`);
+    return { gitStateAvailable: false, headCommitSha, worktreeDirty: null, generationInputsDirty: null };
+  }
   const entries: string[] = status.split('\0');
   const paths: string[] = [];
   for (let index: number = 0; index < entries.length; index += 1) {
@@ -54,5 +59,5 @@ export function readBuildGitState(root: string): BuildGitState {
     paths.push(entry.slice(3));
     if (entry.slice(0, 2).includes('R') || entry.slice(0, 2).includes('C')) { index += 1; paths.push(entries[index] as string); }
   }
-  return { headCommitSha, worktreeDirty: paths.length > 0, generationInputsDirty: paths.some(isGenerationContractPath) };
+  return { gitStateAvailable: true, headCommitSha, worktreeDirty: paths.length > 0, generationInputsDirty: paths.some(isGenerationContractPath) };
 }

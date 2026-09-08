@@ -3,6 +3,19 @@ import { extname, join } from 'node:path';
 import { contractError } from '../src/domain/errors.js';
 
 const REQUIRED_TEST_NAMES: readonly string[] = [
+  'build_without_git_reports_git_state_unavailable',
+  'build_without_git_does_not_report_clean_worktree',
+  'build_without_git_does_not_report_clean_generation_inputs',
+  'head_known_status_unknown_preserves_head_only',
+  'github_sha_without_git_keeps_dirty_state_unknown',
+  'current_build_manifest_uses_provenance_version_3',
+  'project_18_to_19_migration_is_idempotent',
+  'project_18_to_19_preserves_original_data',
+  'legacy_build_without_availability_flag_remains_readable',
+  'legacy_build_does_not_fabricate_git_availability',
+  'legacy_request_build_without_availability_remains_readable',
+  'same_generation_build_ignores_audit_only_git_state',
+
   'visual_plan_ignores_unchanged_unrelated_segment_issue',
   'visual_plan_can_repair_two_invalid_shots_sequentially',
   'visual_plan_reports_unchanged_unrelated_issue_as_nonblocking',

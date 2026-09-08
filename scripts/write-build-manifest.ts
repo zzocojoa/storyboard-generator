@@ -16,7 +16,7 @@ const config = z.object({ codex: z.object({ speechVoice: z.string().min(1) }) })
 const runtimeInputs: BuildInput[] = await runtimeSourceInputs(root);
 const contractInputs: BuildInput[] = await generationContractInputs(root, runtimeInputs);
 const gitState: BuildGitState = readBuildGitState(root);
-const manifest: BuildManifest = BuildManifestSchema.parse({ ...gitState, provenanceVersion: 2, commitSha: gitState.headCommitSha, appVersion: packageInfo.version,
+const manifest: BuildManifest = BuildManifestSchema.parse({ ...gitState, provenanceVersion: 3, commitSha: gitState.headCommitSha, appVersion: packageInfo.version,
   projectSchemaVersion: ProjectSchema.shape.schemaVersion.value, builtAt: new Date().toISOString(), sourceTreeSha256: hashBuildInputs(runtimeInputs),
   generationContractSha256: hashBuildInputs(contractInputs), runtimeGenerationConfigSha256: runtimeGenerationConfigHash(config.codex.speechVoice),
   journalVersion: 3, lockVersion: 3, registryVersion: 1 });

@@ -57,6 +57,6 @@ describe('Canonical Generation Audit', (): void => {
   it('legacy_generation_record_migrates_build_to_null', async (): Promise<void> => {
     const project: Project = await readinessOutline(); const { generatorBuild: omitted, ...legacy } = record(project); expect(omitted).toBeNull();
     const migrated: Project = parseProject({ ...project, schemaVersion: '1.6.0', generationRecords: [legacy] });
-    expect(migrated.generationRecords).toEqual([{ ...legacy, generatorBuild: null }]); expect(migrated.schemaVersion).toBe('1.8.0'); expect(parseProject(migrated)).toEqual(migrated);
+    expect(migrated.generationRecords).toEqual([{ ...legacy, generatorBuild: null }]); expect(migrated.schemaVersion).toBe('1.9.0'); expect(parseProject(migrated)).toEqual(migrated);
   });
 });

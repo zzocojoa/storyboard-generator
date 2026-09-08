@@ -130,7 +130,7 @@ describe('생성 계약 Build 식별', (): void => {
     const input = { ...project, schemaVersion: '1.7.0', generationRecords: [record] };
     const before: string = JSON.stringify(input);
     const migrated: Project = parseProject(input);
-    expect(migrated.generationRecords[0]?.generatorBuild).toEqual({ ...generatorBuild, provenanceVersion: 1, headCommitSha: generatorBuild.commitSha,
+    expect(migrated.generationRecords[0]?.generatorBuild).toEqual({ ...generatorBuild, provenanceVersion: 1, gitStateAvailable: null, headCommitSha: generatorBuild.commitSha,
       worktreeDirty: null, generationInputsDirty: null, generationContractSha256: null, runtimeGenerationConfigSha256: null });
     expect(JSON.stringify(input)).toBe(before);
     expect(parseProject(migrated)).toEqual(migrated);
@@ -142,7 +142,7 @@ describe('생성 계약 Build 식별', (): void => {
       templateVersion: '1', seed: null, referenceHashes: [], resultAssetIds: [], shotIds: [], createdAt: '2026-09-07T00:00:00.000Z', generatorBuild: null };
     const input = { ...project, schemaVersion: '1.7.0', generationRecords: [legacy] };
     const migrated: Project = parseProject(input);
-    expect(migrated).toEqual({ ...input, schemaVersion: '1.8.0' });
+    expect(migrated).toEqual({ ...input, schemaVersion: '1.9.0' });
     expect(parseProject(migrated)).toEqual(migrated);
   });
 

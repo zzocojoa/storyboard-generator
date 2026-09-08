@@ -177,10 +177,17 @@ function migrate17To18(input: JsonObject): JsonObject {
     isJsonObject(record) ? { ...record, generatorBuild: migrateGeneratorBuildInput(record.generatorBuild) } : record) };
 }
 
+/** 1.8에 기록된 Dirty 값과 모든 제작 데이터는 유지하고 Git 확인 가능 여부만 미상으로 남긴다. */
+function migrate18To19(input: JsonObject): JsonObject {
+  if (input.schemaVersion !== '1.8.0' || !Array.isArray(input.generationRecords)) return input;
+  return { ...input, schemaVersion: '1.9.0', generationRecords: input.generationRecords.map((record: unknown): unknown =>
+    isJsonObject(record) ? { ...record, generatorBuild: migrateGeneratorBuildInput(record.generatorBuild) } : record) };
+}
+
 /** 기존 저장본은 원문·Anchor·Asset을 보존하고 알 수 없는 생성 Build만 null로 이관한다. */
 export function migrateProjectInput(input: unknown): unknown {
   if (!isJsonObject(input)) return input;
-  return migrate17To18(migrate16To17(migrate15To16(migrate14To15(migrate13To14(migrate12To13(migrate11To12(migrate10To11(input))))))));
+  return migrate18To19(migrate17To18(migrate16To17(migrate15To16(migrate14To15(migrate13To14(migrate12To13(migrate11To12(migrate10To11(input)))))))));
 }
 
 /** 저장된 원본 스냅샷에서 데이터를 다시 계산해 편집 가능한 값과 원문을 구분한다. */

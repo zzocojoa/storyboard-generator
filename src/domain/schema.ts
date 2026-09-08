@@ -230,6 +230,7 @@ export const AssetSchema = z.strictObject({
   audioMetadata: z.strictObject({ sampleRate: z.number().int().positive(), channels: z.number().int().min(1).max(2), codec: z.string().min(1) }).nullable().optional(),
 });
 export const GeneratorBuildProvenanceSchema = z.strictObject({
+  gitStateAvailable: z.boolean().nullable(),
   provenanceVersion: z.number().int().positive(), headCommitSha: z.string().regex(/^[a-f0-9]{40}$/u).nullable(),
   worktreeDirty: z.boolean().nullable(), generationInputsDirty: z.boolean().nullable(),
   generationContractSha256: HashSchema.nullable(), runtimeGenerationConfigSha256: HashSchema.nullable(),
@@ -243,7 +244,7 @@ export const GenerationSchema = z.strictObject({
   generatorBuild: GeneratorBuildProvenanceSchema.nullable(),
 });
 export const ProjectSchema = z.strictObject({
-  schemaVersion: z.literal('1.8.0'), projectId: IdSchema, title: z.string().min(1), revision: z.number().int().nonnegative(),
+  schemaVersion: z.literal('1.9.0'), projectId: IdSchema, title: z.string().min(1), revision: z.number().int().nonnegative(),
   profile: ProfileSchema,
   handoff: HandoffSchema, sources: z.array(SnapshotSchema), dataset: DatasetSchema, importIssues: z.array(IssueSchema),
   textMappingDecisions: z.array(TextMappingDecisionSchema),

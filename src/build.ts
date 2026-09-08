@@ -15,7 +15,7 @@ export function readBuildManifest(): BuildManifest {
 }
 
 export function generatorBuildProvenance(build: BuildManifest): GeneratorBuildProvenance {
-  return { provenanceVersion: build.provenanceVersion, headCommitSha: build.headCommitSha, worktreeDirty: build.worktreeDirty, generationInputsDirty: build.generationInputsDirty,
+  return { provenanceVersion: build.provenanceVersion, gitStateAvailable: build.gitStateAvailable, headCommitSha: build.headCommitSha, worktreeDirty: build.worktreeDirty, generationInputsDirty: build.generationInputsDirty,
     generationContractSha256: build.generationContractSha256, runtimeGenerationConfigSha256: build.runtimeGenerationConfigSha256,
     commitSha: build.commitSha, appVersion: build.appVersion, projectSchemaVersion: build.projectSchemaVersion,
     builtAt: build.builtAt, sourceTreeSha256: build.sourceTreeSha256 };
