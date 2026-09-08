@@ -12,7 +12,7 @@ import { codexRequestMetrics } from '../codex/metrics.js';
 import type { CodexRequestStore } from '../codex/requests.js';
 import type { CodexRequest, CodexRequestKind } from '../codex/schema.js';
 import { codexRequestBasis } from '../codex/work.js';
-import { approveShot, mergeShots, reorderShots, setShotLocks, splitShot, updateShotContent } from '../domain/edit.js';
+import { approveShot, mergeShots, reorderShots, setShotLocks, splitShot, updateShotContent, ShotVisualPlanInputSchema, updateShotVisualPlan } from '../domain/edit.js';
 import { attachAudioAsset } from '../domain/audio-asset.js';
 import { WorkerAudioNormalizer } from '../domain/audio-normalizer.js';
 import { contractError } from '../domain/errors.js';
@@ -56,6 +56,7 @@ const TextCueBodySchema = z.strictObject({ expectedRevision: z.number().int().no
 const TextCueAuthorityBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), resolution: TextCueAuthorityResolutionInputSchema });
 const TextMappingBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), decision: TextMappingDecisionInputSchema });
 const TextPlacementInformationBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), decision: TextPlacementInformationInputSchema });
+const VisualPlanBodySchema = RevisionSchema.extend({ visualPlan: ShotVisualPlanInputSchema });
 const SourceLinksBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), mapping: ShotSourceLinksInputSchema });
 const MoveSourceLinkBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), move: MoveShotSourceLinkInputSchema });
 const ReferenceBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), kind: z.enum(['character', 'location', 'prop']),
@@ -309,6 +310,11 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
     const body = TextPlacementInformationBodySchema.parse(request.body);
     return { project: await store.update(params.projectId, body.expectedRevision,
       (project: Project): Project => updatePlacementInformationDecision(project, params.placementId, body.decision), []) };
+  });
+  app.patch('/api/projects/:projectId/shots/:shotId/visual-plan', async (request: FastifyRequest): Promise<object> => {
+    const { projectId, shotId } = ShotParamsSchema.parse(request.params);
+    const body = VisualPlanBodySchema.parse(request.body);
+    return { project: await store.update(projectId, body.expectedRevision, (project: Project): Project => updateShotVisualPlan(project, shotId, body.visualPlan), []) };
   });
   app.patch('/api/projects/:projectId/shots/:shotId/source-links', async (request: FastifyRequest): Promise<object> => {
     const { projectId, shotId } = ShotParamsSchema.parse(request.params);

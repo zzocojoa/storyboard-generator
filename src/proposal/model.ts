@@ -1,9 +1,9 @@
 import { z } from 'zod';
 import { contractError } from '../domain/errors.js';
 import { effectiveInformationGate } from '../domain/mapping.js';
-import type { Project, Segment, Shot, ShotSourceLink, SourceUnit, StoryboardFrame } from '../domain/schema.js';
+import type { Issue, Project, Segment, Shot, ShotSourceLink, SourceUnit, StoryboardFrame } from '../domain/schema.js';
 import { PresenceSchema, ProjectSchema, ShotSourceLinkSchema, ShotVisualModeSchema, TransitionSchema } from '../domain/schema.js';
-import { shotVisualCoverageIssues, sourcePolicyIssues } from '../domain/source-policy.js';
+import { firstVisualRevealOrderIssues, shotVisualCoverageIssues, sourcePolicyIssues } from '../domain/source-policy.js';
 import { validateProject } from '../domain/validation.js';
 import { assertNoErrors } from '../domain/errors.js';
 
@@ -67,8 +67,7 @@ function validateProposalSources(project: Project, segmentId: string, proposal: 
   const policyIssues = sourcePolicyIssues(sourceUnits, policyShots);
   if (policyIssues.length > 0) {
     const visualMissing: boolean = policyIssues.some((value): boolean => value.code === 'SHOT_VISUAL_SOURCE_REQUIRED');
-    const reversed: boolean = policyIssues.some((value): boolean => value.code === 'SOURCE_UNIT_ORDER_REVERSED');
-    const code: string = visualMissing ? 'PROPOSAL_VISUAL_SOURCE_REQUIRED' : reversed ? 'PROPOSAL_SOURCE_ORDER_REVERSED' : 'PROPOSAL_SOURCE_POLICY';
+    const code: string = visualMissing ? 'PROPOSAL_VISUAL_SOURCE_REQUIRED' : 'PROPOSAL_SOURCE_POLICY';
     throw contractError(code, policyIssues.map((value): string => `${value.code}: ${value.message}`).join('\n'), policyIssues);
   }
 }
@@ -148,18 +147,10 @@ function proposalFrames(project: Project, shot: Shot, proposal: SegmentProposal[
 }
 
 function validateProposalSourceOrder(project: Project, shots: readonly Shot[]): void {
-  const events = shots.flatMap((shot: Shot) => shot.sourceLinks
-    .filter((link: ShotSourceLink): boolean => ['primary-visual', 'continued-visual'].includes(link.usage))
-    .map((link: ShotSourceLink, index: number) => ({
-      unit: project.dataset.units.find((unit: SourceUnit): boolean => unit.id === link.unitId),
-      atMs: shot.startMs + anchorStart(link), index,
-    }))).filter((event): event is { unit: SourceUnit; atMs: number; index: number } => event.unit !== undefined);
-  const firstEvents = events.filter((event): boolean => !events.some((candidate): boolean => candidate.unit.id === event.unit.id && candidate.atMs < event.atMs));
-  for (const earlier of firstEvents) for (const later of firstEvents) {
-    if (earlier.unit.order < later.unit.order && earlier.atMs > later.atMs) {
-      throw contractError('PROPOSAL_SOURCE_ORDER_REVERSED', `${later.unit.id}(${later.unit.order})가 ${earlier.unit.id}(${earlier.unit.order})보다 이른 ${later.atMs}ms에 공개됩니다.`, []);
-    }
-  }
+  const next: Project = { ...project, shots: [...shots] };
+  const issues: Issue[] = [...new Set(shots.map((shot: Shot): string => shot.segmentId))]
+    .flatMap((segmentId: string): Issue[] => firstVisualRevealOrderIssues(next, segmentId));
+  if (issues.length > 0) throw contractError('PROPOSAL_SOURCE_ORDER_REVERSED', issues.map((value: Issue): string => value.message).join('\n'), issues);
 }
 
 function allocateDurations(duration: number, weights: readonly number[]): number[] {

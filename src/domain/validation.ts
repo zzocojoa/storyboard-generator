@@ -3,7 +3,7 @@ import { assetReferenceIssues } from './asset-references.js';
 import { issue } from './errors.js';
 import { generationRecordIssues } from './generation-records.js';
 import type { Dataset, InformationRule, Issue, Project, Segment, Shot, ShotSourceLink, Snapshot, SourceRef, SourceUnit, TextMappingDecision, TextPlacement, TextPlacementInformationDecision } from './schema.js';
-import { shotVisualCoverageIssues, sourcePolicyIssues } from './source-policy.js';
+import { firstVisualRevealOrderIssues, shotVisualCoverageIssues, sourcePolicyIssues } from './source-policy.js';
 
 function duplicateIssues(ids: readonly string[], entity: string): Issue[] {
   return [...new Set(ids.filter((id: string, index: number): boolean => ids.indexOf(id) !== index))]
@@ -94,10 +94,10 @@ export function validateDataset(dataset: Dataset, snapshots: readonly Snapshot[]
 }
 
 function sourceOrderIssues(project: Project): Issue[] {
-  return project.dataset.segments.flatMap((segment: Segment): Issue[] => sourcePolicyIssues(
+  return project.dataset.segments.flatMap((segment: Segment): Issue[] => [...sourcePolicyIssues(
     project.dataset.units.filter((unit: SourceUnit): boolean => unit.segmentId === segment.id),
     project.shots.filter((shot: Shot): boolean => shot.segmentId === segment.id),
-  ));
+  ), ...firstVisualRevealOrderIssues(project, segment.id)]);
 }
 
 export function validateProject(project: Project, expectedDataset: Dataset): Issue[] {

@@ -1,6 +1,7 @@
-import { assertNoErrors, contractError } from './errors.js';
-import { approvalIssuesForShot, effectiveInformationGate, sourceAnchorRange } from './mapping.js';
-import { ProjectSchema, ShotContentSchema } from './schema.js';
+import { z } from 'zod';
+import { assertNoErrors, contractError, issue } from './errors.js';
+import { approvalIssuesForShot, effectiveInformationGate, reviewSourcePlanIssues, sourceAnchorRange } from './mapping.js';
+import { ProjectSchema, ShotContentSchema, ShotSourceLinkSchema, ShotVisualModeSchema } from './schema.js';
 import type { Asset, AudioCue, Issue, LockedField, Project, Shot, ShotContent, ShotSourceLink, SourceUnit, StoryboardFrame, TextCue, TextMappingDecision, TextPlacement } from './schema.js';
 import { shotVisualCoverageIssues, visualModeStructureIssues } from './source-policy.js';
 import { validateProject } from './validation.js';
@@ -46,14 +47,50 @@ export function updateShotContent(project: Project, shotId: string, input: ShotC
   requireUnlocked(shot, fields);
   if (fields.length === 0) return project;
   if (shot.visualMode !== content.visualMode) {
-    const nextShot: Shot = { ...shot, ...content };
-    const issues: Issue[] = [...shotVisualCoverageIssues(project, nextShot), ...visualModeStructureIssues(project, nextShot)];
-    if (issues.length > 0) throw contractError('VISUAL_MODE_CHANGE_BLOCKED', issues.map((value: Issue): string => value.message).join('\n'), issues);
+    throw contractError('VISUAL_PLAN_ATOMIC_UPDATE_REQUIRED', `${shotId}: visualMode와 전체 sourceLinks를 PATCH /api/projects/:projectId/shots/:shotId/visual-plan의 visualPlan으로 함께 저장하세요.`, []);
   }
   return finishEdit(project, { ...project,
     shots: project.shots.map((candidate: Shot): Shot => candidate.id === shotId ? { ...candidate, ...content, proposalOrigin: 'manual', approvalStatus: 'proposed' } : candidate),
     frames: project.frames.map((frame: StoryboardFrame): StoryboardFrame => frame.shotId === shotId ? { ...frame, visualReview: 'pending' } : frame),
   });
+}
+
+export const ShotVisualPlanInputSchema = z.strictObject({ visualMode: ShotVisualModeSchema, sourceLinks: z.array(ShotSourceLinkSchema) });
+export type ShotVisualPlanInput = z.infer<typeof ShotVisualPlanInputSchema>;
+
+function projectWithVisualPlan(project: Project, shotId: string, input: ShotVisualPlanInput): Project {
+  return { ...project,
+    shots: project.shots.map((shot: Shot): Shot => shot.id === shotId ? { ...shot, ...input, approvalStatus: 'proposed', proposalOrigin: 'manual' } : shot),
+    frames: project.frames.map((frame: StoryboardFrame): StoryboardFrame => frame.shotId === shotId ? { ...frame, visualReview: 'pending' } : frame),
+  };
+}
+
+function visualPlanIssues(project: Project, next: Project, shotId: string): Issue[] {
+  const shot: Shot = requireShot(next, shotId);
+  return [...reviewSourcePlanIssues(next, shot), ...visualModeStructureIssues(next, shot), ...shotVisualCoverageIssues(next, shot),
+    ...validateProject(next, project.dataset).filter((value: Issue): boolean => value.severity === 'error')];
+}
+
+/** UI의 전체 Draft를 실제 저장과 같은 정책으로 검토하되 저장 상태는 변경하지 않는다. */
+export function reviewShotVisualPlan(project: Project, shotId: string, input: ShotVisualPlanInput): Issue[] {
+  const shot: Shot = requireShot(project, shotId);
+  const parsed = ShotVisualPlanInputSchema.safeParse(input);
+  if (!parsed.success) return parsed.error.issues.map((problem): Issue => issue('INVALID_VISUAL_PLAN', 'conflict', shotId,
+    problem.path.join('.'), problem.message, 'valid visual plan', null, []));
+  const locks: Issue[] = shot.lockedFields.filter((field: LockedField): boolean => field === 'frames' || field === 'sources')
+    .map((field: LockedField): Issue => issue('SHOT_FIELD_LOCKED', 'conflict', shotId, field, `${field} 필드를 먼저 잠금 해제하세요.`, 'unlocked', field, []));
+  return [...locks, ...visualPlanIssues(project, projectWithVisualPlan(project, shotId, parsed.data), shotId)];
+}
+
+/** 모드와 전체 Source를 동시에 적용하여 중간 상태 없이 검증하고 이전 생성 자산을 보존한다. */
+export function updateShotVisualPlan(project: Project, shotId: string, input: ShotVisualPlanInput): Project {
+  const shot: Shot = requireShot(project, shotId);
+  requireUnlocked(shot, ['frames', 'sources']);
+  const parsed: ShotVisualPlanInput = ShotVisualPlanInputSchema.parse(input);
+  const next: Project = ProjectSchema.parse(projectWithVisualPlan(project, shotId, parsed));
+  const issues: Issue[] = visualPlanIssues(project, next, shotId);
+  if (issues.length > 0) throw contractError('INVALID_VISUAL_PLAN', issues.map((value: Issue): string => `${value.code}: ${value.message}`).join('\n'), issues);
+  return next;
 }
 
 export function setShotLocks(project: Project, shotId: string, fields: readonly LockedField[]): Project {

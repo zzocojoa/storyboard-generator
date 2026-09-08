@@ -90,6 +90,34 @@ test('e2e_open_text_placement_end_is_edited_and_confirmed', async ({ page }): Pr
   } finally { await stopApp(running); }
 });
 
+test('web_visual_plan_uses_single_mutation', async ({ page }): Promise<void> => {
+  const rootPath: string = await root('storyboard-e2e-visual-plan-');
+  const store: ProjectStore = new ProjectStore(join(rootPath, 'data'));
+  const original: Project = await store.create(await outline('visual-plan-e2e', 'Atomic Visual Plan'));
+  const running: RunningApp = await startApp(rootPath, store);
+  const mutations: string[] = [];
+  page.on('request', (request): void => { if (request.method() === 'PATCH') mutations.push(request.url()); });
+  try {
+    await page.goto(running.url);
+    await expect(page.getByRole('heading', { name: 'Atomic Visual Plan' })).toBeVisible();
+    const editor = page.locator('.visual-plan-editor');
+    await expect(editor).toBeVisible();
+    await editor.getByLabel('VISUAL MODE', { exact: true }).selectOption('black');
+    await expect(editor).toContainText('NON_SOURCED_DIRECT_VISUAL_LINK');
+    for (const usage of await editor.getByLabel('USAGE', { exact: true }).all()) await usage.selectOption('context-only');
+    expect(mutations).toEqual([]);
+    await expect(editor.getByRole('button', { name: 'Visual Plan 저장', exact: true })).toBeEnabled();
+    const response = page.waitForResponse((value): boolean => value.request().method() === 'PATCH' && value.url().endsWith('/visual-plan'));
+    await editor.getByRole('button', { name: 'Visual Plan 저장', exact: true }).click();
+    expect((await response).status()).toBe(200);
+    await expect(page.locator('.shot-frame').first()).toHaveAttribute('data-visual-mode', 'black');
+    expect(mutations).toEqual([`${running.url}/api/projects/${original.projectId}/shots/shot-1/visual-plan`]);
+    const changed: Project = await store.read(original.projectId);
+    expect(changed.revision).toBe(original.revision + 1);
+    expect(changed.shots[0]?.sourceLinks.every((link): boolean => link.usage === 'context-only')).toBe(true);
+  } finally { await stopApp(running); }
+});
+
 test('e2e_late_anchor_key_frame_is_visible', async ({ page }): Promise<void> => {
   const rootPath: string = await root('storyboard-e2e-anchor-'); const dataRoot: string = join(rootPath, 'data'); const store = new ProjectStore(dataRoot);
   const base: Project = await outline(`e2e-anchor-${randomUUID()}`, 'Late Anchor');

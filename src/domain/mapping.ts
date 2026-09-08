@@ -8,7 +8,7 @@ import type {
   Asset, AudioCue, Dataset, InformationRule, Issue, Project, Segment, Shot, ShotSourceLink,
   SourceRef, SourceTemporalAnchor, SourceUnit, StoryboardFrame, TextCue, TextMappingDecision, TextPlacement,
 } from './schema.js';
-import { assertVisualCoverageChange, shotVisualCoverageIssues, sourcePolicyIssues, visualModeStructureIssues } from './source-policy.js';
+import { assertVisualCoverageChange, firstVisualRevealOrderIssues, shotVisualCoverageIssues, sourcePolicyIssues, visualModeStructureIssues } from './source-policy.js';
 import { activeVisualSourceLinks, directVisualLinks, sourceAnchorRange, sourceRevealEvidenceMs } from './source-anchor.js';
 import type { SourceAnchorRange } from './source-anchor.js';
 export { directVisualLinks, sourceAnchorRange } from './source-anchor.js';
@@ -306,10 +306,10 @@ function requireEditableSourceShot(project: Project, shotId: string): Shot {
 }
 
 function sourcePolicyReviewIssues(project: Project, segmentId: string): Issue[] {
-  return sourcePolicyIssues(
+  return [...sourcePolicyIssues(
     project.dataset.units.filter((unit: SourceUnit): boolean => unit.segmentId === segmentId),
     project.shots.filter((shot: Shot): boolean => shot.segmentId === segmentId),
-  );
+  ), ...firstVisualRevealOrderIssues(project, segmentId)];
 }
 
 function sourcePolicyIssueKey(value: Issue): string {
@@ -468,6 +468,11 @@ export function reviewIssuesForShot(project: Project, shotId: string): Issue[] {
   const shot: Shot | undefined = project.shots.find((value: Shot): boolean => value.id === shotId);
   if (shot === undefined) return [issue('SHOT_NOT_FOUND', 'conflict', shotId, 'id', `컷을 찾을 수 없습니다: ${shotId}`, 'existing shot', shotId, [])];
   return [...textMappingReviewIssues(project, shot.segmentId), ...sourcePolicyReviewIssues(project, shot.segmentId).filter((value: Issue): boolean => value.entityId === shot.id), ...sourceMappingReviewIssues(project, shot), ...revealReviewIssues(project, shot)];
+}
+
+/** 원자적 시각 계획을 저장하기 전에 같은 구간의 Source 정책과 해당 컷의 Anchor·Gate를 검사한다. */
+export function reviewSourcePlanIssues(project: Project, shot: Shot): Issue[] {
+  return [...sourcePolicyReviewIssues(project, shot.segmentId), ...sourceMappingReviewIssues(project, shot), ...revealReviewIssues(project, shot)];
 }
 
 export function approvalIssuesForShot(project: Project, shotId: string): Issue[] {

@@ -1,3 +1,6 @@
+import { reviewShotVisualPlan } from '../../src/domain/edit.js';
+import type { ShotVisualPlanInput } from '../../src/domain/edit.js';
+import { sourceRevealEvidenceMs } from '../../src/domain/source-anchor.js';
 import type { FinalReadinessReport } from '../../src/domain/final-readiness.js';
 import { reviewTextOutput } from '../../src/domain/output-policy.js';
 import type { OutputMaturity } from '../../src/domain/output-policy.js';
@@ -13,7 +16,7 @@ import { activeStoryboardFrame, activeStoryboardShot, playableAudioCuesAt, revie
 import type { BlockedCue } from '../../src/domain/playback.js';
 import type { StoryboardFrameInput } from '../../src/domain/frame.js';
 import { approvalIssuesForShot, effectiveInformationGate, sourceAnchorRange, textMappingReviewIssues } from '../../src/domain/mapping.js';
-import type { EffectiveInformationGate, ShotSourceLinksInput, TextMappingDecisionInput } from '../../src/domain/mapping.js';
+import type { EffectiveInformationGate, TextMappingDecisionInput } from '../../src/domain/mapping.js';
 import type { TextPlacementInformationInput } from '../../src/domain/placement-information.js';
 import type { Asset, AudioCue, Issue, LockedField, Profile, Project, Segment, Shot, ShotContent, ShotSourceLink, SourceTemporalAnchor, SourceUnit, StoryboardFrame, TextCue, TextMappingDecision, TextPlacement, TextPlacementInformationDecision } from '../../src/domain/schema.js';
 import type { AudioCueTimingInput, TextCueTimingInput } from '../../src/domain/tracks.js';
@@ -398,13 +401,13 @@ function PlacementInformationEditor(props: { project: Project; mapping: TextMapp
   </article>;
 }
 
-function SourceMappingEditor(props: { link: ShotSourceLink; unit: SourceUnit; frames: StoryboardFrame[]; shotDurationMs: number; absoluteRevealMs: number | null; gateComparisons: SourceGateComparison[]; working: boolean; previousShotId: string | null; nextShotId: string | null;
-  onChange: (link: ShotSourceLink) => Promise<void>; onMove: (unitId: string, targetShotId: string, usage: ShotSourceLink['usage']) => Promise<void>; }): ReactElement {
-  const [draft, setDraft] = useState<ShotSourceLink>(props.link);
-  useEffect((): void => { setDraft(props.link); }, [props.link]);
+function SourceMappingEditor(props: { link: ShotSourceLink; unit: SourceUnit; frames: StoryboardFrame[]; shotDurationMs: number; absoluteRevealMs: number | null; gateComparisons: SourceGateComparison[]; working: boolean; moveBlocked: boolean; previousShotId: string | null; nextShotId: string | null;
+  onChange: (link: ShotSourceLink) => void; onRemove: () => void; onMove: (unitId: string, targetShotId: string, usage: ShotSourceLink['usage']) => Promise<void>; }): ReactElement {
+  const draft: ShotSourceLink = props.link;
+  const setDraft: (link: ShotSourceLink) => void = props.onChange;
   return <article className={draft.status === 'mapping-required' || draft.temporalAnchor.status === 'review-required' ? 'mapping-editor unresolved' : 'mapping-editor'}>
     <header><b>{draft.status.toUpperCase()}</b><span>{props.unit.order} · {props.unit.kind}</span></header><strong>{props.unit.id}</strong><p>{props.unit.text}</p>
-    <div className="pair"><label className="field">USAGE<select value={draft.usage} onChange={(event): void => { setDraft({ ...draft, usage: event.target.value as ShotSourceLink['usage'] }); }}><option value="primary-visual">primary-visual</option><option value="continued-visual">continued-visual</option><option value="audio-only">audio-only</option><option value="context-only">context-only</option></select></label><label className="field">STATUS<select value={draft.status} onChange={(event): void => { setDraft({ ...draft, status: event.target.value as ShotSourceLink['status'] }); }}><option value="confirmed">confirmed</option><option value="mapping-required">mapping-required</option></select></label></div>
+    <div className="pair"><label className="field">USAGE<select aria-label="USAGE" value={draft.usage} onChange={(event): void => { setDraft({ ...draft, usage: event.target.value as ShotSourceLink['usage'] }); }}><option value="primary-visual">primary-visual</option><option value="continued-visual">continued-visual</option><option value="audio-only">audio-only</option><option value="context-only">context-only</option></select></label><label className="field">STATUS<select value={draft.status} onChange={(event): void => { setDraft({ ...draft, status: event.target.value as ShotSourceLink['status'] }); }}><option value="confirmed">confirmed</option><option value="mapping-required">mapping-required</option></select></label></div>
     <label className="field">TEMPORAL ANCHOR<select value={draft.temporalAnchor.kind} onChange={(event): void => { setDraft({ ...draft, temporalAnchor: sourceTemporalAnchor(event.target.value as SourceTemporalAnchor['kind'], draft.temporalAnchor, props.frames, props.shotDurationMs) }); }}><option value="shot-offset">shot-offset</option><option value="frame" disabled={props.frames.length === 0}>frame · 공개 점만</option><option value="frame-range" disabled={props.frames.length === 0}>frame-range · 표시 구간</option><option value="unresolved">unresolved</option></select></label>
     {draft.temporalAnchor.kind === 'shot-offset' && <div className="pair"><label className="field">ANCHOR START<input type="number" min="0" max={props.shotDurationMs} value={draft.temporalAnchor.startOffsetMs} onChange={(event): void => { setDraft({ ...draft, temporalAnchor: { ...draft.temporalAnchor as Extract<SourceTemporalAnchor, { kind: 'shot-offset' }>, startOffsetMs: Number(event.target.value), basis: 'manual' } }); }} /></label><label className="field">ANCHOR END<input type="number" min="1" max={props.shotDurationMs} value={draft.temporalAnchor.endOffsetMs} onChange={(event): void => { setDraft({ ...draft, temporalAnchor: { ...draft.temporalAnchor as Extract<SourceTemporalAnchor, { kind: 'shot-offset' }>, endOffsetMs: Number(event.target.value), basis: 'manual' } }); }} /></label></div>}
     {(draft.temporalAnchor.kind === 'frame' || draft.temporalAnchor.kind === 'frame-range') && <label className="field">ANCHOR FRAME<select value={draft.temporalAnchor.frameId} onChange={(event): void => { setDraft({ ...draft, temporalAnchor: { ...draft.temporalAnchor as Extract<SourceTemporalAnchor, { kind: 'frame' | 'frame-range' }>, frameId: event.target.value, basis: 'manual', status: 'confirmed' } }); }}>{props.frames.map((frame: StoryboardFrame): ReactElement => <option key={frame.id} value={frame.id}>{frame.role} · +{frame.offsetMs}ms</option>)}</select></label>}
@@ -414,8 +417,45 @@ function SourceMappingEditor(props: { link: ShotSourceLink; unit: SourceUnit; fr
     <p className="canonical-text">ABSOLUTE REVEAL · {props.absoluteRevealMs === null ? 'REVIEW REQUIRED' : `${props.absoluteRevealMs}ms`}</p>
     {props.gateComparisons.map((comparison: SourceGateComparison): ReactElement => <p className={`mapping-issue ${comparison.result}`} key={comparison.informationId}>GATE · {comparison.informationId} · {comparison.gateMs === null ? 'RULE MISSING' : `${comparison.gateMs}ms`} · {comparison.result.toUpperCase()}</p>)}
     <small className="source-ref">{props.unit.sourceRefs.map((ref): string => `${ref.fileId}:${ref.locator}`).join(' · ')}</small>
-    <div className="mapping-actions"><button disabled={props.working} onClick={(): void => { void props.onChange(draft); }}>Source Mapping 저장</button>{props.previousShotId !== null && <button disabled={props.working} onClick={(): void => { void props.onMove(props.unit.id, props.previousShotId as string, draft.usage); }}>← 앞 컷으로 이동</button>}{props.nextShotId !== null && <button disabled={props.working} onClick={(): void => { void props.onMove(props.unit.id, props.nextShotId as string, draft.usage); }}>뒤 컷으로 이동 →</button>}</div>
+    <div className="mapping-actions"><button disabled={props.working} onClick={props.onRemove}>Source 제거</button>{props.previousShotId !== null && <button disabled={props.working || props.moveBlocked} onClick={(): void => { void props.onMove(props.unit.id, props.previousShotId as string, draft.usage); }}>← 앞 컷으로 이동</button>}{props.nextShotId !== null && <button disabled={props.working || props.moveBlocked} onClick={(): void => { void props.onMove(props.unit.id, props.nextShotId as string, draft.usage); }}>뒤 컷으로 이동 →</button>}</div>
   </article>;
+}
+
+function VisualPlanEditor(props: { project: Project; shot: Shot; working: boolean; onSave: (input: ShotVisualPlanInput) => Promise<void>;
+  onMove: (unitId: string, targetShotId: string, usage: ShotSourceLink['usage']) => Promise<void>; }): ReactElement {
+  const [draft, setDraft] = useState<ShotVisualPlanInput>({ visualMode: props.shot.visualMode, sourceLinks: props.shot.sourceLinks });
+  useEffect((): void => { setDraft({ visualMode: props.shot.visualMode, sourceLinks: props.shot.sourceLinks }); }, [props.shot, props.project.revision]);
+  const nextShot: Shot = { ...props.shot, ...draft };
+  const nextProject: Project = { ...props.project, shots: props.project.shots.map((shot: Shot): Shot => shot.id === nextShot.id ? nextShot : shot) };
+  const issues: Issue[] = reviewShotVisualPlan(props.project, props.shot.id, draft);
+  const coverageIssues: Issue[] = issues.filter((value: Issue): boolean => value.code === 'SHOT_VISUAL_COVERAGE_GAP');
+  const frames: StoryboardFrame[] = props.project.frames.filter((frame: StoryboardFrame): boolean => frame.shotId === props.shot.id);
+  const units: SourceUnit[] = props.project.dataset.units.filter((unit: SourceUnit): boolean => unit.segmentId === props.shot.segmentId);
+  const available: SourceUnit[] = units.filter((unit: SourceUnit): boolean => !draft.sourceLinks.some((link: ShotSourceLink): boolean => link.unitId === unit.id));
+  const index: number = props.project.shots.findIndex((shot: Shot): boolean => shot.id === props.shot.id);
+  const previous: Shot | undefined = props.project.shots[index - 1];
+  const following: Shot | undefined = props.project.shots[index + 1];
+  const dirty: boolean = JSON.stringify(draft) !== JSON.stringify({ visualMode: props.shot.visualMode, sourceLinks: props.shot.sourceLinks });
+  const updateLink = (next: ShotSourceLink): void => { setDraft({ ...draft, sourceLinks: draft.sourceLinks.map((link: ShotSourceLink): ShotSourceLink => link.unitId === next.unitId ? next : link) }); };
+  return <section className="inspector-section source-block visual-plan-editor"><header>VISUAL PLAN <span>{draft.sourceLinks.length} SOURCE</span></header>
+    <label className="field wide">VISUAL MODE<select aria-label="VISUAL MODE" value={draft.visualMode} onChange={(event): void => { setDraft({ ...draft, visualMode: event.target.value as ShotVisualPlanInput['visualMode'] }); }}><option value="sourced">SOURCED</option><option value="black">BLACK</option><option value="hold-previous">HOLD PREVIOUS</option></select></label>
+    <p>{draft.visualMode === 'sourced' ? coverageIssues.length === 0 ? 'COVERAGE COMPLETE' : `COVERAGE GAP · ${coverageIssues.length}` : draft.visualMode.toUpperCase()}</p>
+    <p>{props.shot.startMs}–{props.shot.endMs}ms · {dirty ? 'UNSAVED VISUAL PLAN' : 'SAVED VISUAL PLAN'}</p>
+    {draft.sourceLinks.map((link: ShotSourceLink): ReactElement => {
+      const unit: SourceUnit | undefined = units.find((value: SourceUnit): boolean => value.id === link.unitId);
+      if (unit === undefined) return <p key={link.unitId}>UNKNOWN_SOURCE_UNIT · {link.unitId}</p>;
+      return <SourceMappingEditor key={link.unitId} link={link} unit={unit} frames={frames} shotDurationMs={props.shot.endMs - props.shot.startMs}
+        absoluteRevealMs={sourceRevealEvidenceMs(nextProject, nextShot, link)} gateComparisons={sourceGateComparisons(nextProject, nextShot, link, unit)}
+        working={props.working} moveBlocked={dirty} previousShotId={previous?.segmentId === props.shot.segmentId ? previous.id : null}
+        nextShotId={following?.segmentId === props.shot.segmentId ? following.id : null} onChange={updateLink} onMove={props.onMove}
+        onRemove={(): void => { setDraft({ ...draft, sourceLinks: draft.sourceLinks.filter((value: ShotSourceLink): boolean => value.unitId !== link.unitId) }); }} />;
+    })}
+    {available.length > 0 && <label className="field">SOURCE 추가<select value="" disabled={props.working} onChange={(event): void => {
+      if (event.target.value !== '') setDraft({ ...draft, sourceLinks: [...draft.sourceLinks, { unitId: event.target.value, usage: 'context-only', status: 'mapping-required', temporalAnchor: { kind: 'unresolved', basis: 'estimated', status: 'review-required' } }] });
+    }}><option value="">원문 선택</option>{available.map((unit: SourceUnit): ReactElement => <option key={unit.id} value={unit.id}>{unit.order} · {unit.id} · {unit.kind}</option>)}</select></label>}
+    {issues.length > 0 && <div className="approval-review" aria-live="polite">{issues.map((value: Issue, issueIndex: number): ReactElement => <p key={`${value.code}:${issueIndex}`}>{value.code} · {value.entityId} · {value.message}</p>)}</div>}
+    <button className="primary" disabled={props.working || !dirty || issues.length > 0} onClick={(): void => { void props.onSave(draft); }}>Visual Plan 저장</button>
+  </section>;
 }
 
 function Inspector(props: { project: Project; segment: Segment; shot: Shot | null; draft: ShotContent | null; working: boolean; status: AppStatus | null;
@@ -429,7 +469,7 @@ function Inspector(props: { project: Project; segment: Segment; shot: Shot | nul
   onTextResolve: (cueId: string, input: TextCueAuthorityResolutionInput) => Promise<void>; onTextDelete: (cueId: string) => Promise<void>;
   onTextMapping: (decisionId: string, input: TextMappingDecisionInput) => Promise<void>;
   onPlacementInformation: (placementId: string, input: TextPlacementInformationInput) => Promise<void>;
-  onSourceLinks: (input: ShotSourceLinksInput) => Promise<void>;
+  onVisualPlan: (input: ShotVisualPlanInput) => Promise<void>;
   onSourceMove: (unitId: string, targetShotId: string, usage: ShotSourceLink['usage']) => Promise<void>;
   onProfile: (profile: Profile) => Promise<void>; sourceImpact: SourceImpact | null;
   onSourcePreview: (path: string, holdMs: number) => Promise<void>; onSourceApply: (path: string, holdMs: number) => Promise<void>; }): ReactElement {
@@ -438,10 +478,6 @@ function Inspector(props: { project: Project; segment: Segment; shot: Shot | nul
   const [sourcePath, setSourcePath] = useState<string>('');
   const [sourceHold, setSourceHold] = useState<string>('2000');
   const shot: Shot | null = props.shot;
-  const sourceMappings: { link: ShotSourceLink; unit: SourceUnit }[] = shot === null ? [] : shot.sourceLinks.flatMap((link: ShotSourceLink) => {
-    const unit: SourceUnit | undefined = props.project.dataset.units.find((candidate: SourceUnit): boolean => candidate.id === link.unitId);
-    return unit === undefined ? [] : [{ link, unit }];
-  });
   const frames: StoryboardFrame[] = shot === null ? [] : props.project.frames.filter((candidate: StoryboardFrame): boolean => candidate.shotId === shot.id).sort((left, right): number => left.offsetMs - right.offsetMs);
   const audio: AudioCue[] = props.project.audioCues.filter((cue: AudioCue): boolean => {
     const unit = props.project.dataset.units.find((candidate): boolean => candidate.id === cue.unitId);
@@ -459,8 +495,6 @@ function Inspector(props: { project: Project; segment: Segment; shot: Shot | nul
   const shotIndex: number = shot === null ? -1 : props.project.shots.findIndex((candidate: Shot): boolean => candidate.id === shot.id);
   const previousShot: Shot | undefined = shotIndex <= 0 ? undefined : props.project.shots[shotIndex - 1];
   const nextShot: Shot | undefined = shotIndex < 0 ? undefined : props.project.shots[shotIndex + 1];
-  const previousSegmentShotId: string | null = previousShot !== undefined && shot !== null && previousShot.segmentId === shot.segmentId ? previousShot.id : null;
-  const nextSegmentShotId: string | null = nextShot !== undefined && shot !== null && nextShot.segmentId === shot.segmentId ? nextShot.id : null;
   const approvalIssues: Issue[] = shot === null ? [] : approvalIssuesForShot(props.project, shot.id);
   const textMappingIssues: Issue[] = textMappingReviewIssues(props.project, props.segment.id);
   const informationGates: EffectiveInformationGate[] = props.project.dataset.informationRules
@@ -476,7 +510,7 @@ function Inspector(props: { project: Project; segment: Segment; shot: Shot | nul
   return <aside className="inspector"><div className="column-head"><span>SHOT INSPECTOR</span><b>{shot === null ? '—' : shot.approvalStatus.toUpperCase()}</b></div>
     {shot !== null && props.draft !== null && <div className="inspector-scroll">
       <div className="inspector-title"><span>{shot.id}</span><time>{formatProjectTimecode(shot.startMs, props.project.handoff.timebase)} — {formatProjectTimecode(shot.endMs, props.project.handoff.timebase)}</time></div>
-      <label className="field wide">VISUAL MODE<select value={props.draft.visualMode} onChange={(event): void => { props.onDraft({ ...props.draft as ShotContent, visualMode: event.target.value as ShotContent['visualMode'] }); }}><option value="sourced">SOURCED</option><option value="black">BLACK</option><option value="hold-previous">HOLD PREVIOUS</option></select></label>
+
       <label className="field wide">ACTION<textarea value={props.draft.action} onChange={(event): void => { props.onDraft({ ...props.draft as ShotContent, action: event.target.value }); }} /></label>
       <div className="field-grid">
         <label className="field">SIZE<input value={props.draft.camera.size} onChange={(event): void => { props.onDraft({ ...props.draft as ShotContent, camera: { ...(props.draft as ShotContent).camera, size: event.target.value } }); }} /></label>
@@ -499,8 +533,7 @@ function Inspector(props: { project: Project; segment: Segment; shot: Shot | nul
       <div className="edit-actions"><button className="primary" disabled={props.working} onClick={(): void => { void props.onSave(); }}>컷 저장</button><button disabled={props.working} onClick={(): void => { void props.onSplit(); }}>중간 분할</button><button disabled={props.working} onClick={(): void => { void props.onMerge(); }}>다음 컷과 병합</button><button disabled={props.working} onClick={(): void => { void props.onMove(-1); }}>← 이동</button><button disabled={props.working} onClick={(): void => { void props.onMove(1); }}>이동 →</button></div>
       <div className="approval-actions"><button disabled={props.working} onClick={(): void => { void props.onLocks(shot.lockedFields.length === 0 ? allLockedFields : []); }}>{shot.lockedFields.length === 0 ? '전체 잠금' : '잠금 해제'}</button><button className="approve" disabled={props.working} onClick={(): void => { void props.onApprove(); }}>컷 확정</button></div>
       {approvalIssues.length > 0 && <section className="approval-review"><b>APPROVAL BLOCKED · {approvalIssues.length}</b>{approvalIssues.map((item: Issue, index: number): ReactElement => <p key={`${item.code}:${item.entityId}:${index}`}>{item.code} · ENTITY {item.entityId} · FIELD {item.field} · {item.message}{item.expected === null ? '' : ` · 기대 ${item.expected}`}{item.actual === null ? '' : ` · 현재 ${item.actual}`}{item.sourceRefs.length === 0 ? '' : ` · ${item.sourceRefs.map((ref): string => `${ref.fileId}:${ref.locator}`).join(', ')}`}</p>)}</section>}
-      <section className="inspector-section source-block"><header>SOURCE TEMPORAL MAPPING <span>{sourceMappings.length}</span></header>{sourceMappings.map((mapping): ReactElement => <SourceMappingEditor key={mapping.unit.id} link={mapping.link} unit={mapping.unit} frames={frames} shotDurationMs={duration} absoluteRevealMs={sourceAnchorRange(props.project, shot, mapping.link)?.startMs ?? null} gateComparisons={sourceGateComparisons(props.project, shot, mapping.link, mapping.unit)} working={props.working} previousShotId={previousSegmentShotId} nextShotId={nextSegmentShotId}
-        onChange={async (nextLink: ShotSourceLink): Promise<void> => { await props.onSourceLinks({ links: (shot.sourceLinks.map((link: ShotSourceLink): ShotSourceLink => link.unitId === nextLink.unitId ? nextLink : link)) }); }} onMove={props.onSourceMove} />)}</section>
+      <VisualPlanEditor project={props.project} shot={shot} working={props.working} onSave={props.onVisualPlan} onMove={props.onSourceMove} />
       <section className="inspector-section text-mapping-block"><header>TEXT MAPPING REVIEW <span>{textMappingIssues.length} REVIEW</span></header>{textMappings.map((mapping): ReactElement => <div key={mapping.decision.id}><TextMappingEditor decision={mapping.decision} placement={mapping.placement} units={props.project.dataset.units.filter((unit: SourceUnit): boolean => unit.segmentId === props.segment.id)} issues={textMappingIssues.filter((item: Issue): boolean => item.entityId === mapping.decision.id)} working={props.working} onSave={props.onTextMapping} /><PlacementInformationEditor project={props.project} mapping={mapping.decision} placement={mapping.placement} working={props.working} onSave={props.onPlacementInformation} /></div>)}</section>
       <section className="inspector-section information-gate-block"><header>INFORMATION GATE <span>{informationGates.filter((gate: EffectiveInformationGate): boolean => gate.reviewRequired).length} REVIEW</span></header>{informationGates.length === 0 && <p className="empty-note">이 구간에는 정보 공개 규칙이 없습니다.</p>}{informationGates.map((gate: EffectiveInformationGate): ReactElement => <article className={gate.reviewRequired ? 'mapping-editor unresolved' : 'mapping-editor'} key={gate.id}><header><b>{gate.id}</b><span>{gate.precision}</span></header><p>BASE {gate.baseNotBeforeMs}ms · EFFECTIVE {gate.effectiveNotBeforeMs}ms</p><p className="canonical-text">{gate.evidenceType} · {gate.evidenceId ?? 'authoritative base'}</p>{gate.reviewReasons.map((reason: string): ReactElement => <p className="mapping-issue" key={reason}>{reason}</p>)}<small className="source-ref">{gate.sourceRefs.map((ref): string => `${ref.fileId}:${ref.locator}`).join(' · ')}</small></article>)}</section>
       <section className="inspector-section audio-block"><header>AUDIO TRACK <span>{audio.filter((cue: AudioCue): boolean => playableAudioCuesAt(props.project, cue.startMs).some((candidate: AudioCue): boolean => candidate.id === cue.id)).length}/{audio.length} PLAYABLE</span></header><p className="disclosure">{props.status?.aiVoiceDisclosure ?? '가이드 음성은 Codex App 작업에서 생성합니다.'}</p>{audio.map((cue: AudioCue): ReactElement => <AudioCueEditor key={cue.id} project={props.project} cue={cue} text={props.project.dataset.units.find((candidate): boolean => candidate.id === cue.unitId)?.text ?? cue.unitId} working={props.working} disclosure={props.status?.aiVoiceDisclosure ?? 'Codex App 가이드 음성'} onTiming={props.onAudioTiming} onSpeech={props.onSpeech} onAsset={props.onAudioAsset} onNormalize={props.onAudioNormalize} />)}</section>
@@ -789,7 +822,7 @@ export default function App(): ReactElement {
           onTextDelete={async (cueId: string): Promise<void> => { await mutate(`/text/${encodeURIComponent(cueId)}`, 'DELETE', { expectedRevision: project.revision }); }}
           onTextMapping={async (decisionId: string, decision: TextMappingDecisionInput): Promise<void> => { await mutate(`/text-mappings/${encodeURIComponent(decisionId)}`, 'PATCH', { expectedRevision: project.revision, decision }); }}
           onPlacementInformation={async (placementId: string, decision: TextPlacementInformationInput): Promise<void> => { await mutate(`/text-placements/${encodeURIComponent(placementId)}/information`, 'PATCH', { expectedRevision: project.revision, decision }); }}
-          onSourceLinks={async (mapping: ShotSourceLinksInput): Promise<void> => { if (shot !== null) await mutate(`/shots/${encodeURIComponent(shot.id)}/source-links`, 'PATCH', { expectedRevision: project.revision, mapping }); }}
+          onVisualPlan={async (visualPlan: ShotVisualPlanInput): Promise<void> => { if (shot !== null) await mutate(`/shots/${encodeURIComponent(shot.id)}/visual-plan`, 'PATCH', { expectedRevision: project.revision, visualPlan }); }}
           onSourceMove={async (unitId: string, targetShotId: string, usage: ShotSourceLink['usage']): Promise<void> => { if (shot !== null) await mutate(`/shots/${encodeURIComponent(shot.id)}/source-links/move`, 'POST', { expectedRevision: project.revision, move: { unitId, targetShotId, usage } }); }}
           onProfile={async (profile: Profile): Promise<void> => { await mutate('/profile', 'PATCH', { expectedRevision: project.revision, profile }); }} sourceImpact={sourceImpactReport}
           onSourcePreview={inspectSourceUpdate} onSourceApply={applySource} />}
