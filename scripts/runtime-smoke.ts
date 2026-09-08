@@ -1,10 +1,13 @@
 import { readBuildManifest, generatorBuildProvenance } from '../src/build.js';
 import { readReviewArchive, writeReviewBundle } from '../src/exporters/review-bundle.js';
+import { codexRequestBasis } from '../src/codex/work.js';
+import type { CodexRequest } from '../src/codex/schema.js';
+import { transitionVisualPolicy } from '../src/domain/transition.js';
 import { finalFixture, readinessOutline, withFirstGap } from '../tests/readiness-fixtures.js';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { hostname, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import sharp from 'sharp';
@@ -18,7 +21,7 @@ import { ProjectStore } from '../src/server/store.js';
 import type { StorageFaultInjector, StorageFaultPoint } from '../src/server/store.js';
 
 type RunningApp = { app: FastifyInstance; store: ProjectStore; url: string };
-type HttpResult = { body: unknown; bytes: Buffer; status: number };
+type HttpResult = { body: unknown; bytes: Buffer; status: number; headers: Headers };
 type Barrier = { injector: StorageFaultInjector; reached: Promise<void>; release(): void };
 
 const HANDOFF_PATH: string = resolve('tests/fixtures/native/storyboard_handoff.json');
@@ -47,7 +50,7 @@ async function request(url: string, path: string, init: RequestInit): Promise<Ht
   const bytes: Buffer = Buffer.from(await response.arrayBuffer());
   let body: unknown = null;
   if ((response.headers.get('content-type') ?? '').includes('json')) body = JSON.parse(bytes.toString('utf8')) as unknown;
-  return { body, bytes, status: response.status };
+  return { body, bytes, status: response.status, headers: response.headers };
 }
 
 async function expectStatus(url: string, path: string, init: RequestInit, status: number): Promise<HttpResult> {
@@ -167,7 +170,7 @@ async function runPrimarySmoke(root: string): Promise<{ ports: number[]; checks:
     }), 200));
     project = updated; checks.push('source-update:200');
     const exportedJson: HttpResult = await expectStatus(running.url, `/api/projects/${encodeURIComponent(project.projectId)}/export.json`, {}, 200);
-    assert.equal((JSON.parse(exportedJson.bytes.toString('utf8')) as Project).schemaVersion, '1.7.0');
+    assert.equal((JSON.parse(exportedJson.bytes.toString('utf8')) as Project).schemaVersion, '1.8.0');
     await expectStatus(running.url, `/api/projects/${encodeURIComponent(project.projectId)}/export.csv`, {}, 200);
     const exportedPdf: HttpResult = await expectStatus(running.url, `/api/projects/${encodeURIComponent(project.projectId)}/export.pdf`, {}, 200);
     assert.equal(exportedPdf.bytes.subarray(0, 5).toString('ascii'), '%PDF-'); checks.push('json:200', 'csv:200', 'pdf:200');
@@ -270,7 +273,7 @@ async function runFinalSmoke(root: string): Promise<{ port: number; checks: stri
     const archive = await readReviewArchive(dataRoot, project.projectId);
     const bundle = await writeReviewBundle(archive, { output: join(root, 'final-review'), maturity: 'final', fontPath: appConfig(root, dataRoot).pdfFontPath,
       build: readBuildManifest(), createdAt: new Date().toISOString() }, []);
-    assert.equal(bundle.files.length, 8); await archive.assertUnchanged(); checks.push('text-confirm:200', 'final-pdf:200', 'final-csv:200', 'review-bundle:created');
+    assert.equal(bundle.files.length, 10); await archive.assertUnchanged(); checks.push('text-confirm:200', 'final-pdf:200', 'final-csv:200', 'review-bundle:created');
     await expectStatus(running.url, `${path}/output/visual?atMs=0`, {}, 200);
     project = await running.store.update(project.projectId, project.revision, (current: Project): Project => withFirstGap(current, 1000), []);
     await expectStatus(running.url, `${path}/output/visual?atMs=1000`, {}, 409); checks.push('actual-playhead-gap:409');
@@ -288,15 +291,97 @@ async function runFinalSmoke(root: string): Promise<{ port: number; checks: stri
   } finally { await running.app.close(); }
 }
 
+async function runHardeningSmoke(root: string): Promise<{ port: number; checks: string[] }> {
+  const dataRoot: string = join(root, 'hardening-data'); const appRoot: string = join(root, 'hardening-app');
+  const running: RunningApp = await startApp(appRoot, dataRoot, new ProjectStore(dataRoot)); const checks: string[] = [];
+  try {
+    const base: Project = await running.store.create(await readinessOutline()); const ready = await finalFixture();
+    let project: Project = await running.store.update(base.projectId, base.revision, (): Project => ({ ...ready.project, title: 'smoke@example.com 010-9876-5432' }),
+      ready.project.assets.map((asset) => ({ relativePath: asset.path, content: ready.media.get(asset.id)! })));
+    const path: string = `/api/projects/${encodeURIComponent(project.projectId)}`;
+    const audioUrl: string = `${path}/output/audio/${project.audioCues[0]!.id}`;
+    const full = await expectStatus(running.url, audioUrl, {}, 200); assert.equal(full.headers.get('accept-ranges'), 'bytes');
+    const partial = await expectStatus(running.url, audioUrl, { headers: { range: 'bytes=44-63' } }, 206); assert.deepEqual(partial.bytes, full.bytes.subarray(44, 64));
+    for (const range of ['bytes=-0', 'bytes=999999999-', 'bytes=0-1,4-5']) {
+      const failed = await expectStatus(running.url, audioUrl, { headers: { range } }, 416);
+      assert.equal(failed.headers.get('content-range'), `bytes */${full.bytes.length}`); assert.equal(failed.headers.get('cache-control'), 'no-store');
+    }
+    checks.push('audio-full:200', 'audio-partial:206', 'audio-invalid-range:416-with-full-size');
+    await expectStatus(running.url, '/api/projects', {}, 200); const warm = running.store.summaryIntegrityCacheStatistics();
+    await expectStatus(running.url, '/api/projects', {}, 200); const reused = running.store.summaryIntegrityCacheStatistics();
+    assert.equal(reused.misses, warm.misses); assert.ok(reused.hits > warm.hits); checks.push('summary-integrity-cache:reused');
+    const firstAsset: Asset = project.assets[0]!; const assetPath: string = join(dataRoot, sha256Text(project.projectId), firstAsset.path);
+    const originalBytes: Buffer = await readFile(assetPath); await writeFile(assetPath, 'corrupt smoke fixture');
+    await expectStatus(running.url, `${path}/output/visual?atMs=0`, {}, 423);
+    assert.equal(((await expectStatus(running.url, `${path}/final-readiness`, {}, 200)).body as { finalReady: boolean }).finalReady, false);
+    await writeFile(assetPath, originalBytes); await expectStatus(running.url, `${path}/output/visual?atMs=0`, {}, 200); checks.push('safe-output:forced-revalidation-423');
+    const archive = await readReviewArchive(dataRoot, project.projectId);
+    const options = { output: join(root, 'internal-review'), maturity: 'final' as const, fontPath: appConfig(root, dataRoot).pdfFontPath, build: readBuildManifest(), createdAt: '2026-09-07T00:00:00.000Z' };
+    await writeReviewBundle(archive, { ...options, profile: 'internal' }, []);
+    const externalOutput: string = join(root, 'EXTERNAL REDACTED'); const external = await writeReviewBundle(archive, { ...options, output: externalOutput, profile: 'external' }, []);
+    assert.equal(external.externalImagePolicy, 'placeholder');
+    for (const file of ['project.json', 'shots.csv', 'redaction-manifest.json']) assert.ok(!(await readFile(join(externalOutput, file), 'utf8')).includes('smoke@example.com'));
+    await assert.rejects(writeReviewBundle(archive, { ...options, output: join(root, 'forbidden-media'), profile: 'external', includeMedia: true }, []), { code: 'REVIEW_EXTERNAL_MEDIA_FORBIDDEN' });
+    checks.push('internal-bundle:created', 'external-bundle:redacted-placeholders', 'external-media:rejected');
+    const requestRoot: string = appConfig(appRoot, dataRoot).codex.requestRoot;
+    const oldRequests: CodexRequestStore = new CodexRequestStore(requestRoot, { ...readBuildManifest(), generationContractSha256: 'f'.repeat(64) });
+    const targetId: string = project.frames[0]!.id; const old: CodexRequest = await oldRequests.create('image', project.projectId, targetId, codexRequestBasis(project, 'image', targetId), options.createdAt);
+    const queued = await expectStatus(running.url, `${path}/frames/${targetId}/generate`, json('POST', { expectedRevision: project.revision }), 202);
+    const nextRequest: CodexRequest = (queued.body as { request: CodexRequest }).request; assert.notEqual(nextRequest.id, old.id);
+    assert.equal((await oldRequests.read(old.id)).status, 'superseded'); checks.push('old-build-request:superseded-202');
+    const outgoing: Shot = project.shots[0]!; const incoming: Shot = project.shots[1]!;
+    for (const kind of ['cut', 'fade', 'dissolve', 'wipe', 'match-cut', 'custom'] as const) {
+      const policy = transitionVisualPolicy({ kind, durationMs: kind === 'cut' ? 0 : 500, note: '' }, outgoing, incoming);
+      if (kind === 'cut' || kind === 'fade') assert.equal(policy.incomingRevealMs, null);
+      else if (kind === 'custom') assert.equal(policy.issues[0]!.code, 'TRANSITION_VISUAL_POLICY_REVIEW_REQUIRED');
+      else assert.equal(policy.incomingRevealMs, outgoing.endMs - 500);
+    }
+    assert.equal(transitionVisualPolicy({ kind: 'fade', durationMs: 500, note: '', incomingExposure: 'after-black-midpoint' }, outgoing, incoming).incomingRevealMs, outgoing.endMs - 250);
+    checks.push('transition-exposure:7-policies');
+    for (const mode of ['black', 'hold-previous'] as const) {
+      const original: Shot = project.shots[1]!;
+      for (const shot of [nonSourced(original, mode), original]) {
+        const prior: number = project.revision;
+        project = projectFrom(await expectStatus(running.url, `${path}/shots/${shot.id}/visual-plan`, json('PATCH', { expectedRevision: prior, visualPlan: { visualMode: shot.visualMode, sourceLinks: shot.sourceLinks } }), 200));
+        assert.equal(project.revision, prior + 1); assert.equal(project.shots[1]!.visualMode, shot.visualMode);
+      }
+    }
+    checks.push('atomic-mode-roundtrips:4x200');
+    const before: Project = project; const first: Shot = project.shots[0]!;
+    await expectStatus(running.url, `${path}/shots/${first.id}/visual-plan`, json('PATCH', { expectedRevision: project.revision, visualPlan: { visualMode: 'hold-previous', sourceLinks: nonSourced(first, 'hold-previous').sourceLinks } }), 400);
+    assert.deepEqual(await running.store.read(project.projectId), before); checks.push('atomic-failure:400-unchanged');
+    const second: Shot = project.shots[1]!;
+    const reversed = await expectStatus(running.url, `${path}/shots/${second.id}/visual-plan`, json('PATCH', { expectedRevision: project.revision, visualPlan: { visualMode: 'sourced', sourceLinks: second.sourceLinks.map((link) => link.unitId !== '안내-1' ? link : {
+      ...link, usage: 'primary-visual', temporalAnchor: { kind: 'shot-offset', startOffsetMs: 4000, endOffsetMs: 8500, basis: 'manual', status: 'confirmed' },
+    }) } }), 400);
+    assert.ok((reversed.body as { error: { issues: { code: string }[] } }).error.issues.some((issue): boolean => issue.code === 'SOURCE_FIRST_REVEAL_ORDER_REVERSED'));
+    await expectStatus(running.url, `${path}/export.pdf?maturity=final`, {}, 409); checks.push('temporal-reversal:400', 'changed-frame-final:409');
+    const transactionId: string = randomUUID(); const lock = { version: 2, projectId: project.projectId, host: hostname(), pid: process.pid, transactionId, createdAt: options.createdAt };
+    const updateLock: string = join(dataRoot, sha256Text(project.projectId), 'write.lock'); const createLock: string = join(dataRoot, '.create-locks', `${sha256Text('external-create')}.lock`);
+    await writeFile(updateLock, JSON.stringify(lock)); await writeFile(createLock, JSON.stringify({ ...lock, projectId: 'external-create', transactionId: randomUUID() }));
+    const status = await expectStatus(running.url, '/api/status', {}, 200);
+    assert.equal((status.body as { activeCreates: unknown[] }).activeCreates.length, 1); assert.equal((status.body as { activeUpdates: unknown[] }).activeUpdates.length, 1);
+    const nonquiescent = await readReviewArchive(dataRoot, project.projectId);
+    const draft = await writeReviewBundle(nonquiescent, { ...options, output: join(root, 'nonquiescent-draft'), maturity: 'draft' }, []); assert.equal(draft.label, 'DRAFT · SOURCE NOT QUIESCENT');
+    await assert.rejects(writeReviewBundle(nonquiescent, { ...options, output: join(root, 'nonquiescent-final') }, []), { code: 'REVIEW_SOURCE_NOT_QUIESCENT' });
+    assert.equal(JSON.parse(await readFile(updateLock, 'utf8')).transactionId, transactionId);
+    await rm(updateLock); await rm(createLock);
+    checks.push('external-locks:discovered-200', 'nonquiescent-draft:reported', 'nonquiescent-final:rejected');
+    return { port: Number(new URL(running.url).port), checks };
+  } finally { await running.app.close(); }
+}
+
 const root: string = await mkdtemp(join(tmpdir(), 'storyboard-runtime-smoke-'));
 try {
   const primary = await runPrimarySmoke(root);
   const service = await runServiceFailure(root);
   const active = await runActiveRefresh(root);
   const final = await runFinalSmoke(root);
+  const hardening = await runHardeningSmoke(root);
   const registryFiles: string[][] = await Promise.all([
-    join(root, 'primary-data', '.process-instances'), join(root, 'final-data', '.process-instances'), join(root, 'service-data', '.process-instances'), join(root, 'active-data', '.process-instances'),
+    join(root, 'hardening-data', '.process-instances'), join(root, 'primary-data', '.process-instances'), join(root, 'final-data', '.process-instances'), join(root, 'service-data', '.process-instances'), join(root, 'active-data', '.process-instances'),
   ].map((path: string): Promise<string[]> => readdir(path)));
   assert.ok(registryFiles.every((entries: string[]): boolean => entries.length === 0));
-  process.stdout.write(`${JSON.stringify({ ports: [...primary.ports, service.port, active.port, final.port], checks: [...primary.checks, service.check, ...active.checks, ...final.checks], cleaned: true })}\n`);
+  await rm(root, { recursive: true, force: true });
+  process.stdout.write(`${JSON.stringify({ ports: [...primary.ports, service.port, active.port, final.port, hardening.port], checks: [...primary.checks, service.check, ...active.checks, ...final.checks, ...hardening.checks], cleaned: true })}\n`);
 } finally { await rm(root, { recursive: true, force: true }); }
