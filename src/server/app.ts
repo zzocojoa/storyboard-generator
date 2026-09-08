@@ -211,7 +211,9 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
   const audioNormalizer: WorkerAudioNormalizer = audioNormalizerOverride ?? new WorkerAudioNormalizer(config.audioNormalization);
   const app: FastifyInstance = Fastify({ logger: { level: 'info' }, bodyLimit: MAX_AUDIO_BYTES + 1024 * 1024 });
   app.addHook('onClose', async (): Promise<void> => {
-    await Promise.all([audioNormalizer.close(), store.close()]);
+    const closed: PromiseSettledResult<void>[] = await Promise.allSettled([audioNormalizer.close(), store.close()]);
+    const failures: unknown[] = closed.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map((result: PromiseRejectedResult): unknown => result.reason);
+    if (failures.length > 0) throw new AggregateError(failures, 'App 종료 중 Worker·Store 정리에 실패했습니다.');
   });
   await app.register(fastifyMultipart, { limits: { fileSize: MAX_AUDIO_BYTES, files: 1, fields: 1, parts: 2 } });
 

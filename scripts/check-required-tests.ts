@@ -3,6 +3,18 @@ import { extname, join } from 'node:path';
 import { contractError } from '../src/domain/errors.js';
 
 const REQUIRED_TEST_NAMES: readonly string[] = [
+  'audio_stress_workflow_has_no_test_retry',
+  'audio_stress_workflow_keeps_default_timeouts',
+  'audio_stress_workflow_uses_real_audio_spec',
+  'audio_stress_workflow_supports_50_to_100_repetitions',
+  'audio_stress_failure_uploads_trace_and_logs',
+  'audio_diagnostics_record_request_send_finish_close',
+  'audio_diagnostics_record_browser_media_events',
+  'audio_diagnostics_do_not_log_media_bytes',
+  'audio_diagnostics_cleanup_all_contexts_and_resources',
+  'audio_stress_summary_preserves_first_failed_repetition',
+  'audio_stress_summary_does_not_count_incomplete_repetition_as_success',
+
   'review_bundle_unknown_claim_is_not_deleted',
   'review_bundle_output_claim_is_atomic',
   'concurrent_review_bundle_same_output_commits_exactly_once',
