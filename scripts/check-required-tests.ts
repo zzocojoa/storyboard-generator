@@ -3,6 +3,26 @@ import { extname, join } from 'node:path';
 import { contractError } from '../src/domain/errors.js';
 
 const REQUIRED_TEST_NAMES: readonly string[] = [
+  'concurrent_same_build_request_creates_exactly_one_pending',
+  'concurrent_same_build_request_returns_same_request_id',
+  'concurrent_new_build_request_supersedes_once',
+  'completed_request_cannot_be_overwritten_by_supersede',
+  'failed_request_cannot_be_overwritten_by_supersede',
+  'concurrent_complete_and_fail_settle_exactly_once',
+  'concurrent_complete_and_supersede_settle_exactly_once',
+  'request_status_transition_uses_compare_and_swap',
+  'request_supersession_is_crash_recoverable',
+  'request_terminal_transition_is_crash_recoverable',
+  'request_store_recovery_is_idempotent',
+  'legacy_request_without_revision_remains_readable',
+  'superseded_request_remains_excluded_from_failure_rate',
+  'concurrent_request_recovery_elects_one_process',
+  'request_recovery_preserves_unexpected_terminal_bytes',
+  'request_unknown_transaction_file_is_preserved',
+  'request_cross_host_lock_requires_operator_action',
+  'request_storage_conflicts_use_structured_http_contracts',
+  'request_contract_versions_are_in_current_build_manifest',
+
   'lock_metadata_is_atomically_visible',
   'root_create_lock_metadata_is_atomically_visible',
   'concurrent_reader_never_observes_partial_live_lock',

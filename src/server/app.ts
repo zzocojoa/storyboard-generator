@@ -90,6 +90,7 @@ export type HttpErrorBody = { error: {
 } };
 
 const conflictPolicies: ReadonlyMap<string, boolean> = new Map<string, boolean>([
+  ['CODEX_REQUEST_SETTLED', false], ['CODEX_REQUEST_STATE_CONFLICT', false], ['CODEX_REQUEST_STORE_BUSY', true], ['REVIEW_BUNDLE_EXISTS', false],
   ['CODEX_REQUEST_BUILD_UNVERIFIED', false], ['CODEX_REQUEST_BUILD_CHANGED', false], ['PROJECT_BUSY', true], ['REVISION_CONFLICT', true], ['AUDIT_SNAPSHOT_CHANGED', true],
   ['PROJECT_ALREADY_EXISTS', false], ['PROJECT_VERSION_EXISTS', false],
 ]);
@@ -117,6 +118,8 @@ function isValidationError(error: Error, code: string): boolean {
 /** 서버 오류 코드를 사용자 입력, 충돌, 복구 잠금과 일시 장애로 명시적으로 분류한다. */
 export function httpErrorPolicy(error: Error): HttpErrorPolicy {
   const code: string = 'code' in error && typeof error.code === 'string' ? error.code : error.name;
+  if (code === 'CODEX_REQUEST_RECOVERY_REQUIRED' || code === 'REVIEW_BUNDLE_CLAIM_RECOVERY_REQUIRED') return { status: 423, category: 'locked', scope: 'request', retryable: false, operatorActionRequired: true, mutationBlocked: false };
+  if (code === 'CODEX_REQUEST_STORE_UNAVAILABLE') return { status: 503, category: 'unavailable', scope: 'service', retryable: true, operatorActionRequired: false, mutationBlocked: false };
   if (storedAssetCodes.has(code)) {
     return { status: 423, category: 'locked', scope: 'asset', retryable: false, operatorActionRequired: true, mutationBlocked: false };
   }

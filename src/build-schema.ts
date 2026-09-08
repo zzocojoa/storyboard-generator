@@ -1,10 +1,12 @@
 import { z } from 'zod';
+import { REQUEST_JOURNAL_VERSION, REQUEST_LOCK_VERSION } from './codex/storage-contract.js';
 import { GeneratorBuildProvenanceSchema } from './domain/schema.js';
 
 export const BuildManifestSchema = GeneratorBuildProvenanceSchema.extend({
   provenanceVersion: z.literal(3), gitStateAvailable: z.boolean(), worktreeDirty: z.boolean().nullable(), generationInputsDirty: z.boolean().nullable(),
   sourceTreeSha256: z.string().regex(/^[a-f0-9]{64}$/u), generationContractSha256: z.string().regex(/^[a-f0-9]{64}$/u),
   runtimeGenerationConfigSha256: z.string().regex(/^[a-f0-9]{64}$/u), builtAt: z.iso.datetime(),
+  requestJournalVersion: z.literal(REQUEST_JOURNAL_VERSION), requestLockVersion: z.literal(REQUEST_LOCK_VERSION),
   journalVersion: z.literal(3), lockVersion: z.literal(3), registryVersion: z.literal(1),
 }).superRefine((build, context): void => {
   if (build.gitStateAvailable && (build.headCommitSha === null || build.worktreeDirty === null || build.generationInputsDirty === null)) {

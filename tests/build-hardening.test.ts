@@ -161,7 +161,8 @@ describe('생성 계약 Build 식별', (): void => {
     const { root, request } = await requestFixture(build);
     const next: CodexRequest = await replacementRequest(root, { ...build, builtAt: '2026-09-08T01:00:00.000Z' });
     expect(next).toEqual(request);
-    expect(await readdir(root)).toEqual([`${request.id}.json`]);
+    expect((await readdir(root)).filter((name: string): boolean => name.endsWith('.json'))).toEqual([`${request.id}.json`]);
+    expect(await readdir(join(root, '.locks'))).toEqual([]); expect(await readdir(join(root, '.transactions'))).toEqual([]);
   });
 
   it('new_build_supersedes_old_pending_request', async (): Promise<void> => {
@@ -179,7 +180,8 @@ describe('생성 계약 Build 식별', (): void => {
     await replacementRequest(root, { ...build, generationContractSha256: 'e'.repeat(64) });
     const old: CodexRequest = await store.read(request.id);
     expect(old).toMatchObject({ id: request.id, generatorBuild: request.generatorBuild, kind: request.kind, projectId: request.projectId, targetId: request.targetId, basisHash: request.basisHash, createdAt: request.createdAt });
-    expect(await readdir(root)).toHaveLength(2);
+    expect((await readdir(root)).filter((name: string): boolean => name.endsWith('.json'))).toHaveLength(2);
+    expect(await readdir(join(root, '.locks'))).toEqual([]); expect(await readdir(join(root, '.transactions'))).toEqual([]);
   });
 
   it('superseded_request_is_excluded_from_operational_failure_rate', async (): Promise<void> => {
