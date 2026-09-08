@@ -3,8 +3,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { expect, test } from '@playwright/test';
-import type { Page, Response } from '@playwright/test';
-import type { FastifyInstance } from 'fastify';
+import type { Page, Request, Response } from '@playwright/test';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { CodexRequestStore } from '../../src/codex/requests.js';
 import type { Asset, AudioCue, Project } from '../../src/domain/schema.js';
 import { importPackage } from '../../src/importers/import-package.js';
@@ -16,9 +16,12 @@ import { nativeData, nativePackage, withNativeData, pcmWav, TEST_AUDIO_NORMALIZA
 import { readinessOutline } from '../readiness-fixtures.js';
 
 type AudioObservation = { element: HTMLAudioElement; metadataCount: number; mediaErrors: number };
-type AudioLoadProbe = { metadataSeen: boolean; playhead: string | null; activeAudioElements: number; httpStatuses: number[] };
-declare global { interface Window { audioObservation: AudioObservation | null } }
-type RunningAudioApp = { root: string; app: FastifyInstance; url: string; cue: AudioCue };
+type MediaEventProbe = { event: string; readyState: number; networkState: number; errorCode: number | null; errorMessage: string | null };
+type AudioServerProbe = { event: string; elapsedMs: number; status: number; bytes: number | null };
+type AudioLoadProbe = { metadataSeen: boolean; playhead: string | null; activeAudioElements: number; notice: string | null;
+  mediaEvents: MediaEventProbe[]; httpStatuses: number[]; requestFailures: string[]; serverEvents: AudioServerProbe[] };
+declare global { interface Window { audioObservation: AudioObservation | null; audioMediaEvents: MediaEventProbe[] } }
+type RunningAudioApp = { root: string; app: FastifyInstance; url: string; cue: AudioCue; serverEvents: AudioServerProbe[] };
 
 async function startAudioApp(): Promise<RunningAudioApp> {
   const root: string = await mkdtemp(join(tmpdir(), 'storyboard-real-audio-'));
@@ -39,16 +42,39 @@ async function startAudioApp(): Promise<RunningAudioApp> {
   const app: FastifyInstance = await createApp({ host: '127.0.0.1', port: 0, dataRoot, webRoot: resolve('dist/web'),
     pdfFontPath: resolve('assets/fonts/NanumGothic-Regular.ttf'), audioNormalization: TEST_AUDIO_NORMALIZATION_OPTIONS,
     codex: { requestRoot, speechVoice: 'Yuna' } }, store, new CodexRequestStore(requestRoot, readBuildManifest()));
+  const serverEvents: AudioServerProbe[] = [];
+  const requests: Map<string, number> = new Map<string, number>();
+  app.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    if (!request.url.includes('/output/audio/')) return;
+    requests.set(request.id, performance.now());
+    serverEvents.push({ event: 'request', elapsedMs: 0, status: reply.statusCode, bytes: null });
+    reply.raw.once('close', (): void => { serverEvents.push({ event: 'close', elapsedMs: performance.now() - (requests.get(request.id) as number),
+      status: reply.statusCode, bytes: null }); });
+  });
+  app.addHook('onSend', async (request, reply, payload) => {
+    if (requests.has(request.id)) serverEvents.push({ event: 'send', elapsedMs: performance.now() - (requests.get(request.id) as number),
+      status: reply.statusCode, bytes: Buffer.isBuffer(payload) ? payload.length : null });
+    return payload;
+  });
   const url: string = await app.listen({ host: '127.0.0.1', port: 0 });
-  return { root, app, url, cue };
+  return { root, app, url, cue, serverEvents };
   } catch (error: unknown) { await store.close(); await rm(root, { recursive: true, force: true }); throw error; }
 }
 
 async function prepare(page: Page, running: RunningAudioApp, atMs: number): Promise<void> {
   const httpStatuses: number[] = [];
+  const requestFailures: string[] = [];
   page.on('response', (response: Response): void => { if (response.url().includes('/output/audio/')) httpStatuses.push(response.status()); });
+  page.on('requestfailed', (request: Request): void => { if (request.url().includes('/output/audio/')) requestFailures.push(request.failure()?.errorText ?? 'unknown'); });
   await page.addInitScript((): void => {
-    const mediaWindow = window; mediaWindow.audioObservation = null;
+    const mediaWindow = window; mediaWindow.audioObservation = null; mediaWindow.audioMediaEvents = [];
+    for (const name of ['loadstart', 'loadedmetadata', 'canplay', 'playing', 'pause', 'stalled', 'suspend', 'abort', 'emptied', 'error']) {
+      document.addEventListener(name, (event: Event): void => {
+        if (!(event.target instanceof HTMLAudioElement)) return;
+        mediaWindow.audioMediaEvents.push({ event: event.type, readyState: event.target.readyState, networkState: event.target.networkState,
+          errorCode: event.target.error?.code ?? null, errorMessage: event.target.error?.message ?? null });
+      }, true);
+    }
     document.addEventListener('loadedmetadata', (event: Event): void => {
       if (!(event.target instanceof HTMLAudioElement)) return;
       const previous: AudioObservation | null = mediaWindow.audioObservation;
@@ -64,10 +90,11 @@ async function prepare(page: Page, running: RunningAudioApp, atMs: number): Prom
   await page.getByRole('slider', { name: '재생 위치' }).fill(String(atMs));
   await page.getByRole('button', { name: '시간순 재생', exact: true }).click();
   await expect.poll(async (): Promise<AudioLoadProbe> => ({
-    ...await page.evaluate((): Omit<AudioLoadProbe, 'httpStatuses'> => ({ metadataSeen: window.audioObservation !== null,
+    ...await page.evaluate((): Omit<AudioLoadProbe, 'httpStatuses' | 'requestFailures' | 'serverEvents'> => ({ metadataSeen: window.audioObservation !== null,
       playhead: document.querySelector<HTMLInputElement>('input[type="range"]')?.value ?? null,
+      notice: document.querySelector('.notice.error')?.textContent ?? null, mediaEvents: window.audioMediaEvents,
       activeAudioElements: document.querySelectorAll('audio[data-storyboard-audio]').length })),
-    httpStatuses: [...httpStatuses],
+    httpStatuses: [...httpStatuses], requestFailures: [...requestFailures], serverEvents: [...running.serverEvents],
   })).toEqual(expect.objectContaining({ metadataSeen: true }));
 }
 
