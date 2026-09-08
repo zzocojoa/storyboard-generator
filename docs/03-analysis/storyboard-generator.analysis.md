@@ -1,6 +1,6 @@
 # 범용 콘티 도구 — 구현 일치 분석
 
-분석 기준은 [Plan](../01-plan/features/storyboard-generator.plan.md)의 FR-01~FR-10, [Design](../02-design/features/storyboard-generator.design.md), 1.8.0의 Final Readiness·Playhead 출력·Build 감사와 Text Mapping·Placement Information·Source Temporal Anchor·Information Gate·실제 미디어 안전 출력 계약이다. 완료 판단은 현재 코드, 생성 Schema, fixture와 자동 검사 결과를 따른다.
+분석 기준은 [Plan](../01-plan/features/storyboard-generator.plan.md)의 FR-01~FR-10, [Design](../02-design/features/storyboard-generator.design.md), 1.9.0의 Final Readiness·Playhead 출력·Build 감사와 Text Mapping·Placement Information·Source Temporal Anchor·Information Gate·실제 미디어 안전 출력 계약이다. 완료 판단은 현재 코드, 생성 Schema, fixture와 자동 검사 결과를 따른다.
 
 ## 요구사항 일치
 
@@ -89,7 +89,7 @@ Source Update의 Text 기반 Anchor는 현재 Shot 범위 안에 같은 Source U
 
 ## Migration과 출력
 
-저장본은 `1.0.0 → 1.1.0 → 1.2.0 → 1.3.0 → 1.4.0 → 1.5.0 → 1.6.0 → 1.7.0 → 1.8.0` 순서로 변환한다. 1.2 Source Link에는 `unresolved/migration` Anchor를 부여하고 기존 승인 상태를 재검토한다. 정보 규칙은 보관된 handoff와 source snapshot에서 다시 정규화해 권한 `baseNotBeforeMs`를 복원한다. 1.3 Audio Cue에는 `within-segment`를 부여하고 Text Cue 권한은 Placement, exact Mapping, Source Unit 순서로 복원한다. 1.4의 독립 Placement에는 `unresolved` 정보 판정을 만들고 Canonical 관계에는 만들지 않는다. 1.7→1.8은 Legacy generatorBuild의 알 수 없는 신규 hash·dirty 값을 null로 유지하고 fade/custom의 기존 노출 의미를 결정적으로 옮긴다. 원문, 컷, 시간, Source Snapshot, 자산, 생성 기록은 보존한다.
+저장본은 `1.0.0 → 1.1.0 → 1.2.0 → 1.3.0 → 1.4.0 → 1.5.0 → 1.6.0 → 1.7.0 → 1.8.0 → 1.9.0` 순서로 변환한다. 1.2 Source Link에는 `unresolved/migration` Anchor를 부여하고 기존 승인 상태를 재검토한다. 정보 규칙은 보관된 handoff와 source snapshot에서 다시 정규화해 권한 `baseNotBeforeMs`를 복원한다. 1.3 Audio Cue에는 `within-segment`를 부여하고 Text Cue 권한은 Placement, exact Mapping, Source Unit 순서로 복원한다. 1.4의 독립 Placement에는 `unresolved` 정보 판정을 만들고 Canonical 관계에는 만들지 않는다. 1.7→1.8은 Legacy generatorBuild의 알 수 없는 신규 hash·dirty 값을 null로 유지하고 fade/custom의 기존 노출 의미를 결정적으로 옮긴다. 1.8→1.9는 Legacy Build availability를 null로 추가하고 기존 dirty 값은 보존한다. 원문, 컷, 시간, Source Snapshot, 자산, 생성 기록은 보존한다.
 
 JSON은 기준 규칙과 모든 재계산 입력을 보존한다. CSV는 `source_temporal_anchors`, `information_gates`, 출력 안전 상태와 차단 코드를 제공하고 차단된 Text Cue·Source Unit 본문을 생략한다. PDF는 Source Anchor 종류·근거, 기준/유효 Gate, End Frame 표시·평가 시각을 표시하고 차단된 원문을 가린다.
 
@@ -97,7 +97,7 @@ JSON은 기준 규칙과 모든 재계산 입력을 보존한다. CSV는 `source
 
 기존 정보 공개 회귀를 유지하면서 Placement Mapping, Text 권한 복구·삭제, Canonical Cue identity, Frame 자산 무효화와 네 안전 출력 채널, PRJ-007 Source fidelity 검사를 추가했다.
 
-현재 로컬 자동 검사는 48개 파일의 1,054개 테스트, Chromium E2E 15개다. 필수 계약 이름 256개의 누락·중복·skip·only는 0이다. 실제 Audio 6개와 주기 Heartbeat 5개, Bundle Hardening 13개를 각각 3회 반복했다. 추가 CLI Profile·오류 계약도 임시 저장소에서 검사한다. 처음 재현한 수동 Coverage 우회, Gap 승인, Frame 1ms 해석과 Hold의 이전 초반 Frame 재사용을 차단했다. 추가 회귀는 Text Draft/Final, 실제 Playhead·전환 Gate, 명시 Frame 충돌, 최초 Unit 공개 순서, Canonical 감사, Active Update 오류, Build와 원본 불변 Bundle을 검증한다.
+현재 단위·통합·Chromium 및 반복 시험의 실제 수치와 실패 재현·운영 해시 보존 증거는 Report를 따른다. G1~G7 회귀는 독립 Child Process·IPC Barrier·SIGKILL·inode/CAS 검증으로 Request와 Bundle 경쟁, 중단·복구 재중단, Lock 부분 게시, Integrity 중간 변경을 검사한다. Legacy 오류는 편집에서 격리하지만 Approval·Final에서 차단하며 Project 1.8→1.9와 Legacy Request는 읽기 전용 메모리 이관을 검사한다. 추가 CLI Profile·오류 계약도 임시 저장소에서 검사한다. 처음 재현한 수동 Coverage 우회, Gap 승인, Frame 1ms 해석과 Hold의 이전 초반 Frame 재사용을 차단했다. 추가 회귀는 Text Draft/Final, 실제 Playhead·전환 Gate, 명시 Frame 충돌, 최초 Unit 공개 순서, Canonical 감사, Active Update 오류, Build와 원본 불변 Bundle을 검증한다.
 
 PRJ-007 회귀 fixture는 Scene 12, Segment 32, screenplay Unit 79, Panel Turn 16, Text Placement 25, 1,500,000ms와 UNIT-045의 849,000–851,000ms J-cut·PCM16 mono 48,000Hz 2초 WAV를 유지한다. 실제 로컬 저장본 4개는 자동 수정 없이 별도 Bundle로 재검증했다. revision 283만 현재 타임라인의 Final 조건을 통과하며 이 저장본의 기존 UNIT-045는 850,000–855,000ms, 5초 within-segment SFX다. 회귀 fixture와 기존 제작 결정의 차이를 숨기거나 원본을 자동 수정하지 않는다. 개별 수치와 실행 로그·CI 확인 위치는 Report에 기록한다.
 

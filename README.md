@@ -111,15 +111,15 @@ npm run cli -- export-csv --project .local/plant-care.project.json --output .loc
 
 `outline`은 구간마다 편집 시작용 컷과 프레임을 만든다. 카메라·화면 위치·출연 인물을 임의로 확정하지 않는다. 음성 슬롯은 글자 수에 비례한 제안 시간이며 생성한 가이드 음성의 WAV 길이와 선언한 구간 관계를 검증한 뒤 `measured` 상태가 된다. `j-cut`은 바로 앞 구간부터 원본 구간 안까지, `l-cut`은 원본 구간부터 바로 다음 구간까지만 걸칠 수 있다. 두 관계는 정보 Gate를 앞당기는 증거로 사용하지 않는다. 원본에 화면 글자 종료점이 없으면 `--text-hold-ms` 값이 제안값으로 기록된다. `proposed` 글자 큐는 안전 미리보기와 초안 내보내기에 포함되며, 최종 편집 완료 전에는 Inspector에서 종료 시각을 검토하고 `confirmed`로 확정한다. 기존 출력 경로를 덮어쓰지 않는다.
 
-현재 프로젝트 형식은 `1.8.0`이다. 이전 저장본은 `1.0.0 → 1.1.0 → 1.2.0 → 1.3.0 → 1.4.0 → 1.5.0 → 1.6.0 → 1.7.0 → 1.8.0` 순서로 메모리에서 변환한다. 1.5 Shot은 `visualMode: sourced`, 이전 Generation Record는 `generatorBuild: null`로 이관한다. 원문·ID·시간·Anchor·Frame·Text·Audio·Asset과 기존 생성 metadata는 보존하며 Version 파일을 재작성하지 않는다. 기존 `frame` Anchor는 공개 시점만 증명한다. 표시 구간은 명시적 `frame-range`의 `endOffsetMs` 또는 `shot-offset`으로 확정해야 하며 1ms 구간이나 다음 Frame까지로 추측하지 않는다. 구간 미확정은 `SOURCE_VISUAL_INTERVAL_REQUIRED`와 Coverage Gap으로 차단한다.
+현재 프로젝트 형식은 `1.9.0`이다. 이전 저장본은 `1.0.0 → 1.1.0 → 1.2.0 → 1.3.0 → 1.4.0 → 1.5.0 → 1.6.0 → 1.7.0 → 1.8.0 → 1.9.0` 순서로 메모리에서 변환한다. 1.5 Shot은 `visualMode: sourced`, 이전 Generation Record는 `generatorBuild: null`로 이관한다. 원문·ID·시간·Anchor·Frame·Text·Audio·Asset과 기존 생성 metadata는 보존하며 Version 파일을 재작성하지 않는다. 기존 `frame` Anchor는 공개 시점만 증명한다. 표시 구간은 명시적 `frame-range`의 `endOffsetMs` 또는 `shot-offset`으로 확정해야 하며 1ms 구간이나 다음 Frame까지로 추측하지 않는다. 구간 미확정은 `SOURCE_VISUAL_INTERVAL_REQUIRED`와 Coverage Gap으로 차단한다.
 
 ## Build와 읽기 전용 검토 번들
 
-`npm run build:manifest`는 `.build/build-manifest.json`에 provenanceVersion 2를 작성한다. `headCommitSha`는 dirty여도 실제 HEAD를 유지한다. `worktreeDirty`는 전체 Git 상태, `generationInputsDirty`는 생성 계약 입력의 변경 여부이며 `commitSha`는 HEAD의 deprecated alias다. Git HEAD를 확인할 수 없을 때만 null이다. 런타임은 시작 시 읽은 Build를 고정한다.
+`npm run build:manifest`는 `.build/build-manifest.json`에 provenanceVersion 3을 작성한다. Project Journal/Lock은 3/3, Process Registry는 1, Request Journal/Lock은 1/1이다. `headCommitSha`는 dirty여도 실제 HEAD를 유지한다. `worktreeDirty`는 전체 Git 상태, `generationInputsDirty`는 생성 계약 입력의 변경 여부이며 `commitSha`는 HEAD의 deprecated alias다. Git 조회가 모두 성공하면 `gitStateAvailable=true`이고 두 dirty 값은 실제 상태다. HEAD만 성공하면 HEAD를 보존하고 availability=false·dirty=null을 기록한다. Git 자체를 읽지 못하면 HEAD도 null이다. 환경의 Commit SHA로 clean을 추정하지 않는다. 런타임은 시작 시 읽은 Build를 고정한다.
 
 Stable Fingerprint는 `sourceTreeSha256`(src·web·package 파일), `generationContractSha256`(Workbench Skill·AGENTS·Codex·Proposal·관련 Domain·Prompt·JSON Schema·lockfile), `runtimeGenerationConfigSha256`(음성·Provider·Audio 출력 설정)과 Project Schema Version이다. 경로는 상대경로 `/`로 정규화하고 정렬한 경로+NUL+bytes+NUL을 해시한다. Runtime 설정은 허용된 비밀 아닌 값만 Stable JSON으로 해시한다. builtAt·PID·Host·절대경로·Secret은 요청 동일성에 사용하지 않는다.
 
-같은 Target·Basis·Fingerprint의 Pending 요청만 재사용한다. 이전 Build의 Pending은 파일을 보존한 `superseded`가 되고 새 ID를 만든다. UI와 Metrics는 이를 일반 실패율에서 제외한다. Context·Apply도 Fingerprint를 검사한다. Project Schema 1.8.0의 1.7→1.8 메모리 Migration은 기존 Build에 알 수 없는 hash·dirty 값을 null로 남기고 Transition의 기존 의미를 명시한다. 이전 Record·Version 파일을 현재 Build로 다시 쓰지 않는다.
+같은 Target·Basis·Fingerprint의 Pending 요청만 재사용한다. 이전 Build의 Pending은 파일을 보존한 `superseded`가 되고 새 ID를 만든다. UI와 Metrics는 이를 일반 실패율에서 제외한다. kind·Project·Target·Basis의 논리 Key Lock 아래에서 재사용·Supersede·Terminal 전이를 직렬화하며 Build는 Lock Key에서 제외한다. 현재 파일 SHA-256 CAS와 Request Journal 1이 중단된 다중 파일 게시를 복구한다. Terminal은 다시 덮지 않으며 알 수 없는 복구 증거는 `CODEX_REQUEST_RECOVERY_REQUIRED` 423으로 보존한다. 상세 오류·fsync·소유권 계약은 Design을 따른다. Context·Apply도 Fingerprint를 검사한다. Project Schema 1.8.0의 1.7→1.8 메모리 Migration은 기존 Build에 알 수 없는 hash·dirty 값을 null로 남기고 Transition의 기존 의미를 명시한다. 1.8→1.9는 과거 Build의 `gitStateAvailable`을 null로 추가하며 이미 저장된 dirty 값을 보존한다. Legacy Project·Request 읽기는 메모리에서 이관하며 디스크와 이전 Record·Version 파일을 현재 Build로 다시 쓰지 않는다.
 
 ```sh
 npm run review-bundle -- --project-id PRJ-007 --output .local/reviews/PRJ-007-draft --maturity draft
@@ -141,7 +141,7 @@ npm run review-bundle -- --project-id PRJ-007 --output '.local/reviews/EXTERNAL 
 
 External은 `--include-media`를 거부하고 PDF의 원본 이미지를 Placeholder로 바꾼다. `externalImagePolicy: placeholder`, `embeddedImageRedaction: not-performed`를 명시하며 OCR 검토 완료를 주장하지 않는다. 사용자가 추가 패턴을 지정할 수 있으나 개인정보의 문맥적 완전 제거까지 자동 보장하지 않는다.
 
-번들 CLI는 원본에 lock·heartbeat·복구·mkdir을 실행하지 않는다. 원본 Data Root 안의 출력 경로와 기존 출력 폴더를 거부하고, Project·전체 Version·자산의 변경을 검출한다. Final 불가 상태에서는 폴더를 생성하지 않는다. Draft 파일은 성숙도를 표시하며 `project.json`의 검토 Envelope도 프로젝트 읽기에서 지원한다. 기존 콘티를 재검증할 때 자동 Confirm·Frame Accept·Asset 교체를 하지 않는다. 실제 저장본별 결과와 회귀 fixture의 차이는 [검증 보고서](docs/04-report/storyboard-generator.report.md)에서 확인한다.
+번들 CLI는 원본에 lock·heartbeat·복구·mkdir을 실행하지 않는다. 출력 Parent에 대상 hash 기반 Claim 1을 원자 공개해 같은 출력의 협력 Writer 중 하나만 게시한다. 기존 출력·Live Claim은 `REVIEW_BUNDLE_EXISTS` 409, 알 수 없거나 중단된 Claim은 `REVIEW_BUNDLE_CLAIM_RECOVERY_REQUIRED` 423과 운영자 조치를 요구한다. 본인 staging·claim만 정리하며 기존 Bundle은 덮지 않는다. 원본 Data Root 안의 출력 경로와 기존 출력 폴더를 거부하고, Project·전체 Version·자산의 변경을 검출한다. Final 불가 상태에서는 폴더를 생성하지 않는다. Draft 파일은 성숙도를 표시하며 `project.json`의 검토 Envelope도 프로젝트 읽기에서 지원한다. 기존 콘티를 재검증할 때 자동 Confirm·Frame Accept·Asset 교체를 하지 않는다. 실제 저장본별 결과와 회귀 fixture의 차이는 [검증 보고서](docs/04-report/storyboard-generator.report.md)에서 확인한다.
 
 Program Monitor는 상태를 다시 검사하는 `/output/frame/:frameId`와 `/output/audio/:cueId`만 사용한다. 서버는 매 요청에서 파일 존재, 프로젝트 내부 경로, SHA-256, 실제 MIME·디코딩, 대상 연결과 출력 인터록을 확인하며 응답에 `Cache-Control: no-store`를 붙인다. Raw Asset 경로는 검토용이다. `proposed` 음성, 자산·길이 불일치, 권한 미확정 Text Cue, 미해결 정보 규칙, Gate보다 이른 정보는 출력하지 않고 문제 코드와 대상 ID만 표시한다. 손상된 Frame은 PDF 전체를 실패시키지 않고 Frame ID·Asset ID·Issue code가 있는 placeholder로 바뀌며 CSV에는 현재 무결성과 출력 안전 상태가 기록된다.
 
@@ -161,7 +161,7 @@ CSV에서 같은 오디오 이벤트가 여러 컷 행에 나타나면 하나의
 npm run check
 ```
 
-이 명령은 서버·도메인 타입 검사, 웹 타입 검사, 자동 테스트, 필수 테스트 이름, 생성 스키마 정합성, 운영 웹 빌드를 순서대로 실행한다. 현재 단위·통합 검사는 48개 파일의 1,054개 테스트이며 Playwright Chromium 시나리오 15개를 별도로 실행한다. 필수 계약 이름 256개의 누락·중복·skip·only는 모두 0이다. 실제 `HTMLAudioElement` 6개 시나리오는 WAV 디코딩, metadata, Seek, Cue 종료, Monitor 종료와 Project 전환 정리를 검사하며 Audio API를 대체하지 않는다. PRJ-007 Golden은 12개 Scene, 32개 Segment, 79개 screenplay Source Unit, 16개 Panel Turn, Text Placement 25개, 1,500,000ms와 원문 불변을 확인한다. `UNIT-045` 회귀 fixture는 48,000Hz mono PCM16 WAV 2,000ms와 849,000–851,000ms J-cut을 유지한다.
+이 명령은 서버·도메인 타입 검사, 웹 타입 검사, 자동 테스트, 필수 테스트 이름, 생성 스키마 정합성, 운영 웹 빌드를 순서대로 실행한다. 실제 단위·통합·Playwright 실행 수와 Required Registry 결과는 [검증 보고서](docs/04-report/storyboard-generator.report.md)를 기준으로 한다. 실제 `HTMLAudioElement` 6개 시나리오는 WAV 디코딩, metadata, Seek, Cue 종료, Monitor 종료와 Project 전환 정리를 검사하며 Audio API를 대체하지 않는다. PRJ-007 Golden은 12개 Scene, 32개 Segment, 79개 screenplay Source Unit, 16개 Panel Turn, Text Placement 25개, 1,500,000ms와 원문 불변을 확인한다. `UNIT-045` 회귀 fixture는 48,000Hz mono PCM16 WAV 2,000ms와 849,000–851,000ms J-cut을 유지한다.
 
 브라우저와 실제 HTTP 검증은 다음 명령을 사용한다. `npm run smoke`는 임시 data/request root와 동적 포트를 만들고 종료 시 listener, Worker, timer와 임시 파일을 정리한다.
 
@@ -174,3 +174,5 @@ npm run smoke
 자산 수리 후 **REFRESH**를 누르면 웹이 `/asset-integrity`를 다시 조회해 해결된 항목을 제거한다. API 사용자는 같은 endpoint의 `issues`가 빈 배열인지 확인한다.
 
 스키마의 기준은 `src/domain/schema.ts`다. 타입 변경 후 `npm run schemas:write`로 JSON Schema를 갱신하고 `npm run schemas:check`로 일치 여부를 확인한다. 제품 범위와 구현 원칙은 [`AGENTS.md`](AGENTS.md), 데이터 흐름과 API 설계는 [Design](docs/02-design/features/storyboard-generator.design.md)을 따른다.
+
+별도 [Native Audio Stress](.github/workflows/audio-stress.yml)는 Ubuntu·Node 24·Chromium에서 기본 50회, 수동 실행 시 75·100회도 선택한다. 주간 schedule을 제공하며 일반 PR의 3회 반복·기본 Timeout·Retry 0은 유지한다. 첫 실패에 중단하고 Trace·JSON Summary·브라우저 및 서버 수명 로그를 실패 Artifact로 보존한다. 로컬 실행은 `npm run test:e2e -- tests/e2e/real-audio.spec.ts --repeat-each=50 --max-failures=1 --reporter=list,./scripts/audio-stress-reporter.ts`다. 반복 성공만으로 이전 Linux 간헐 실패의 근본 원인이 해결됐다고 판단하지 않는다.

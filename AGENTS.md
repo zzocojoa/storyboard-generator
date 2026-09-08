@@ -24,12 +24,13 @@
 
 ## 현재 상태와 다음 작업
 
-- Plan과 [Design](docs/02-design/features/storyboard-generator.design.md), 1.8.0 공통 데이터 모델, `native-v1`·`production-v1` 입력 어댑터, 검증·편집 함수, CLI, 로컬 저장/API, 웹 편집 화면, Codex App 요청·결과 브리지, Proposal Frame Plan과 Anchor 기반 Key Frame, `sourced`·`black`·`hold-previous` 출력, 독립 오디오/글자 트랙·컷 전환 편집, Text Mapping·독립 Placement Information·Source Temporal Anchor·동적 Information Gate·Text/Frame/Audio 공통 출력 인터록, 실제 PCM WAV 등록·이전 WAV 정규화 복구, Cue 범위에 묶인 시간순 재생, queue 제한 Worker 오디오 변환, 중앙 Asset 외래 키 closure, 전체 Version 합집합 Historical Generation Record 감사, symlink-safe 파일 연산과 journal version 3·lock version 3 기반 update·initial create 복구, 공유 주기 Process Heartbeat, 잘못된 Recovery Marker 격리, 프로젝트별 Active Create·Active Update와 영속 recovery block, 현재 출력 참조 Asset Integrity API, 범위가 명시된 HTTP 오류와 Web 차단 상태, Absolute·Duration timecode, JSON·CSV·PDF 출력이 있다. 실행 방법은 `README.md`, 실제 명령과 의존성은 `package.json`을 기준으로 확인한다.
+- Plan과 [Design](docs/02-design/features/storyboard-generator.design.md), 1.9.0 공통 데이터 모델, `native-v1`·`production-v1` 입력 어댑터, 검증·편집 함수, CLI, 로컬 저장/API, 웹 편집 화면, Codex App 요청·결과 브리지, Proposal Frame Plan과 Anchor 기반 Key Frame, `sourced`·`black`·`hold-previous` 출력, 독립 오디오/글자 트랙·컷 전환 편집, Text Mapping·독립 Placement Information·Source Temporal Anchor·동적 Information Gate·Text/Frame/Audio 공통 출력 인터록, 실제 PCM WAV 등록·이전 WAV 정규화 복구, Cue 범위에 묶인 시간순 재생, queue 제한 Worker 오디오 변환, 중앙 Asset 외래 키 closure, 전체 Version 합집합 Historical Generation Record 감사, symlink-safe 파일 연산과 journal version 3·lock version 3 기반 update·initial create 복구, 공유 주기 Process Heartbeat, 잘못된 Recovery Marker 격리, 프로젝트별 Active Create·Active Update와 영속 recovery block, 현재 출력 참조 Asset Integrity API, 범위가 명시된 HTTP 오류와 Web 차단 상태, Absolute·Duration timecode, JSON·CSV·PDF 출력이 있다. 실행 방법은 `README.md`, 실제 명령과 의존성은 `package.json`을 기준으로 확인한다.
 - 합성 범용 프로젝트와 실제 제작 프로젝트 PRJ-007의 `SEG-008`에서 Codex App의 컷 제안·내장 이미지·로컬 가이드 음성 요청과 결과 반영을 끝까지 확인했다. 실제 사례는 5개 컷의 시간 합계, 이미지 재생성과 시각 승인, 측정된 음성 길이를 확인했다. 생성 요청의 완료·실패·대기, 처리 시간, 반복 생성 횟수와 실패 원인을 영속 기록에서 집계해 화면에 표시한다. 요청별 비용은 Codex App에서 제공하지 않으므로 미측정으로 명시한다. 전체 제작 품질 검증은 계획서의 다른 대표 예외와 전체 분량으로 확대해야 한다.
 - 구현 요청을 받으면 현재 설계와 코드 상태를 확인하고, 누락된 설계를 요청 범위 안에서 구체화한 다음 구현한다. 이미 완료한 단계를 다시 시작하지 않는다.
 - 사용자가 생성 실행 환경을 Codex App으로 확정했다. `OPENAI_API_KEY`나 OpenAI SDK를 요구하지 않는다. 컷 제안은 현재 Codex 모델, 이미지는 내장 `image_gen`, 가이드 음성은 설정된 로컬 macOS 음성을 사용한다. 화면비·그림체·패널 표현·실사/AI/혼합 제작 방식은 프로젝트별 설정으로 다룬다.
-- 현재 Project Schema는 1.8.0, Storage Journal은 3, Store Lock은 3, Process Registry는 1이다. 1.6 저장본은 메모리에서 기존 Record에 `generatorBuild: null`만 추가하며 원문·시간·Anchor·자산·Version 파일을 보존한다. 신규 Codex Record는 요청 Build를 기록하고 런타임의 소스 Build와 일치해야 한다. 1.7→1.8은 Build 신규 필드의 unknown 값을 null로 보존하고 Legacy Transition의 Incoming 노출 정책을 명시한다. 증명할 수 없는 과거 Commit을 추측하지 않는다.
+- 현재 Project Schema는 1.9.0, Build Provenance는 3, Storage Journal은 3, Store Lock은 3, Process Registry는 1, Request Journal·Lock은 1·1이다. 1.6 저장본은 메모리에서 기존 Record에 `generatorBuild: null`만 추가하며 원문·시간·Anchor·자산·Version 파일을 보존한다. 신규 Codex Record는 요청 Build를 기록하고 런타임의 소스 Build와 일치해야 한다. 1.7→1.8은 Build 신규 필드의 unknown 값을 null로 보존하고 Legacy Transition의 Incoming 노출 정책을 명시한다. 1.8→1.9는 Legacy Build의 gitStateAvailable을 null로 추가하며 기존 dirty 값을 보존한다. 현재 Git 확인 실패는 availability=false·dirty=null이며 status만 실패하면 확인된 HEAD를 보존한다. Project·Request 읽기는 디스크를 재작성하지 않는다. 증명할 수 없는 과거 Commit을 추측하지 않는다.
 - 생성 완료와 Final Ready는 별개다. 미확정 Text는 Draft에서 명확히 표시하고 Final에서 `TEXT_TIMING_CONFIRMATION_REQUIRED`로 차단한다. 확정 API 뒤에도 전체 Final Readiness를 다시 계산한다. Project·실제 파일 기반 파생 상태를 영속 승인 플래그로 대체하지 않는다. 읽기 전용 Review Bundle과 로컬 저장본 4개의 원본 보존 검증을 제공한다. 자세한 실행 증거는 Report를 기준으로 확인한다.
+- Request는 Build를 제외한 논리 Key Lock·SHA-256 CAS·Journal로 선형화하고 Terminal과 감사 파일을 보존한다. Lock JSON은 임시 파일 fsync 뒤 no-replace 원자 공개한다. Visual Plan은 무관한 기존 Segment 오류를 비차단 검토로 남겨 순차 수리하되 승인·Final은 계속 차단한다. Summary는 최대 2회 안정 Snapshot을 검사하며 비Asset revision에서 기존 cache를 보존한다. Final·Safe 출력은 실제 파일을 다시 검사한다. Review 출력 Claim과 staging은 원본 밖에서 소유권을 증명하며 알 수 없는 증거를 자동 삭제하지 않는다. 세부 복구·오류 계약은 Design을 따른다.
 - PDCA 도구 사용 여부와 실제 문서·구현 상태를 구분한다. 호출하지 않은 도구의 상태 등록이나 수행하지 않은 검증을 완료로 보고하지 않는다.
 - 이 절은 작업이 진척되면 현재 상태로 갱신한다. 작업 이력과 변경 일지를 누적하지 않는다.
 
@@ -152,7 +153,7 @@ Design에서는 실제 사용할 언어·런타임·라이브러리와 검증 �
 - 자막이 있으면 원본의 확정된 시작 위치를 보존하고 종료 시각을 확정한다. 고지·최소 노출시간·무음 등은 해당 프로젝트에 정의된 조건으로 검사한다.
 - 사실·단서·반전의 공개 조건이 있으면 그 시점을 앞당기지 않는다. ID 검사 통과만으로 그림의 비노출 조건을 충족했다고 판정하지 않는다.
 - `unresolved` Text Mapping과 `mapping-required` Source Link는 초안에 저장할 수 있다. 관련 컷 승인·이미지 생성과 구간 제안 적용은 검토 항목을 구체적으로 표시하고 차단한다.
-- `1.0.0 → 1.1.0 → 1.2.0 → 1.3.0 → 1.4.0 → 1.5.0 → 1.6.0 → 1.7.0 → 1.8.0` 저장본 변환을 유지한다. 1.5 Shot은 다른 데이터를 바꾸지 않고 `visualMode: sourced`로 이관하며, 확인된 직접 시각 Anchor가 컷 전체를 덮지 못하면 검토 이슈를 낸다. 기존 `frame` Anchor는 자동으로 표시 구간으로 확장하지 않는다. 이전 `sourceUnitIds`, Text Mapping, Audio 관계, Text Cue 권한과 독립 Placement는 기존 보수적 변환을 유지한다.
+- `1.0.0 → 1.1.0 → 1.2.0 → 1.3.0 → 1.4.0 → 1.5.0 → 1.6.0 → 1.7.0 → 1.8.0 → 1.9.0` 저장본 변환을 유지한다. 1.5 Shot은 다른 데이터를 바꾸지 않고 `visualMode: sourced`로 이관하며, 확인된 직접 시각 Anchor가 컷 전체를 덮지 못하면 검토 이슈를 낸다. 기존 `frame` Anchor는 자동으로 표시 구간으로 확장하지 않는다. 이전 `sourceUnitIds`, Text Mapping, Audio 관계, Text Cue 권한과 독립 Placement는 기존 보수적 변환을 유지한다.
 - JSON 재열기와 PDF·CSV 출력에서 컷 순서·시간·텍스트·자산 연결·검토 상태·기준/유효 정보 Gate·재계산 근거가 보존되어야 한다. PDF·CSV는 출력 안전 상태와 차단 코드를 표시하고, 검토가 필요한 원문 본문을 출력하지 않는다.
 - 새 프로젝트를 불러와 처리하는 데 핵심 코드 수정이 필요하지 않아야 한다. 프로젝트를 전환·재열기해도 다른 프로젝트의 원문·설정·자산·작업 상태가 섞이지 않아야 한다.
 
@@ -170,6 +171,6 @@ Design에서는 실제 사용할 언어·런타임·라이브러리와 검증 �
 - 자동 검사는 파싱·참조·원문·시간·잠금 보존·저장 및 출력의 실질적 실패를 다룬다. 구현을 그대로 반복하는 테스트를 늘리지 않는다.
 - 사람 검토로 낭독 가능 시간, 자막 가독성, 인물·의상·공간·소품의 연속성, 그림 속 반전 노출, 실제 제작 지시의 명확성을 확인한다.
 - 생성 시간·비용·재시도·수정 시간을 파일럿에서 측정한다. 측정 없이 생산성 향상률이나 최종 비용을 보장하지 않는다.
-- 실제 프로젝트 설정에 정의된 관련 테스트·타입 검사·빌드를 실행한다. 현재 기준은 48개 파일, 1,054개 단위·통합 테스트와 15개 Playwright 시나리오이며 필수 256개 계약 이름의 누락·중복·skip·only를 자동 검사한다. 실제 Audio 6개 E2E와 주기 Heartbeat 5개는 각각 3회 반복 검증한다. `npm run smoke`는 임시 data/request root와 동적 포트의 실제 HTTP를 검증하고 모든 App·Worker·Timer·Listener를 정리한다. 문서만 변경한 경우에는 링크·형식·내용 정합성을 확인한다.
+- 실제 프로젝트 설정에 정의된 관련 테스트·타입 검사·빌드를 실행한다. Required Registry의 누락·중복·skip·only를 자동 검사하며 실제 실행 수와 결과는 Report 한 곳에 기록한다. 일반 CI의 실제 Audio 3회 반복을 유지하고 별도 Ubuntu Stress에서 50~100회와 실패 Artifact를 지원한다. Retry·일반 Timeout을 늘려 실패를 가리지 않는다. `npm run smoke`는 임시 data/request root와 동적 포트의 실제 HTTP를 검증하고 모든 App·Worker·Timer·Listener를 정리한다. 문서만 변경한 경우에는 링크·형식·내용 정합성을 확인한다.
 - Git 확인에는 `git --no-pager diff` 또는 `git diff | cat`을 사용한다. 관련 검증이 통과하면 새로운 변경·실패·미해결 우려가 없는 한 반복 실행하지 않는다.
 - 완료 보고에는 구현한 범위, 실행한 검증과 결과, 남은 미정 항목·한계를 구분한다. 전체 일치율이 높아도 원문 손실·정보 조기 공개·사용자 수정 유실이 남아 있으면 해당 기능을 완료로 표시하지 않는다.
