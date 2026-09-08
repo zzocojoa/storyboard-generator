@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { expect, test } from '@playwright/test';
+import type { Page } from '@playwright/test';
 import type { FastifyInstance } from 'fastify';
 import { CodexRequestStore } from '../../src/codex/requests.js';
 import type { Asset, AudioCue, NativeDataset, PackagePayload, Project, Shot, StoryboardFrame, TextCue } from '../../src/domain/schema.js';
@@ -41,8 +42,10 @@ async function startApp(rootPath: string, store: ProjectStore): Promise<RunningA
   return { app, dataRoot, root: rootPath, store, url };
 }
 
-async function stopApp(running: RunningApp): Promise<void> {
-  await running.app.close(); await rm(running.root, { recursive: true, force: true });
+async function stopApp(running: RunningApp, page: Page): Promise<void> {
+  // 브라우저 연결을 먼저 닫아 서버 종료가 미완 연결을 기다리지 않게 한다.
+  try { await page.close(); }
+  finally { await running.app.close(); await rm(running.root, { recursive: true, force: true }); }
 }
 
 function mutableFault(): MutableFault {
@@ -88,7 +91,7 @@ test('e2e_open_text_placement_end_is_edited_and_confirmed', async ({ page }): Pr
     await editor.getByRole('button', { name: '시각 확정', exact: true }).click();
     await expect(editor.locator('header span')).toHaveText('CONFIRMED'); await expect(editor.getByRole('button', { name: '시각 확정됨' })).toBeDisabled();
     await expect(editor).toContainText('TEXT CONFIRMED');
-  } finally { await stopApp(running); }
+  } finally { await stopApp(running, page); }
 });
 
 test('web_visual_plan_uses_single_mutation', async ({ page }): Promise<void> => {
@@ -116,7 +119,7 @@ test('web_visual_plan_uses_single_mutation', async ({ page }): Promise<void> => 
     const changed: Project = await store.read(original.projectId);
     expect(changed.revision).toBe(original.revision + 1);
     expect(changed.shots[0]?.sourceLinks.every((link): boolean => link.usage === 'context-only')).toBe(true);
-  } finally { await stopApp(running); }
+  } finally { await stopApp(running, page); }
 });
 
 test('e2e_late_anchor_key_frame_is_visible', async ({ page }): Promise<void> => {
@@ -139,7 +142,7 @@ test('e2e_late_anchor_key_frame_is_visible', async ({ page }): Promise<void> => 
     await expect(page.locator('.frame-editor header b', { hasText: 'KEY' })).toBeVisible();
     await expect(page.locator('.frame-editor').filter({ hasText: '+5950ms' })).toBeVisible();
     await expect(page.locator('.mapping-editor').filter({ hasText: '동작' })).toContainText('ABSOLUTE REVEAL · 10950ms');
-  } finally { await stopApp(running); }
+  } finally { await stopApp(running, page); }
 });
 
 test('e2e_project_recovery_disables_only_selected_project', async ({ page }): Promise<void> => {
@@ -157,7 +160,7 @@ test('e2e_project_recovery_disables_only_selected_project', async ({ page }): Pr
     await page.locator('.project-tile').filter({ hasText: 'Project A' }).click();
     await expect(page.getByRole('heading', { name: open.title })).toBeVisible(); await expect(page.locator('.storage-recovery-banner')).toHaveCount(0);
     await expect(page.locator('button.propose')).toBeEnabled();
-  } finally { await stopApp(running); }
+  } finally { await stopApp(running, page); }
 });
 
 test('e2e_asset_integrity_notice_clears_after_reconcile', async ({ page }): Promise<void> => {
@@ -174,7 +177,7 @@ test('e2e_asset_integrity_notice_clears_after_reconcile', async ({ page }): Prom
     await page.goto(running.url); await expect(page.locator('.asset-integrity-banner')).toContainText('STORED_ASSET_HASH_MISMATCH');
     await writeFile(assetPath, content); await page.getByRole('button', { name: 'REFRESH' }).click();
     await expect(page.locator('.asset-integrity-banner')).toHaveCount(0);
-  } finally { await stopApp(running); }
+  } finally { await stopApp(running, page); }
 });
 
 test('e2e_24fps_and_duration_timecode_are_distinct', async ({ page }): Promise<void> => {
@@ -187,7 +190,7 @@ test('e2e_24fps_and_duration_timecode_are_distinct', async ({ page }): Promise<v
     await expect(page.locator('.segment-row').first()).toContainText('01:00:00:00');
     await expect(page.locator('.timeline header time')).toHaveText('01:00:00:00');
     await expect(page.locator('.timeline header span').last()).toHaveText('00:17:12');
-  } finally { await stopApp(running); }
+  } finally { await stopApp(running, page); }
 });
 
 test('e2e_audio_seek_and_end_cleanup', async ({ page }): Promise<void> => {
@@ -247,7 +250,7 @@ test('e2e_audio_seek_and_end_cleanup', async ({ page }): Promise<void> => {
     const secondAudioIndex: number = await page.evaluate((): number => (window as unknown as { __trackedAudio: unknown[] }).__trackedAudio.length - 1);
     await expect.poll(() => page.evaluate((index: number): number => (window as unknown as { __trackedAudio: Array<{ element: HTMLAudioElement }> }).__trackedAudio[index]?.element.currentTime ?? -1, secondAudioIndex)).toBeGreaterThan(0.9);
     await expect.poll(() => page.evaluate((index: number): number => (window as unknown as { __trackedAudio: Array<{ pauses: number }> }).__trackedAudio[index]?.pauses ?? 0, secondAudioIndex)).toBeGreaterThan(0);
-  } finally { await stopApp(running); }
+  } finally { await stopApp(running, page); }
 });
 
 test('e2e_409_and_503_do_not_create_persistent_project_block', async ({ page }): Promise<void> => {
@@ -261,7 +264,7 @@ test('e2e_409_and_503_do_not_create_persistent_project_block', async ({ page }):
     await expect(page.locator('.storage-recovery-banner')).toHaveCount(0); await page.getByRole('button', { name: 'REFRESH' }).click();
     fault.enabled = true; await page.getByRole('button', { name: '프레임 저장' }).click(); await expect(page.locator('.notice.error')).toContainText('STORAGE TEMPORARILY UNAVAILABLE');
     await expect(page.locator('.storage-recovery-banner')).toHaveCount(0);
-  } finally { await stopApp(running); }
+  } finally { await stopApp(running, page); }
 });
 
 test('e2e_black_and_hold_previous_visual_modes', async ({ page }): Promise<void> => {
@@ -276,5 +279,5 @@ test('e2e_black_and_hold_previous_visual_modes', async ({ page }): Promise<void>
     await expect(page.locator('.frame-output-state')).toContainText('BLACK · OUTPUT SAFE');
     await page.locator('.segment-row').nth(2).click(); await expect(page.locator('.shot-frame[data-visual-mode="hold-previous"] img')).toBeVisible();
     await expect(page.locator('.frame-output-state')).toContainText('HOLD');
-  } finally { await stopApp(running); }
+  } finally { await stopApp(running, page); }
 });

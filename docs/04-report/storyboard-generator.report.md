@@ -85,13 +85,13 @@ Required Registry에는 모든 신규 필수 계약을 등록했다. `.skip`·`.
 
 ## Runtime Smoke·자원 정리
 
-실제 동적 포트 54844, 54848, 54853, 54857, 54859, 54862에서 54개 점검을 통과했다. 정상 200/201/202, Visual Plan·Temporal 정책 실패 400, revision·Final 충돌 409, Project/Asset 무결성 423, 일시 Store 503, Invalid Range 416·Content-Range, 정상 Partial 206·Full 200을 확인했다.
+실제 동적 포트 55552, 55561, 55567, 55571, 55573, 55584에서 54개 점검을 통과했다. 정상 200/201/202, Visual Plan·Temporal 정책 실패 400, revision·Final 충돌 409, Project/Asset 무결성 423, 일시 Store 503, Invalid Range 416·Content-Range, 정상 Partial 206·Full 200을 확인했다.
 
-sourced→black→sourced, sourced→hold→sourced를 실제 API로 왕복했고 각 성공의 단일 revision과 실패 불변을 확인했다. 7개 Transition 정책, 초기화 뒤 외부 Create/Update 탐지, 이전 Build Pending Supersede, Non-quiescent Draft/Final, Internal/External·media 거부, 목록 cache hit 뒤 손상 Asset의 실제 안전 출력 차단을 검사했다. 모든 임시 App·Store·Worker·Timer·Listener를 종료하고 Process Registry가 비어 있음을 확인한 뒤 Root를 삭제했다. `cleaned:true`는 삭제 뒤 출력한다. 여섯 포트는 모두 닫혔고 기존 4317/PID 89219는 유지됐다.
+sourced→black→sourced, sourced→hold→sourced를 실제 API로 왕복했고 각 성공의 단일 revision과 실패 불변을 확인했다. 7개 Transition 정책, 초기화 뒤 외부 Create/Update 탐지, 이전 Build Pending Supersede, Non-quiescent Draft/Final, Internal/External·media 거부, 목록 cache hit 뒤 손상 Asset의 실제 안전 출력 차단을 검사했다. 브라우저 회귀는 페이지를 먼저 닫아 활성 연결의 서버 종료 대기를 없앤다. 모든 임시 App·Store·Worker·Timer·Listener를 종료하고 Process Registry가 비어 있음을 확인한 뒤 Root를 삭제했다. `cleaned:true`는 삭제 뒤 출력한다. 여섯 포트는 모두 닫혔고 기존 4317/PID 89219는 유지됐다.
 
 ## CI와 병합 경계
 
-Hardening PR은 `codex/storyboard-final-readiness`를 Base로 한다. 기존 [PR #4](https://github.com/zzocojoa/storyboard-generator/pull/4)는 master 대상이며 미병합이다. Ubuntu·Node 24의 `check`가 성공한 뒤 `e2e`가 Chromium 설치·빌드·실제 브라우저 검증을 실행한다. 최신 [PR #5 Checks](https://github.com/zzocojoa/storyboard-generator/pull/5/checks)와 최종 PR 설명·완료 보고에서 정확한 HEAD·Workflow Run·두 Job 결과를 확인한다. 이전 Commit의 CI 성공을 최종 HEAD의 성공으로 대체하지 않는다. [CI 재현 Run 34188139475](https://github.com/zzocojoa/storyboard-generator/actions/runs/34188139475)는 시작 복구의 마지막 검사 직전 새 외부 Lock을 손상으로 오인하는 경쟁과 디스크 경합 중 5초 제한 초과를 드러냈다. 고정 시점 회귀에서 새 Lock의 live owner·Current/Version을 재확인하고, 실제 fsync·복구·디코딩 시험은 Worker 2개로 실행한다. 개별 기본 5초 한도와 기존 검증 조건은 유지한다.
+Hardening PR은 `codex/storyboard-final-readiness`를 Base로 한다. 기존 [PR #4](https://github.com/zzocojoa/storyboard-generator/pull/4)는 master 대상이며 미병합이다. Ubuntu·Node 24의 `check`가 성공한 뒤 `e2e`가 Chromium 설치·빌드·실제 브라우저 검증을 실행한다. 확인한 [CI Run 34188821069](https://github.com/zzocojoa/storyboard-generator/actions/runs/34188821069)는 `f457c40c396dc41d677ddad3fec4ca56b434c53a`에서 `check`·`e2e` 모두 성공했다. 테스트 종료 순서 정리를 포함한 최신 [PR #5 Checks](https://github.com/zzocojoa/storyboard-generator/pull/5/checks)와 최종 PR 설명·완료 보고에서 정확한 HEAD·Workflow Run·두 Job 결과를 확인한다. 이전 Commit의 CI 성공을 최종 HEAD의 성공으로 대체하지 않는다. [CI 재현 Run 34188139475](https://github.com/zzocojoa/storyboard-generator/actions/runs/34188139475)는 시작 복구의 마지막 검사 직전 새 외부 Lock을 손상으로 오인하는 경쟁과 디스크 경합 중 5초 제한 초과를 드러냈다. 고정 시점 회귀에서 새 Lock의 live owner·Current/Version을 재확인하고, 실제 fsync·복구·디코딩 시험은 Worker 2개로 실행한다. 개별 기본 5초 한도와 기존 검증 조건은 유지한다.
 
 변경은 Visual/Temporal 정책, Build/Request/Schema, Storage/Bundle/Status/Range, Summary Cache, Redaction/CLI, Runtime 검증, 문서로 나눠 Commit한다. 사용자 미추적 파일·다른 Worktree·실제 생성 미디어를 Stage하지 않는다. force push·master Commit·자동 병합은 하지 않는다.
 

@@ -104,7 +104,11 @@ async function checkRealAudio(page: Page, chromium: string, name: string): Promi
     }
     expect((await audioState(page)).errors).toBe(0);
     return { chromium, initial: state, final: await audioState(page) };
-  } finally { await running.app.close(); await rm(running.root, { recursive: true, force: true }); }
+  } finally {
+    // 실제 미디어 검증 뒤 브라우저 연결을 닫고 서버와 임시 자원을 정리한다.
+    try { await page.close(); }
+    finally { await running.app.close(); await rm(running.root, { recursive: true, force: true }); }
+  }
 }
 
 test('e2e_real_wav_decodes_in_chromium', async ({ page, browser }, testInfo): Promise<void> => {
