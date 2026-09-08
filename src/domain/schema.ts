@@ -144,10 +144,12 @@ export const PresenceSchema = z.strictObject({
   mode: z.enum(['VISIBLE', 'HAND_ONLY', 'SILHOUETTE', 'OFFSCREEN_VOICE', 'VOICE_OVER', 'IMPLIED', 'ARCHIVE_IMAGE']),
 });
 export const ContinuitySchema = z.strictObject({ assetId: IdSchema, state: z.string().min(1) });
+export const TransitionIncomingExposureSchema = z.enum(['none', 'from-transition-start', 'after-black-midpoint', 'review-required']);
 export const TransitionSchema = z.strictObject({
   kind: z.enum(['cut', 'dissolve', 'fade', 'wipe', 'match-cut', 'custom']),
   durationMs: MillisecondsSchema,
   note: z.string(),
+  incomingExposure: TransitionIncomingExposureSchema.optional(),
 });
 export const LockedFieldSchema = z.enum(['timing', 'sources', 'action', 'camera', 'location', 'presence', 'continuity', 'transition', 'frames']);
 export const ShotVisualModeSchema = z.enum(['sourced', 'black', 'hold-previous']);
@@ -228,6 +230,9 @@ export const AssetSchema = z.strictObject({
   audioMetadata: z.strictObject({ sampleRate: z.number().int().positive(), channels: z.number().int().min(1).max(2), codec: z.string().min(1) }).nullable().optional(),
 });
 export const GeneratorBuildProvenanceSchema = z.strictObject({
+  provenanceVersion: z.number().int().positive(), headCommitSha: z.string().regex(/^[a-f0-9]{40}$/u).nullable(),
+  worktreeDirty: z.boolean().nullable(), generationInputsDirty: z.boolean().nullable(),
+  generationContractSha256: HashSchema.nullable(), runtimeGenerationConfigSha256: HashSchema.nullable(),
   commitSha: z.string().regex(/^[a-f0-9]{40}$/u).nullable(), appVersion: z.string().min(1),
   projectSchemaVersion: z.string().min(1), builtAt: z.iso.datetime().nullable(), sourceTreeSha256: HashSchema.nullable(),
 });
@@ -238,7 +243,7 @@ export const GenerationSchema = z.strictObject({
   generatorBuild: GeneratorBuildProvenanceSchema.nullable(),
 });
 export const ProjectSchema = z.strictObject({
-  schemaVersion: z.literal('1.7.0'), projectId: IdSchema, title: z.string().min(1), revision: z.number().int().nonnegative(),
+  schemaVersion: z.literal('1.8.0'), projectId: IdSchema, title: z.string().min(1), revision: z.number().int().nonnegative(),
   profile: ProfileSchema,
   handoff: HandoffSchema, sources: z.array(SnapshotSchema), dataset: DatasetSchema, importIssues: z.array(IssueSchema),
   textMappingDecisions: z.array(TextMappingDecisionSchema),
@@ -270,6 +275,7 @@ export type Issue = z.infer<typeof IssueSchema>;
 export type Dataset = z.infer<typeof DatasetSchema>;
 export type NativeDataset = z.infer<typeof NativeDatasetSchema>;
 export type Transition = z.infer<typeof TransitionSchema>;
+export type TransitionIncomingExposure = z.infer<typeof TransitionIncomingExposureSchema>;
 export type ShotVisualMode = z.infer<typeof ShotVisualModeSchema>;
 export type Shot = z.infer<typeof ShotSchema>;
 export type ShotSourceLink = z.infer<typeof ShotSourceLinkSchema>;

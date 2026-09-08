@@ -3,6 +3,7 @@ import { issue } from './errors.js';
 import { reviewIssuesForFrame } from './mapping.js';
 import type { Asset, Issue, Project, Shot, StoryboardFrame } from './schema.js';
 import { frameEvaluationAbsoluteMs } from './time.js';
+import { transitionVisualPolicy } from './transition.js';
 import { reviewVisualOutputAt } from './visual-output.js';
 
 export type FrameOutputChannel = 'program-monitor' | 'transition-preview' | 'pdf-export' | 'csv-export' | 'safe-http' | 'readiness';
@@ -26,16 +27,6 @@ function uniqueIssues(values: readonly Issue[]): Issue[] {
   });
 }
 
-function frameOutputEvaluationMs(project: Project, shot: Shot, frame: StoryboardFrame, channel: FrameOutputChannel): number {
-  if (channel !== 'transition-preview') return frameEvaluationAbsoluteMs(shot, frame);
-  const shotIndex: number = project.shots.findIndex((candidate: Shot): boolean => candidate.id === shot.id);
-  const previousShot: Shot | undefined = shotIndex > 0 ? project.shots[shotIndex - 1] : undefined;
-  if (previousShot === undefined || previousShot.endMs !== shot.startMs || previousShot.transitionOut.kind === 'cut') {
-    return frameEvaluationAbsoluteMs(shot, frame);
-  }
-  return Math.max(previousShot.startMs, previousShot.endMs - previousShot.transitionOut.durationMs);
-}
-
 /** 검토용 원본 자산은 보존하면서 안전 출력 채널의 bitmap 사용 여부만 판정한다. */
 export function reviewFrameOutput(project: Project, frameId: string, channel: FrameOutputChannel): FrameOutputDecision {
   const frame: StoryboardFrame | undefined = project.frames.find((candidate: StoryboardFrame): boolean => candidate.id === frameId);
@@ -44,6 +35,19 @@ export function reviewFrameOutput(project: Project, frameId: string, channel: Fr
       '출력할 프레임을 찾을 수 없습니다.', 'existing frame', frameId, [])] };
   }
   const shot: Shot | undefined = project.shots.find((candidate: Shot): boolean => candidate.id === frame.shotId);
+  if (shot !== undefined && channel === 'transition-preview') {
+    const previous: Shot | undefined = project.shots[project.shots.indexOf(shot) - 1];
+    const policy = previous === undefined ? null : transitionVisualPolicy(previous.transitionOut, previous, shot);
+    if (previous === undefined || policy?.incomingRevealMs === null || policy === null || policy.incomingRevealMs >= previous.endMs) return {
+      frameId, channel, renderMode: 'blocked', renderBitmap: false, imageAssetId: null, sourceFrameId: null,
+      issues: policy !== null && policy.issues.length > 0 ? policy.issues : [issue('TRANSITION_PREVIEW_INACTIVE', 'conflict', frameId, 'transitionOut', '현재 전환은 다음 Frame을 먼저 노출하지 않습니다.', 'active incoming exposure', null, [])],
+    };
+    const resolved = reviewVisualOutputAt(project, policy.incomingRevealMs, channel);
+    const frameIssues: Issue[] = shot.visualMode === 'sourced' && resolved.frameId !== frameId ? [issue('TRANSITION_FRAME_NOT_ACTIVE', 'conflict', frameId, 'offsetMs',
+      '전환 시작 시각에는 이 Frame이 활성 상태가 아닙니다.', resolved.frameId, frameId, [])] : [];
+    return { frameId, channel, renderMode: frameIssues.length === 0 ? resolved.renderMode : 'blocked', renderBitmap: resolved.imageAssetId !== null && resolved.renderMode !== 'blocked' && frameIssues.length === 0,
+      imageAssetId: frameIssues.length === 0 ? resolved.imageAssetId : null, sourceFrameId: resolved.sourceFrameId, issues: [...resolved.issues, ...frameIssues] };
+  }
   if (shot !== undefined && shot.visualMode !== 'sourced') {
     const resolved = reviewVisualOutputAt(project, frameEvaluationAbsoluteMs(shot, frame), channel);
     return { frameId, channel, renderMode: resolved.renderMode, renderBitmap: resolved.imageAssetId !== null && resolved.renderMode !== 'blocked',
@@ -56,6 +60,7 @@ export function reviewFrameOutput(project: Project, frameId: string, channel: Fr
 export function reviewFrameBitmap(project: Project, frame: StoryboardFrame, channel: FrameOutputChannel): FrameOutputDecision {
   const frameId: string = frame.id;
   const shot: Shot | undefined = project.shots.find((candidate: Shot): boolean => candidate.id === frame.shotId);
+  if (shot !== undefined && channel === 'transition-preview') return reviewFrameOutput(project, frame.id, channel);
   const asset: Asset | undefined = frame.imageAssetId === null ? undefined
     : project.assets.find((candidate: Asset): boolean => candidate.id === frame.imageAssetId);
   const assetIssues: Issue[] = frame.imageAssetId === null
@@ -70,7 +75,7 @@ export function reviewFrameBitmap(project: Project, frame: StoryboardFrame, chan
     'accepted', frame.visualReview, [],
   )];
   const emissionIssues: Issue[] = shot === undefined ? [] : reviewInformationEmission(project, {
-    entityId: frame.id, channel: 'image', informationIds: frameInformationIds(project, frame.id), atMs: frameOutputEvaluationMs(project, shot, frame, channel),
+    entityId: frame.id, channel: 'image', informationIds: frameInformationIds(project, frame.id), atMs: frameEvaluationAbsoluteMs(shot, frame),
   });
   const issues: Issue[] = uniqueIssues([...assetIssues, ...reviewIssues, ...reviewIssuesForFrame(project, frame.id), ...emissionIssues]);
   return { frameId, channel, renderMode: issues.length === 0 ? 'bitmap' : 'blocked', renderBitmap: issues.length === 0, imageAssetId: frame.imageAssetId, sourceFrameId: frame.id, issues };

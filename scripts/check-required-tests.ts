@@ -3,6 +3,36 @@ import { extname, join } from 'node:path';
 import { contractError } from '../src/domain/errors.js';
 
 const REQUIRED_TEST_NAMES: readonly string[] = [
+  'cut_has_no_early_incoming_exposure',
+  'fade_to_black_has_no_early_incoming_exposure',
+  'dissolve_exposes_incoming_from_transition_start',
+  'wipe_exposes_incoming_from_transition_start',
+  'match_cut_exposes_incoming_from_transition_start',
+  'custom_transition_requires_explicit_visual_policy',
+  'fade_through_black_exposes_incoming_after_midpoint',
+  'transition_preview_and_final_readiness_share_policy',
+  'transition_information_gate_uses_actual_incoming_reveal_time',
+
+  'head_commit_sha_is_preserved_when_worktree_is_dirty',
+  'unrelated_untracked_file_does_not_erase_head_commit',
+  'generation_input_change_sets_generation_inputs_dirty',
+  'skill_change_changes_generation_contract_hash',
+  'agents_change_changes_generation_contract_hash',
+  'speech_voice_change_changes_runtime_generation_config_hash',
+  'secret_and_absolute_path_are_not_hashed_into_manifest',
+  'build_fingerprint_is_stable_across_path_separator',
+  'legacy_generator_build_migrates_without_fabrication',
+  'project_17_to_18_migration_preserves_original_data',
+  'pending_request_from_old_build_is_not_reused',
+  'same_build_pending_request_is_reused',
+  'new_build_supersedes_old_pending_request',
+  'superseded_request_is_preserved_for_audit',
+  'superseded_request_is_excluded_from_operational_failure_rate',
+  'skill_change_requires_new_request',
+  'speech_voice_change_requires_new_speech_request',
+  'legacy_pending_request_without_fingerprint_is_not_reused',
+
+
   'sourced_to_black_is_applied_atomically',
   'sourced_to_hold_previous_is_applied_atomically',
   'black_to_sourced_adds_visual_sources_atomically',

@@ -299,6 +299,15 @@
         },
         "note": {
           "type": "string"
+        },
+        "incomingExposure": {
+          "type": "string",
+          "enum": [
+            "none",
+            "from-transition-start",
+            "after-black-midpoint",
+            "review-required"
+          ]
         }
       },
       "required": [

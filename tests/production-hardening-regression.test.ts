@@ -1,3 +1,4 @@
+import { readBuildManifest } from '../src/build.js';
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -123,7 +124,7 @@ async function appForFixture(fixture: LegacyFixture): Promise<FastifyInstance> {
   const config: AppConfig = { host: '127.0.0.1', port: 4317, dataRoot: fixture.dataRoot, webRoot,
     pdfFontPath: resolve('assets/fonts/NanumGothic-Regular.ttf'), audioNormalization: TEST_AUDIO_NORMALIZATION_OPTIONS,
     codex: { requestRoot: join(fixture.root, 'requests'), speechVoice: 'Yuna' } };
-  const app: FastifyInstance = await createApp(config, fixture.store, new CodexRequestStore(config.codex.requestRoot));
+  const app: FastifyInstance = await createApp(config, fixture.store, new CodexRequestStore(config.codex.requestRoot, readBuildManifest()));
   apps.push(app);
   return app;
 }

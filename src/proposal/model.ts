@@ -1,6 +1,7 @@
+import { intrinsicIncomingExposure } from '../domain/transition.js';
 import { z } from 'zod';
 import { contractError } from '../domain/errors.js';
-import { effectiveInformationGate } from '../domain/mapping.js';
+import { effectiveInformationGate, reviewTransitionInformationIssues } from '../domain/mapping.js';
 import type { Issue, Project, Segment, Shot, ShotSourceLink, SourceUnit, StoryboardFrame } from '../domain/schema.js';
 import { PresenceSchema, ProjectSchema, ShotSourceLinkSchema, ShotVisualModeSchema, TransitionSchema } from '../domain/schema.js';
 import { firstVisualRevealOrderIssues, shotVisualCoverageIssues, sourcePolicyIssues } from '../domain/source-policy.js';
@@ -181,7 +182,7 @@ export function applySegmentProposal(project: Project, segmentId: string, input:
     return { id: `${proposalId}:shot:${index + 1}`, segmentId, startMs, endMs: startMs + (durations[index] as number), visualMode: shot.visualMode ?? 'sourced',
       sourceLinks: shot.sourceLinks.map((link): ShotSourceLink => ({ unitId: link.unitId, usage: link.usage, status: 'confirmed', temporalAnchor: proposalAnchor(durations[index] as number, link.anchor) })), visualLocationId: shot.visualLocationId, action: shot.action, camera: shot.camera,
       presence: shot.presence, propIds: shot.propIds, continuityBefore: [], continuityAfter: [], cameraAxis: shot.cameraAxis,
-      screenDirection: shot.screenDirection, informationIds: shot.informationIds, transitionOut: shot.transitionOut,
+      screenDirection: shot.screenDirection, informationIds: shot.informationIds, transitionOut: { ...shot.transitionOut, incomingExposure: shot.transitionOut.incomingExposure ?? intrinsicIncomingExposure(shot.transitionOut.kind) },
       proposalOrigin: 'model', approvalStatus: 'proposed', lockedFields: [] };
   });
   validateProposalInformation(project, shots);
@@ -194,6 +195,8 @@ export function applySegmentProposal(project: Project, segmentId: string, input:
   const allShots: Shot[] = [...retained.slice(0, firstIndex), ...shots, ...retained.slice(firstIndex)];
   const next: Project = ProjectSchema.parse({ ...project, shots: allShots,
     frames: [...project.frames.filter((frame: StoryboardFrame): boolean => !oldShots.some((shot: Shot): boolean => shot.id === frame.shotId)), ...frames] });
+  const transitionIssues: Issue[] = shots.flatMap((shot: Shot): Issue[] => reviewTransitionInformationIssues(next, shot));
+  if (transitionIssues.length > 0) throw contractError('PROPOSAL_TRANSITION_VISUAL_POLICY_BLOCKED', transitionIssues.map((value: Issue): string => value.message).join('\n'), transitionIssues);
   assertNoErrors(validateProject(next, project.dataset), 'INVALID_MODEL_PROPOSAL');
   return next;
 }

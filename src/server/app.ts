@@ -1,5 +1,6 @@
 import { mediaByteRange } from './media-range.js';
-import { readBuildManifest } from '../build.js';
+import { buildForSpeechVoice } from '../build.js';
+import { sameGenerationBuild } from '../build-fingerprint.js';
 import { assertFinalReadiness } from '../domain/final-readiness.js';
 import { randomUUID } from 'node:crypto';
 import { stat } from 'node:fs/promises';
@@ -198,6 +199,7 @@ async function ensureWebRoot(path: string): Promise<void> {
 
 export async function createApp(config: AppConfig, store: ProjectStore, requests: CodexRequestStore,
   audioNormalizerOverride?: WorkerAudioNormalizer): Promise<FastifyInstance> {
+  if (!sameGenerationBuild(requests.buildManifest(), buildForSpeechVoice(config.codex.speechVoice))) throw contractError('INVALID_CODEX_REQUEST_STORE_BUILD', 'Request Store의 Build와 현재 소스·음성 설정이 다릅니다.', []);
   await ensureWebRoot(config.webRoot);
   await store.initialize();
   await requests.initialize();
@@ -216,7 +218,7 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
     const [allRequests, storageStatus] = await Promise.all([requests.list(null), store.statusSnapshot()]);
     const metrics = codexRequestMetrics(allRequests);
     const failed: CodexRequest[] = allRequests.filter((item: CodexRequest): boolean => item.status === 'failed');
-    return { provider: 'codex-app', build: readBuildManifest(), ...metrics,
+    return { provider: 'codex-app', build: requests.buildManifest(), ...metrics,
       recentFailures: failed.slice(-5).reverse().map((item: CodexRequest): object => ({ id: item.id, kind: item.kind, projectId: item.projectId, targetId: item.targetId, error: item.error })),
       storageRecovery: store.recoveryEvents(), storageRecoveryBlocks: storageStatus.recoveryBlocks,
       invalidRecoveryMarkers: storageStatus.invalidRecoveryMarkers,

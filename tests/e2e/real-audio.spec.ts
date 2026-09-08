@@ -1,3 +1,4 @@
+import { readBuildManifest } from '../../src/build.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -36,7 +37,7 @@ async function startAudioApp(): Promise<RunningAudioApp> {
   await store.create({ ...other, title: 'Real Audio B' });
   const app: FastifyInstance = await createApp({ host: '127.0.0.1', port: 0, dataRoot, webRoot: resolve('dist/web'),
     pdfFontPath: resolve('assets/fonts/NanumGothic-Regular.ttf'), audioNormalization: TEST_AUDIO_NORMALIZATION_OPTIONS,
-    codex: { requestRoot, speechVoice: 'Yuna' } }, store, new CodexRequestStore(requestRoot));
+    codex: { requestRoot, speechVoice: 'Yuna' } }, store, new CodexRequestStore(requestRoot, readBuildManifest()));
   const url: string = await app.listen({ host: '127.0.0.1', port: 0 });
   return { root, app, url, cue };
   } catch (error: unknown) { await store.close(); await rm(root, { recursive: true, force: true }); throw error; }

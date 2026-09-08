@@ -1,3 +1,4 @@
+import { readBuildManifest } from '../src/build.js';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -37,7 +38,7 @@ async function fixture(): Promise<{ root: string; project: Project; store: Proje
   roots.push(root);
   const project: Project = createSourceOutline(importPackage(await nativePackage()), { proposedTextHoldMs: 2000 });
   const store: ProjectStore = trackedStore(join(root, 'data'));
-  const requests: CodexRequestStore = new CodexRequestStore(join(root, 'requests'));
+  const requests: CodexRequestStore = new CodexRequestStore(join(root, 'requests'), readBuildManifest());
   await store.create(project);
   return { root, project, store, requests };
 }

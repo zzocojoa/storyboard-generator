@@ -89,7 +89,7 @@ describe('원문 뼈대와 편집', (): void => {
     const shot = requireShot(project, 'shot-2');
     const transitioned = updateShotContent(project, shot.id, { ...shotContent(shot), transitionOut: { kind: 'dissolve', durationMs: 500, note: '시간 경과' } });
     const split = splitShot(transitioned, shot.id, 8000, 'transition-shot', 'transition-frame');
-    expect(requireShot(split, shot.id).transitionOut).toEqual({ kind: 'cut', durationMs: 0, note: '' });
+    expect(requireShot(split, shot.id).transitionOut).toEqual({ kind: 'cut', durationMs: 0, note: '', incomingExposure: 'none' });
     expect(requireShot(split, 'transition-shot').transitionOut).toEqual({ kind: 'dissolve', durationMs: 500, note: '시간 경과' });
     const merged = mergeShots(split, shot.id, 'transition-shot');
     expect(requireShot(merged, shot.id).transitionOut).toEqual({ kind: 'dissolve', durationMs: 500, note: '시간 경과' });

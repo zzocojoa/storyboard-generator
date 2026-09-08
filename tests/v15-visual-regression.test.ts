@@ -95,7 +95,7 @@ describe('15차 Proposal Frame과 Visual Mode', (): void => {
     const project: Project = await outline();
     const legacy = { ...project, schemaVersion: '1.5.0', shots: project.shots.map(({ visualMode: _visualMode, ...shot }) => shot) };
     const migrated: Project = parseProject(legacy);
-    expect(migrated.schemaVersion).toBe('1.7.0');
+    expect(migrated.schemaVersion).toBe('1.8.0');
     expect(migrated.shots.every((shot) => shot.visualMode === 'sourced')).toBe(true);
   });
 

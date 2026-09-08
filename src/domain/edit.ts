@@ -192,7 +192,7 @@ export function splitShot(project: Project, shotId: string, atMs: number, newSho
   if (project.shots.some((shot: Shot): boolean => shot.id === newShotId) || project.frames.some((frame: StoryboardFrame): boolean => frame.id === newFrameId)) throw contractError('DUPLICATE_EDIT_ID', '새 컷과 프레임 ID가 이미 존재합니다.', []);
   const offset: number = atMs - original.startMs;
   const links = allocateSplitLinks(project, original, atMs);
-  const first: Shot = { ...original, endMs: atMs, sourceLinks: links.first, informationIds: splitInformationIds(project, links.first, original.startMs, original.informationIds), transitionOut: { kind: 'cut', durationMs: 0, note: '' }, proposalOrigin: 'manual', approvalStatus: 'proposed' };
+  const first: Shot = { ...original, endMs: atMs, sourceLinks: links.first, informationIds: splitInformationIds(project, links.first, original.startMs, original.informationIds), transitionOut: { kind: 'cut', durationMs: 0, note: '', incomingExposure: 'none' }, proposalOrigin: 'manual', approvalStatus: 'proposed' };
   const second: Shot = { ...original, id: newShotId, startMs: atMs, sourceLinks: links.second, informationIds: splitInformationIds(project, links.second, atMs, original.informationIds), proposalOrigin: 'manual', approvalStatus: 'proposed' };
   const movedFrames: StoryboardFrame[] = project.frames.map((frame: StoryboardFrame): StoryboardFrame => {
     if (frame.shotId !== shotId) return frame;

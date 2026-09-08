@@ -1,3 +1,4 @@
+import { readBuildManifest } from '../../src/build.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -35,7 +36,7 @@ async function startApp(rootPath: string, store: ProjectStore): Promise<RunningA
   const config: AppConfig = { host: '127.0.0.1', port: 0, dataRoot, webRoot: resolve('dist/web'),
     pdfFontPath: resolve('assets/fonts/NanumGothic-Regular.ttf'), audioNormalization: TEST_AUDIO_NORMALIZATION_OPTIONS,
     codex: { requestRoot, speechVoice: 'Yuna' } };
-  const app: FastifyInstance = await createApp(config, store, new CodexRequestStore(requestRoot));
+  const app: FastifyInstance = await createApp(config, store, new CodexRequestStore(requestRoot, readBuildManifest()));
   const url: string = await app.listen({ host: '127.0.0.1', port: 0 });
   return { app, dataRoot, root: rootPath, store, url };
 }

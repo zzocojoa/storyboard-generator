@@ -1,4 +1,6 @@
-import { generatorBuildProvenance, readBuildManifest } from '../build.js';
+import { generatorBuildProvenance } from '../build.js';
+import type { BuildManifest } from '../build.js';
+import { sameGenerationBuild } from '../build-fingerprint.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readdir, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -19,9 +21,15 @@ function serialize(request: CodexRequest): string {
 
 export class CodexRequestStore {
   readonly #root: string;
+  readonly #build: BuildManifest;
 
-  constructor(root: string) {
+  constructor(root: string, build: BuildManifest) {
     this.#root = root;
+    this.#build = structuredClone(build);
+  }
+
+  buildManifest(): BuildManifest {
+    return structuredClone(this.#build);
   }
 
   async initialize(): Promise<void> {
@@ -50,13 +58,17 @@ export class CodexRequestStore {
   }
 
   async create(kind: CodexRequestKind, projectId: string, targetId: string, basisHash: string, now: string): Promise<CodexRequest> {
-    const duplicate: CodexRequest | undefined = (await this.list('pending')).find((request: CodexRequest): boolean =>
+    const matching: CodexRequest[] = (await this.list('pending')).filter((request: CodexRequest): boolean =>
       request.kind === kind && request.projectId === projectId && request.targetId === targetId && request.basisHash === basisHash,
     );
-    if (duplicate !== undefined) return duplicate;
-    const request: CodexRequest = CodexRequestSchema.parse({ generatorBuild: generatorBuildProvenance(readBuildManifest()), id: randomUUID(), kind, projectId, targetId, basisHash,
+    const duplicate: CodexRequest | undefined = matching.find((request: CodexRequest): boolean => sameGenerationBuild(request.generatorBuild, this.#build));
+    const request: CodexRequest = duplicate ?? CodexRequestSchema.parse({ generatorBuild: generatorBuildProvenance(this.#build), id: randomUUID(), kind, projectId, targetId, basisHash,
       status: 'pending', createdAt: now, updatedAt: now, resultRevision: null, error: null });
-    await writeFile(requestPath(this.#root, request.id), serialize(request), { encoding: 'utf8', flag: 'wx' });
+    if (duplicate === undefined) await writeFile(requestPath(this.#root, request.id), serialize(request), { encoding: 'utf8', flag: 'wx' });
+    for (const previous of matching.filter((candidate: CodexRequest): boolean => !sameGenerationBuild(candidate.generatorBuild, this.#build))) {
+      await this.#replace(previous, { status: 'superseded', resultRevision: null, updatedAt: now,
+        error: { code: 'CODEX_REQUEST_SUPERSEDED', message: `생성 계약 Build가 변경되어 ${request.id} 요청으로 대체됐습니다.` } });
+    }
     return request;
   }
 

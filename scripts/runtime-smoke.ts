@@ -37,7 +37,7 @@ function appConfig(root: string, dataRoot: string): AppConfig {
 async function startApp(root: string, dataRoot: string, store: ProjectStore): Promise<RunningApp> {
   const config: AppConfig = appConfig(root, dataRoot);
   await mkdir(config.codex.requestRoot, { recursive: true });
-  const app: FastifyInstance = await createApp(config, store, new CodexRequestStore(config.codex.requestRoot));
+  const app: FastifyInstance = await createApp(config, store, new CodexRequestStore(config.codex.requestRoot, readBuildManifest()));
   const url: string = await app.listen({ host: config.host, port: 0 });
   return { app, store, url };
 }

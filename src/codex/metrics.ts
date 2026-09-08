@@ -6,6 +6,7 @@ export type CodexRequestMetrics = {
   completedRequests: number;
   failedRequests: number;
   pendingRequests: number;
+  supersededRequests: number;
   repeatedRequests: number;
   averageLatencyMs: number | null;
   maximumLatencyMs: number | null;
@@ -21,7 +22,7 @@ function requestLatency(request: CodexRequest): number {
 
 /** Codex 요청 기록에서 완료 시간과 같은 대상의 반복 생성 횟수를 계산한다. */
 export function codexRequestMetrics(requests: readonly CodexRequest[]): CodexRequestMetrics {
-  const settled: CodexRequest[] = requests.filter((request: CodexRequest): boolean => request.status !== 'pending');
+  const settled: CodexRequest[] = requests.filter((request: CodexRequest): boolean => request.status === 'completed' || request.status === 'failed');
   const latencies: number[] = settled.map(requestLatency);
   const targetCounts: Map<string, number> = new Map<string, number>();
   for (const request of requests) {
@@ -34,6 +35,7 @@ export function codexRequestMetrics(requests: readonly CodexRequest[]): CodexReq
     completedRequests: requests.filter((request: CodexRequest): boolean => request.status === 'completed').length,
     failedRequests: requests.filter((request: CodexRequest): boolean => request.status === 'failed').length,
     pendingRequests: requests.filter((request: CodexRequest): boolean => request.status === 'pending').length,
+    supersededRequests: requests.filter((request: CodexRequest): boolean => request.status === 'superseded').length,
     repeatedRequests,
     averageLatencyMs: latencies.length === 0 ? null : Math.round(latencies.reduce((total: number, value: number): number => total + value, 0) / latencies.length),
     maximumLatencyMs: latencies.length === 0 ? null : Math.max(...latencies),

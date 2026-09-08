@@ -1,3 +1,4 @@
+import { readBuildManifest } from '../src/build.js';
 import { randomUUID } from 'node:crypto';
 import { hostname, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -117,7 +118,7 @@ async function appFor(dataRoot: string, store: ProjectStore): Promise<FastifyIns
   const config: AppConfig = { host: '127.0.0.1', port: 0, dataRoot, webRoot,
     pdfFontPath: resolve('assets/fonts/NanumGothic-Regular.ttf'), audioNormalization: TEST_AUDIO_NORMALIZATION_OPTIONS,
     codex: { requestRoot: join(root, 'requests'), speechVoice: 'Yuna' } };
-  return createApp(config, store, new CodexRequestStore(config.codex.requestRoot));
+  return createApp(config, store, new CodexRequestStore(config.codex.requestRoot, readBuildManifest()));
 }
 
 describe('15차 주기 heartbeat와 상태 갱신', (): void => {

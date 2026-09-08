@@ -35,7 +35,7 @@ async function fixture(): Promise<HttpFixture> {
     const requestRoot: string = join(root, 'requests');
     const app: FastifyInstance = await createApp({ host: '127.0.0.1', port: 0, dataRoot, webRoot,
       pdfFontPath: resolve('assets/fonts/NanumGothic-Regular.ttf'), audioNormalization: TEST_AUDIO_NORMALIZATION_OPTIONS,
-      codex: { requestRoot, speechVoice: 'Yuna' } }, store, new CodexRequestStore(requestRoot));
+      codex: { requestRoot, speechVoice: 'Yuna' } }, store, new CodexRequestStore(requestRoot, readBuildManifest()));
     fixtures.push({ app, root }); return { app, store, dataRoot, project, other, lockPath: join(dataRoot, sha256Text(project.projectId), 'write.lock') };
   } catch (error: unknown) {
     await store.close(); await rm(root, { recursive: true, force: true }); throw error;
@@ -84,7 +84,8 @@ describe('HTTP Final과 Playhead', (): void => {
     expect(legacy.statusCode).toBe(400);
     expect(legacy.json().error).toMatchObject({ code: 'VISUAL_PLAN_ATOMIC_UPDATE_REQUIRED', mutationBlocked: false });
     expect((await store.read(project.projectId)).revision).toBe(current.revision);
-  });
+  // 네 번의 내구성 있는 저장과 두 번의 거부 응답을 같은 상태에서 확인한다.
+  }, 15_000);
   it('safe_visual_output_uses_actual_playhead', async (): Promise<void> => {
     const value = await fixture(); await value.store.update(value.project.projectId, value.project.revision, (project: Project): Project => withFirstGap(project, 1000), []);
     const path: string = `/api/projects/${value.project.projectId}/output/visual`;

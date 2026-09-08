@@ -1,9 +1,11 @@
+import { migrateGeneratorBuildInput } from '../domain/build-provenance.js';
 import { link, mkdir, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { z } from 'zod';
 import { assertNoErrors, contractError } from '../domain/errors.js';
-import { ProjectSchema } from '../domain/schema.js';
+import { intrinsicIncomingExposure } from '../domain/transition.js';
+import { ProjectSchema, TransitionSchema } from '../domain/schema.js';
 import type { Project } from '../domain/schema.js';
 import { validateProject } from '../domain/validation.js';
 import { importPackage, recoverSourceProject } from '../importers/import-package.js';
@@ -162,10 +164,23 @@ function migrate16To17(input: JsonObject): JsonObject {
     isJsonObject(record) ? { ...record, generatorBuild: null } : record) };
 }
 
+function migrateTransitionInput(input: unknown): unknown {
+  if (!isJsonObject(input)) return input;
+  const transition = TransitionSchema.safeParse(input.transitionOut);
+  return transition.success ? { ...input, transitionOut: { ...transition.data,
+    incomingExposure: transition.data.incomingExposure ?? intrinsicIncomingExposure(transition.data.kind) } } : input;
+}
+
+function migrate17To18(input: JsonObject): JsonObject {
+  if (input.schemaVersion !== '1.7.0' || !Array.isArray(input.generationRecords)) return input;
+  return { ...input, schemaVersion: '1.8.0', shots: Array.isArray(input.shots) ? input.shots.map(migrateTransitionInput) : input.shots, generationRecords: input.generationRecords.map((record: unknown): unknown =>
+    isJsonObject(record) ? { ...record, generatorBuild: migrateGeneratorBuildInput(record.generatorBuild) } : record) };
+}
+
 /** 기존 저장본은 원문·Anchor·Asset을 보존하고 알 수 없는 생성 Build만 null로 이관한다. */
 export function migrateProjectInput(input: unknown): unknown {
   if (!isJsonObject(input)) return input;
-  return migrate16To17(migrate15To16(migrate14To15(migrate13To14(migrate12To13(migrate11To12(migrate10To11(input)))))));
+  return migrate17To18(migrate16To17(migrate15To16(migrate14To15(migrate13To14(migrate12To13(migrate11To12(migrate10To11(input))))))));
 }
 
 /** 저장된 원본 스냅샷에서 데이터를 다시 계산해 편집 가능한 값과 원문을 구분한다. */
