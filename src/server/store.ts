@@ -22,7 +22,7 @@ import { exportProjectJson } from '../exporters/json.js';
 import { sha256Bytes, sha256Text } from '../importers/integrity.js';
 import { parseProject } from '../io/project.js';
 import { SafeStoreFilesystem, sameFileIdentity } from './safe-filesystem.js';
-import type { FileIdentity, SafePathKind } from './safe-filesystem.js';
+import type { SafeFileMetadata, FileIdentity, SafePathKind } from './safe-filesystem.js';
 
 export { collectProjectAssetReferences } from '../domain/asset-references.js';
 export type { ProjectAssetReference } from '../domain/asset-references.js';
@@ -360,6 +360,10 @@ function normalizeJournal(journal: TransactionJournal): NormalizedJournal {
   };
 }
 
+type SummaryIntegrityEntry = { projectId: string; fingerprint: string; status: string; checkedAt: string; file: SafeFileMetadata };
+export type SummaryIntegrityCacheStatistics = { entries: number; hits: number; misses: number };
+const SUMMARY_INTEGRITY_CACHE_LIMIT: number = 1024;
+
 /** Project snapshot과 Asset 파일을 로컬 트랜잭션으로 보존한다. */
 export class ProjectStore {
   readonly #fs: SafeStoreFilesystem;
@@ -376,6 +380,9 @@ export class ProjectStore {
   readonly #activeCreates: Map<string, ActiveCreateState> = new Map<string, ActiveCreateState>();
   readonly #activeUpdateErrors: Map<string, ActiveUpdateError> = new Map<string, ActiveUpdateError>();
   readonly #activeUpdates: Map<string, ActiveUpdateState> = new Map<string, ActiveUpdateState>();
+  readonly #summaryIntegrityCache: Map<string, SummaryIntegrityEntry> = new Map<string, SummaryIntegrityEntry>();
+  #summaryIntegrityHits: number = 0;
+  #summaryIntegrityMisses: number = 0;
   #initialization: Promise<void> | null = null;
   #processInstanceRegistered: boolean = false;
   #closed: boolean = false;
@@ -1557,8 +1564,55 @@ export class ProjectStore {
     }
   }
 
+  summaryIntegrityCacheStatistics(): SummaryIntegrityCacheStatistics {
+    return { entries: this.#summaryIntegrityCache.size, hits: this.#summaryIntegrityHits, misses: this.#summaryIntegrityMisses };
+  }
+
+  #invalidateSummaryIntegrity(projectId: string): void {
+    for (const [key, entry] of this.#summaryIntegrityCache) if (entry.projectId === projectId) this.#summaryIntegrityCache.delete(key);
+  }
+
+  /** 목록·Rail의 통계만 재사용한다. Final과 안전 출력은 #assetForProject를 직접 호출한다. */
+  async #summaryAssetIntegrity(project: Project, asset: Asset): Promise<string> {
+    const key: string = JSON.stringify([project.projectId, asset.id]);
+    try {
+      const path: string = this.#safeAssetPath(project.projectId, asset);
+      if (await this.#fs.kind(path) === 'missing') throw contractError('ASSET_FILE_MISSING', `목록 자산 파일이 없습니다. assetId=${asset.id}, path=${asset.path}`, []);
+      const before: SafeFileMetadata = await this.#fs.fileMetadata(path);
+      const fingerprint: string = sha256Text(JSON.stringify([project.projectId, project.revision, asset, before]));
+      const cached: SummaryIntegrityEntry | undefined = this.#summaryIntegrityCache.get(key);
+      if (cached?.fingerprint === fingerprint) {
+        this.#summaryIntegrityHits += 1; this.#summaryIntegrityCache.delete(key); this.#summaryIntegrityCache.set(key, cached); return cached.status;
+      }
+      this.#summaryIntegrityMisses += 1;
+      let status: string = 'verified';
+      try { await this.#assetForProject(project, asset.id); }
+      catch (error: unknown) { const code: string | null = assetFailureCode(error); if (code === null) throw error; status = code; }
+      const after: SafeFileMetadata = await this.#fs.fileMetadata(path);
+      if (JSON.stringify(before) !== JSON.stringify(after)) { this.#summaryIntegrityCache.delete(key); return status; }
+      this.#summaryIntegrityCache.delete(key);
+      this.#summaryIntegrityCache.set(key, { projectId: project.projectId, fingerprint, status, checkedAt: this.#nowIso(), file: after });
+      while (this.#summaryIntegrityCache.size > SUMMARY_INTEGRITY_CACHE_LIMIT) {
+        const oldest: string | undefined = this.#summaryIntegrityCache.keys().next().value;
+        if (oldest === undefined) throw contractError('SUMMARY_INTEGRITY_CACHE_INCONSISTENT', '목록 캐시의 최대 항목 수를 확인할 수 없습니다.', []);
+        this.#summaryIntegrityCache.delete(oldest);
+      }
+      return status;
+    } catch (error: unknown) {
+      this.#summaryIntegrityCache.delete(key);
+      const mapped: Error = mapStoredAssetIntegrityError(error, project.projectId, asset.id);
+      const code: string | null = assetFailureCode(mapped); if (code === null) throw mapped; return code;
+    }
+  }
+
+  async #summaryIntegrityForProject(project: Project): Promise<Record<string, string>> {
+    const result: Record<string, string> = {};
+    for (const asset of project.assets) result[asset.id] = await this.#summaryAssetIntegrity(project, asset);
+    return result;
+  }
+
   async #summary(project: Project, updatedAt: string): Promise<ProjectSummary> {
-    const integrity: Record<string, string> = await this.#integrityForProject(project);
+    const integrity: Record<string, string> = await this.#summaryIntegrityForProject(project);
     const safeShotIds: Set<string> = new Set(project.shots.filter((shot): boolean => shotFinalVisualIssues(project, shot, integrity).length === 0).map((shot): string => shot.id));
     let framesOutputSafe: number = 0;
     for (const frame of project.frames) {
@@ -1566,16 +1620,16 @@ export class ProjectStore {
       const decision = reviewFrameOutput(project, frame.id, 'program-monitor');
       if (decision.renderMode === 'blocked') continue;
       if (decision.imageAssetId === null) { framesOutputSafe += 1; continue; }
-      try { await this.#assetForProject(project, decision.imageAssetId); framesOutputSafe += 1; }
-      catch (error: unknown) { if (assetFailureCode(error) === null) throw error; }
+      if (integrity[decision.imageAssetId] === 'verified') framesOutputSafe += 1;
     }
     let audioPlayable: number = 0;
     let audioRepairRequired: number = 0;
     for (const cue of project.audioCues) {
       const playable: boolean = reviewAudioPlaybackAt(project, cue.startMs).playable.some((candidate): boolean => candidate.id === cue.id);
       if (cue.assetId === null) continue;
-      try { await this.#assetForProject(project, cue.assetId); if (playable) audioPlayable += 1; }
-      catch (error: unknown) { const code: string | null = assetFailureCode(error); if (code === null) throw error; if (code.startsWith('AUDIO_ASSET_') || code.startsWith('STORED_AUDIO_')) audioRepairRequired += 1; }
+      const code: string = integrity[cue.assetId] ?? 'ASSET_NOT_FOUND';
+      if (code === 'verified' && playable) audioPlayable += 1;
+      if (code.startsWith('AUDIO_ASSET_') || code.startsWith('STORED_AUDIO_')) audioRepairRequired += 1;
     }
     const finalReport: FinalReadinessReport = reviewFinalReadiness(project, integrity);
     const textPlayable: number = project.textCues.filter((cue): boolean => reviewTextPlaybackAt(project, cue.startMs).playable.some((candidate): boolean => candidate.id === cue.id)).length;
@@ -1663,6 +1717,7 @@ export class ProjectStore {
       }
       this.#processInstanceRegistered = false;
     }
+    this.#summaryIntegrityCache.clear(); this.#summaryIntegrityHits = 0; this.#summaryIntegrityMisses = 0;
     this.#closed = true;
   }
 
@@ -1964,6 +2019,7 @@ export class ProjectStore {
       await this.#fault('before-update-cleanup');
       await this.#removeVerifiedTransaction(projectId, transactionId, normalizeJournal(journal));
       await this.#removeRecoveryLock(lock);
+      this.#invalidateSummaryIntegrity(projectId);
       return next;
     } catch (error: unknown) {
       if (isSimulatedCrash(error)) throw error;

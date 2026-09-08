@@ -7,6 +7,7 @@ import { contractError } from '../domain/errors.js';
 import { isMissingFile } from '../io/package.js';
 
 export type FileIdentity = { dev: number; ino: number };
+export type SafeFileMetadata = FileIdentity & { size: number; mtimeMs: number; ctimeMs: number };
 export type SafePathKind = 'missing' | 'file' | 'directory';
 
 function unsafe(path: string, reason: string): never {
@@ -179,6 +180,14 @@ export class SafeStoreFilesystem {
     await this.requireFile(path);
     const metadata = await lstat(path);
     return { dev: metadata.dev, ino: metadata.ino };
+  }
+
+  /** 목록 캐시의 identity 판정용 metadata이며 콘텐츠 무결성 증명을 대신하지 않는다. */
+  async fileMetadata(path: string): Promise<SafeFileMetadata> {
+    await this.requireFile(path);
+    const metadata = await lstat(path);
+    if (!metadata.isFile() || metadata.isSymbolicLink()) unsafe(path, 'metadata target is not a regular file');
+    return { dev: metadata.dev, ino: metadata.ino, size: metadata.size, mtimeMs: metadata.mtimeMs, ctimeMs: metadata.ctimeMs };
   }
 
   async unlinkFile(path: string, expectedIdentity?: FileIdentity): Promise<void> {

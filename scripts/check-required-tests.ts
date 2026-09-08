@@ -3,6 +3,16 @@ import { extname, join } from 'node:path';
 import { contractError } from '../src/domain/errors.js';
 
 const REQUIRED_TEST_NAMES: readonly string[] = [
+  'project_list_reuses_integrity_cache_for_unchanged_asset',
+  'integrity_cache_invalidates_on_inode_change',
+  'integrity_cache_invalidates_on_size_or_mtime_change',
+  'new_asset_does_not_reuse_old_cache_entry',
+  'final_readiness_forces_asset_revalidation',
+  'safe_visual_forces_asset_revalidation',
+  'safe_audio_forces_asset_revalidation',
+  'review_bundle_forces_asset_revalidation',
+  'cached_summary_cannot_make_corrupt_asset_safe',
+
   'status_discovers_external_create_started_after_initialize',
   'status_discovers_external_update_started_after_initialize',
   'status_discovers_lock_not_present_in_memory_map',
