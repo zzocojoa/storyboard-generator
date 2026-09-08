@@ -80,10 +80,17 @@ function shotRow(project: Project, shot: Shot, assetIntegrity: Readonly<Record<s
   ];
 }
 
-export function exportShotCsvForPolicy(input: Project, assetIntegrity: Readonly<Record<string, string>>, policy: OutputPolicy): string {
+export function createCsvProjection(input: Project, assetIntegrity: Readonly<Record<string, string>>, policy: OutputPolicy): string[][] {
   const project: Project = parseProject(input);
   const header: string[] = ['project_id', 'title', 'shot_id', 'segment_id', 'scene_id', 'mode', 'start_ms', 'end_ms', 'duration_ms', 'visual_mode', 'start_time', 'end_time', 'story_location_id', 'visual_location_id', 'action', 'shot_size', 'camera_angle', 'camera_move', 'transition_kind', 'transition_duration_ms', 'transition_note', 'transition_incoming_exposure', 'presence', 'prop_ids', 'source_links', 'source_temporal_anchors', 'source_units', 'information_gates', 'output_safety_status', 'blocked_cue_count', 'blocked_issue_codes', 'audio_events', 'text_events', 'frames', 'placement_information_decisions', 'proposal_origin', 'approval_status', 'locked_fields', 'continuity_before', 'continuity_after', 'output_label'];
-  return `\uFEFF${[header, ...project.shots.map((shot: Shot): string[] => shotRow(project, shot, assetIntegrity, policy))].map((row: string[]): string => row.map(csvCell).join(',')).join('\r\n')}\r\n`;
+  return [header, ...project.shots.map((shot: Shot): string[] => shotRow(project, shot, assetIntegrity, policy))];
+}
+
+export function renderCsvProjection(rows: readonly string[][]): string {
+  return `\uFEFF${rows.map((row: string[]): string => row.map(csvCell).join(',')).join('\r\n')}\r\n`;
+}
+export function exportShotCsvForPolicy(input: Project, assetIntegrity: Readonly<Record<string, string>>, policy: OutputPolicy): string {
+  return renderCsvProjection(createCsvProjection(input, assetIntegrity, policy));
 }
 
 export function exportShotCsv(input: Project): string {

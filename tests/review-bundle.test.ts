@@ -29,7 +29,7 @@ async function fixture(): Promise<{ archive: ReviewArchive; options: ReviewBundl
 describe('읽기 전용 Review Bundle', (): void => {
   it('review_bundle_contains_required_files', async (): Promise<void> => {
     const { archive, options } = await fixture(); await writeReviewBundle(archive, options, []);
-    expect((await readdir(options.output)).sort()).toEqual(['asset-integrity.json', 'asset-manifest.json', 'build-manifest.json', 'bundle-manifest.json', 'final-readiness.json', 'generation-audit.json', 'project.json', 'shots.csv', 'storage-health.json', 'storyboard.pdf']);
+    expect((await readdir(options.output)).sort()).toEqual(['asset-integrity.json', 'asset-manifest.json', 'build-manifest.json', 'bundle-manifest.json', 'final-readiness.json', 'generation-audit.json', 'project.json', 'redaction-manifest.json', 'shots.csv', 'storage-health.json', 'storyboard.pdf']);
   });
   it('review_bundle_manifest_contains_file_hashes', async (): Promise<void> => {
     const { archive, options } = await fixture(); const manifest = await writeReviewBundle(archive, options, []);

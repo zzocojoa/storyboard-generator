@@ -126,6 +126,7 @@ export function httpErrorPolicy(error: Error): HttpErrorPolicy {
   if (code === 'STORE_LOCK_ACQUISITION_FAILED' || code === 'PROCESS_HEARTBEAT_UNAVAILABLE') {
     return { status: 503, category: 'unavailable', scope: 'service', retryable: true, operatorActionRequired: false, mutationBlocked: false };
   }
+  if (['REVIEW_REDACTION_PROFILE_INVALID', 'REVIEW_EXTERNAL_MEDIA_FORBIDDEN', 'REVIEW_REDACTION_PATTERN_INVALID', 'REVIEW_REDACTION_KEY_COLLISION', 'REVIEW_REDACTION_VALUE_INVALID'].includes(code)) return { status: 400, category: 'validation', scope: 'request', retryable: false, operatorActionRequired: false, mutationBlocked: false };
   if (code === 'REVIEW_SOURCE_NOT_QUIESCENT') return { status: 423, category: 'locked', scope: 'project', retryable: true, operatorActionRequired: true, mutationBlocked: false };
   if (code === 'INVALID_MEDIA_RANGE') return { status: 416, category: 'validation', scope: 'request', retryable: false, operatorActionRequired: false, mutationBlocked: false };
   if (['FINAL_OUTPUT_NOT_READY', 'SHOT_VISUAL_COVERAGE_GAP', 'VISUAL_OUTPUT_BLOCKED'].includes(code)) return { status: 409, category: 'conflict',

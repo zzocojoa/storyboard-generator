@@ -16,8 +16,11 @@ import { parseProject } from '../io/project.js';
 import { stableJsonStringify } from '../io/stable-json.js';
 import { SafeStoreFilesystem } from '../server/safe-filesystem.js';
 import { assetFailureCode, mapStoredAssetIntegrityError } from '../server/store.js';
-import { exportShotCsvForPolicy } from './csv.js';
-import { exportProjectPdfAt } from './pdf.js';
+import { createCsvProjection, renderCsvProjection } from './csv.js';
+import { createPdfProjection, createPdfTextProjection, renderPdfProjection } from './pdf.js';
+import type { PdfProjection } from './pdf.js';
+import { redactReviewBuild, redactCsvProjection, redactPdfProjection, redactReviewJson, redactReviewText, redactionManifest, reviewProfile, reviewRedactionPatterns } from './review-redaction.js';
+import type { RedactionEntry, RedactionPattern, ReviewProfile } from './review-redaction.js';
 import { assertReviewStorageQuiescent, assertReviewStorageUnchanged, inspectReviewStorageHealth } from './review-storage-health.js';
 import type { ReviewStorageHealth, ReviewStorageSnapshot } from './review-storage-health.js';
 import { generationIntroductions, summarizeGenerationBuilds } from './generation-build-summary.js';
@@ -34,9 +37,11 @@ export type ReviewArchive = {
 };
 export type ReviewBundleOptions = {
   output: string; maturity: OutputMaturity; fontPath: string; createdAt: string; build: BuildManifest;
+  profile?: ReviewProfile; piiPatterns?: readonly string[]; includeMedia?: boolean;
 };
 export type ReviewFile = { path: string; content: Buffer };
 export type ReviewBundleManifest = {
+  profile: ReviewProfile; bundleName: string; externalImagePolicy: 'placeholder' | 'not-applicable'; embeddedImageRedaction: 'not-performed';
   projectId: string; revision: number; createdAt: string; maturity: OutputMaturity; label: string; finalReady: boolean;
   bundleBuilderBuild: BuildManifest; generationBuildSummary: GenerationBuildSummary;
   build: BuildManifest; sourceHashes: Readonly<Record<string, string>>;
@@ -165,26 +170,51 @@ async function canonicalReviewOutput(output: string): Promise<string> {
 
 /** 검사한 Snapshot과 감사 근거를 별도 신규 디렉터리에 작성하고 원본은 변경하지 않는다. */
 export async function writeReviewBundle(archive: ReviewArchive, options: ReviewBundleOptions, media: readonly ReviewFile[]): Promise<ReviewBundleManifest> {
+  const profile: ReviewProfile = reviewProfile(options.profile);
+  if (profile === 'external' && (options.includeMedia === true || media.length > 0)) throw contractError('REVIEW_EXTERNAL_MEDIA_FORBIDDEN', 'External Profile은 원본 Media를 포함할 수 없습니다. 이미지 검사는 수행하지 않으며 PDF는 Placeholder를 사용합니다.', []);
   await archive.assertStorageUnchanged();
   if (options.maturity === 'final') { assertReviewStorageQuiescent(archive.storageHealth); assertFinalReadiness(archive.readiness); }
   const configuredOutput: string = await canonicalReviewOutput(resolve(options.output));
   if (configuredOutput === archive.sourceRoot || configuredOutput.startsWith(`${archive.sourceRoot}${sep}`)) throw contractError('REVIEW_OUTPUT_INSIDE_SOURCE',
     '읽기 전용 검토 Bundle은 원본 Data Root 밖의 경로에 출력하세요.', []);
   const project: Project = archive.project;
-  const label: string = archive.storageHealth.quiescent ? options.maturity.toUpperCase() : 'DRAFT · SOURCE NOT QUIESCENT';
-  const metadata = { maturity: options.maturity, label, projectId: project.projectId, revision: project.revision };
+  const baseLabel: string = archive.storageHealth.quiescent ? options.maturity.toUpperCase() : 'DRAFT · SOURCE NOT QUIESCENT';
+  const label: string = profile === 'external' ? `${baseLabel} · EXTERNAL REDACTED` : baseLabel;
+  const patterns: RedactionPattern[] = profile === 'external' ? reviewRedactionPatterns(options.piiPatterns ?? []) : [];
+  const redactions: RedactionEntry[] = [];
+  const displayedProjectId = redactReviewText(project.projectId, '/bundle-manifest.json/projectId', patterns); redactions.push(...displayedProjectId.entries);
+  const metadata = { maturity: options.maturity, profile, label, projectId: displayedProjectId.value, revision: project.revision };
+  const sourceHashes: Readonly<Record<string, string>> = Object.fromEntries(Object.entries(canonicalSourceHashes(archive.sourceHashes)).map(([path, hash]): [string, string] => {
+    const redacted = redactReviewText(path, `/bundle-manifest.json/sourceHashes/key:${sha256Text(path)}`, patterns); redactions.push(...redacted.entries); return [redacted.value, hash];
+  }));
+  const jsonArtifact = (path: string, value: unknown): ReviewFile => {
+    if (profile === 'internal') return jsonFile(path, value);
+    const result = redactReviewJson(value, `/${path}`, patterns); redactions.push(...result.entries); return jsonFile(path, result.value);
+  };
+  const csvRows: string[][] = createCsvProjection(project, archive.integrity, { maturity: options.maturity, channel: 'csv-export', exportLabel: label });
+  const csv = profile === 'external' ? redactCsvProjection(csvRows, patterns) : { rows: csvRows, entries: [] }; redactions.push(...csv.entries);
+  const pdfInput: PdfProjection = profile === 'external'
+    ? await createPdfTextProjection(project, { maturity: options.maturity, channel: 'pdf-export', exportLabel: label }, archive.integrity)
+    : await createPdfProjection(project, archive.loadAsset, { maturity: options.maturity, channel: 'pdf-export', exportLabel: label }, archive.integrity);
+  const pdf = profile === 'external' ? redactPdfProjection(pdfInput, patterns) : { projection: pdfInput, entries: [] }; redactions.push(...pdf.entries);
   const references = collectProjectAssetReferences(project);
   const introductions = generationIntroductions(project, archive.versions);
+  const builder = redactReviewBuild(options.build, '/bundle-manifest.json/bundleBuilderBuild', patterns);
+  const buildAlias = redactReviewBuild(options.build, '/bundle-manifest.json/build', patterns); redactions.push(...builder.entries, ...buildAlias.entries);
+  const rawSummary: GenerationBuildSummary = summarizeGenerationBuilds(project, introductions);
+  const generationBuildSummary: GenerationBuildSummary = { ...rawSummary, knownBuilds: rawSummary.knownBuilds.map((entry, index) => {
+    const result = redactReviewText(entry.fingerprint.projectSchemaVersion, `/bundle-manifest.json/generationBuildSummary/knownBuilds/${index}/fingerprint/projectSchemaVersion`, patterns);
+    redactions.push(...result.entries); return { ...entry, fingerprint: { ...entry.fingerprint, projectSchemaVersion: result.value } };
+  }) };
   const files: ReviewFile[] = [
-    jsonFile('project.json', { artifactType: 'storyboard-review-project', artifactVersion: '1.0.0', maturity: options.maturity, label, project }),
-    { path: 'shots.csv', content: Buffer.from(exportShotCsvForPolicy(project, archive.integrity, { maturity: options.maturity, channel: 'csv-export', exportLabel: label })) },
-    { path: 'storyboard.pdf', content: await exportProjectPdfAt(project, options.fontPath, archive.loadAsset,
-      { maturity: options.maturity, channel: 'pdf-export', exportLabel: label }, archive.integrity, options.createdAt) },
-    jsonFile('final-readiness.json', { ...metadata, ...archive.readiness }),
-    jsonFile('generation-audit.json', { ...metadata, records: archive.audit, issues: archive.auditIssues, auditAvailable: archive.auditIssues.length === 0 }),
-    jsonFile('storage-health.json', { ...metadata, ...archive.storageHealth }),
-    jsonFile('asset-integrity.json', { ...metadata, assets: archive.integrity }),
-    jsonFile('asset-manifest.json', { ...metadata, assets: [...project.assets].sort((a: Asset, b: Asset): number => a.id < b.id ? -1 : a.id > b.id ? 1 : 0).map((asset: Asset) => ({ ...asset,
+    jsonArtifact('project.json', { artifactType: profile === 'external' ? 'storyboard-redacted-review-project' : 'storyboard-review-project', artifactVersion: '1.0.0', maturity: options.maturity, profile, label, project }),
+    { path: 'shots.csv', content: Buffer.from(renderCsvProjection(csv.rows)) },
+    { path: 'storyboard.pdf', content: await renderPdfProjection(pdf.projection, options.fontPath, options.createdAt) },
+    jsonArtifact('final-readiness.json', { ...metadata, ...archive.readiness }),
+    jsonArtifact('generation-audit.json', { ...metadata, records: archive.audit, issues: archive.auditIssues, auditAvailable: archive.auditIssues.length === 0 }),
+    jsonArtifact('storage-health.json', { ...metadata, ...archive.storageHealth }),
+    jsonArtifact('asset-integrity.json', { ...metadata, assets: archive.integrity }),
+    jsonArtifact('asset-manifest.json', { ...metadata, assets: [...project.assets].sort((a: Asset, b: Asset): number => a.id < b.id ? -1 : a.id > b.id ? 1 : 0).map((asset: Asset) => ({ ...asset,
       integrity: archive.integrity[asset.id], currentOutputUsage: [
         ...references.filter((reference): boolean => reference.assetId === asset.id && reference.relation !== 'generation-result'),
         ...project.shots.filter((shot): boolean => currentVisualReferenceAssets(project, shot).some((reference: Asset): boolean => reference.id === asset.id))
@@ -193,13 +223,14 @@ export async function writeReviewBundle(archive: ReviewArchive, options: ReviewB
       generation: introductions.filter(({ record }): boolean => record.resultAssetIds.includes(asset.id))
         .map(({ record, introducedRevision }) => ({ recordId: record.id, introducedRevision, generatorBuild: record.generatorBuild, auditArtifact: `generation-audit.json#${encodeURIComponent(record.id)}` })),
     })) }),
-    jsonFile('build-manifest.json', { ...metadata, artifactType: 'storyboard-bundle-builder-build', artifactVersion: '1.0.0', bundleBuilderBuild: options.build }),
+    jsonArtifact('build-manifest.json', { ...metadata, artifactType: 'storyboard-bundle-builder-build', artifactVersion: '1.0.0', bundleBuilderBuild: options.build }),
     ...media.map((file: ReviewFile): ReviewFile => ({ ...file, path: file.path.replaceAll('\\', '/') })).sort((a: ReviewFile, b: ReviewFile): number => a.path < b.path ? -1 : a.path > b.path ? 1 : 0),
   ];
+  files.push(jsonFile('redaction-manifest.json', redactionManifest(profile, label, profile === 'external' ? options.piiPatterns ?? [] : [], redactions)));
   if (new Set(files.map((file: ReviewFile): string => file.path)).size !== files.length
     || files.some((file: ReviewFile): boolean => !isSafePackagePath(file.path))) throw contractError('REVIEW_BUNDLE_PATH_INVALID', 'Bundle 경로는 중복 없는 상대경로여야 합니다.', []);
-  const manifest: ReviewBundleManifest = { ...metadata, createdAt: options.createdAt, finalReady: archive.readiness.finalReady && archive.storageHealth.quiescent,
-    build: options.build, bundleBuilderBuild: options.build, generationBuildSummary: summarizeGenerationBuilds(project, introductions), sourceHashes: canonicalSourceHashes(archive.sourceHashes),
+  const manifest: ReviewBundleManifest = { ...metadata, bundleName: `${displayedProjectId.value} · ${label}`, externalImagePolicy: profile === 'external' ? 'placeholder' : 'not-applicable', embeddedImageRedaction: 'not-performed', createdAt: options.createdAt, finalReady: archive.readiness.finalReady && archive.storageHealth.quiescent,
+    build: buildAlias.build, bundleBuilderBuild: builder.build, generationBuildSummary, sourceHashes,
     files: files.map((file: ReviewFile) => ({ path: file.path, sha256: sha256Bytes(file.content), size: file.content.length, maturity: options.maturity })) };
   await archive.assertUnchanged();
   const parent: string = dirname(configuredOutput);

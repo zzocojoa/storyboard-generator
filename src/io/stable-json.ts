@@ -1,6 +1,6 @@
 import { contractError } from '../domain/errors.js';
 
-type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
 /** 배열의 의미 순서를 보존하고 객체 키만 플랫폼 독립 순서로 정렬한다. */
 function canonicalJson(value: unknown): JsonValue {

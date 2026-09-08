@@ -3,6 +3,18 @@ import { extname, join } from 'node:path';
 import { contractError } from '../src/domain/errors.js';
 
 const REQUIRED_TEST_NAMES: readonly string[] = [
+  'internal_bundle_preserves_full_review_content',
+  'external_bundle_removes_source_snapshot_content',
+  'external_bundle_removes_generation_prompts',
+  'external_bundle_removes_absolute_paths',
+  'external_bundle_redacts_email_and_phone',
+  'external_csv_uses_redacted_projection',
+  'external_pdf_uses_redacted_projection',
+  'external_bundle_rejects_include_media',
+  'external_bundle_uses_image_placeholders',
+  'redaction_manifest_contains_hashes_but_not_raw_values',
+  'external_bundle_does_not_modify_source_project',
+
   'project_list_reuses_integrity_cache_for_unchanged_asset',
   'integrity_cache_invalidates_on_inode_change',
   'integrity_cache_invalidates_on_size_or_mtime_change',
