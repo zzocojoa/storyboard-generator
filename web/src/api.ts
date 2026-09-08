@@ -1,4 +1,5 @@
 import { migrateGeneratorBuildInput } from '../../src/domain/build-provenance.js';
+import { BuildManifestSchema } from '../../src/build-schema.js';
 import { z } from 'zod';
 import { GeneratorBuildProvenanceSchema, IssueSchema, ProjectSchema } from '../../src/domain/schema.js';
 import type { FinalReadinessReport } from '../../src/domain/final-readiness.js';
@@ -16,7 +17,7 @@ const ActiveStorageSchema = z.strictObject({ projectId: z.string(), transactionI
 const InvalidRecoveryMarkerSchema = z.strictObject({ fileName: z.string(), quarantinedPath: z.string(), code: z.string(), message: z.string(), detectedAt: z.string() });
 const ProcessHeartbeatSchema = z.strictObject({ processInstanceId: z.string(), healthy: z.boolean(), lastSuccessAt: z.string().nullable(),
   lastError: z.strictObject({ code: z.string(), message: z.string() }).nullable() });
-const StatusSchema = z.strictObject({ build: GeneratorBuildProvenanceSchema.extend({ journalVersion: z.number(), lockVersion: z.number(), registryVersion: z.number() }), provider: z.literal('codex-app'), totalRequests: z.number().int().nonnegative(), completedRequests: z.number().int().nonnegative(),
+const StatusSchema = z.strictObject({ build: BuildManifestSchema, provider: z.literal('codex-app'), totalRequests: z.number().int().nonnegative(), completedRequests: z.number().int().nonnegative(),
   pendingRequests: z.number().int().nonnegative(), supersededRequests: z.number().int().nonnegative(), failedRequests: z.number().int().nonnegative(), repeatedRequests: z.number().int().nonnegative(),
   averageLatencyMs: z.number().int().nonnegative().nullable(), maximumLatencyMs: z.number().int().nonnegative().nullable(), apiCostUsd: z.null(), costNote: z.string(),
   recentFailures: z.array(RequestFailureSchema), generationInstruction: z.string(), aiVoiceDisclosure: z.string(),
