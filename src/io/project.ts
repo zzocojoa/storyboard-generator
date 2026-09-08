@@ -16,7 +16,7 @@ type JsonObject = { [key: string]: unknown };
 
 export const ReviewProjectEnvelopeSchema = z.strictObject({
   artifactType: z.literal('storyboard-review-project'), artifactVersion: z.literal('1.0.0'),
-  maturity: z.enum(['draft', 'final']), project: z.unknown(),
+  maturity: z.enum(['draft', 'final']), label: z.string().optional(), project: z.unknown(),
 });
 
 function isJsonObject(input: unknown): input is JsonObject {

@@ -124,7 +124,7 @@ const TransactionJournalV3Schema = z.strictObject({
   previousProject: FileProofSchema, nextProject: FileProofSchema, versionFile: FileProofSchema,
   assets: z.array(AssetProofSchema),
 });
-const TransactionJournalSchema = z.union([LegacyTransactionJournalSchema, TransactionJournalV3Schema]);
+export const TransactionJournalSchema = z.union([LegacyTransactionJournalSchema, TransactionJournalV3Schema]);
 type TransactionJournal = z.infer<typeof TransactionJournalSchema>;
 type TransactionJournalV3 = z.infer<typeof TransactionJournalV3Schema>;
 
@@ -138,7 +138,7 @@ const CreateJournalV3Schema = z.strictObject({
   transactionId: z.uuid(), projectId: z.string().min(1), owner: TransactionOwnerSchema, projectDirectoryName: Sha256Schema,
   currentFile: FileProofSchema, versionFile: FileProofSchema,
 });
-const CreateJournalSchema = z.union([LegacyCreateJournalSchema, CreateJournalV3Schema]);
+export const CreateJournalSchema = z.union([LegacyCreateJournalSchema, CreateJournalV3Schema]);
 type CreateJournal = z.infer<typeof CreateJournalSchema>;
 type CreateJournalV3 = z.infer<typeof CreateJournalV3Schema>;
 
@@ -150,11 +150,11 @@ const StoreLockV3Schema = z.strictObject({
   version: z.literal(3), projectId: z.string().min(1), host: z.string().min(1), pid: z.number().int().positive(),
   transactionId: z.uuid(), createdAt: z.iso.datetime(), processInstanceId: z.uuid(), processStartedAt: z.iso.datetime(),
 });
-const StoreLockSchema = z.union([LegacyStoreLockSchema, StoreLockV3Schema]);
+export const StoreLockSchema = z.union([LegacyStoreLockSchema, StoreLockV3Schema]);
 type StoreLock = z.infer<typeof StoreLockSchema>;
 type RecoveryLock = { metadata: StoreLock; path: string; identity: FileIdentity };
 type LockAcquisitionState = { createdByThisCall: boolean; metadata: StoreLock; identity: FileIdentity | null };
-const StorageRecoveryBlockSchema = z.strictObject({
+export const StorageRecoveryBlockSchema = z.strictObject({
   version: z.literal(1), projectId: z.string().min(1), directoryName: Sha256Schema,
   transactionId: z.string().min(1), code: z.string().min(1), message: z.string().min(1), detectedAt: z.iso.datetime(),
 });
@@ -1666,38 +1666,65 @@ export class ProjectStore {
     this.#closed = true;
   }
 
+  async #recordUpdateObservationError(directoryName: string, projectId: string, transactionId: string, error: unknown): Promise<void> {
+    const previous: ActiveUpdateError | undefined = this.#activeUpdateErrors.get(directoryName);
+    const code: string = errorCode(error); const message: string = error instanceof Error ? error.message : String(error);
+    this.#activeUpdateErrors.set(directoryName, previous?.code === code && previous.message === message ? previous
+      : { projectId, transactionId, code, message, detectedAt: this.#nowIso() });
+    await this.#writeRecoveryBlock(directoryName, projectId, transactionId, error);
+  }
+
   async statusSnapshot(): Promise<StorageStatusSnapshot> {
     await this.initialize();
-    const createStates: readonly ActiveCreateState[] = [...this.#activeCreates.values()];
-    for (const state of createStates) {
+    const createCandidates: Map<string, ActiveCreateState> = new Map(this.#activeCreates);
+    for (const entry of await this.#fs.entries(this.#createLocksPath())) {
+      const key: string = /^[a-f0-9]{64}\.lock$/.test(entry.name) ? entry.name.slice(0, -5) : projectKey(`unknown:${entry.name}`);
+      try {
+        const lock: RecoveryLock | null = await this.#readRootCreateLock(entry.name);
+        if (lock !== null) { this.#rememberActiveCreate(lock); createCandidates.set(key, this.#activeCreates.get(key)!); }
+      } catch (error: unknown) {
+        const prior: ActiveCreateState | undefined = this.#activeCreates.get(key);
+        createCandidates.delete(key);
+        await this.#writeRecoveryBlock(key, prior?.projectId ?? `unknown:${key}`, prior?.transactionId ?? 'root-create-lock', error);
+      }
+    }
+    for (const state of createCandidates.values()) {
       try { await this.#refreshActiveCreate(state.projectId); }
       catch (error: unknown) {
         this.#activeCreates.delete(projectKey(state.projectId));
         await this.#writeRecoveryBlock(projectKey(state.projectId), state.projectId, state.transactionId, error);
       }
     }
-    const candidates: Map<string, { projectId: string; transactionId: string }> = new Map(
-      [...this.#activeUpdates.values()].map((state: ActiveUpdateState) => [state.projectId, state]));
+    const candidates: Map<string, { projectId: string; transactionId: string }> = new Map(this.#activeUpdates);
     for (const entry of await this.#fs.entries(this.#fs.root())) {
-      if (!entry.isDirectory() || !/^[a-f0-9]{64}$/.test(entry.name)) continue;
-      if (await this.#fs.kind(this.#fs.path(entry.name, 'write.lock')) === 'missing') continue;
-      const currentPath: string = this.#fs.path(entry.name, 'project.json');
-      if (await this.#fs.kind(currentPath) !== 'file') continue;
-      const current: Project = await this.#readProjectFile(currentPath);
-      if (!candidates.has(current.projectId)) candidates.set(current.projectId, { projectId: current.projectId, transactionId: 'unknown' });
-    }
-    const updateStates = [...candidates.values()];
-    for (const state of updateStates) {
-      try { await this.#refreshActiveUpdate(state.projectId); this.#activeUpdateErrors.delete(projectKey(state.projectId)); }
-      catch (error: unknown) {
-        const key: string = projectKey(state.projectId);
-        const previous: ActiveUpdateError | undefined = this.#activeUpdateErrors.get(key);
-        const code: string = errorCode(error);
-        const message: string = error instanceof Error ? error.message : String(error);
-        this.#activeUpdateErrors.set(key, previous?.code === code && previous.message === message ? previous
-          : { projectId: state.projectId, transactionId: this.#activeUpdates.get(key)?.transactionId ?? state.transactionId, code, message, detectedAt: this.#nowIso() });
-        await this.#writeRecoveryBlock(key, state.projectId, this.#activeUpdates.get(key)?.transactionId ?? state.transactionId, error);
+      if (!/^[a-f0-9]{64}$/.test(entry.name)) continue;
+      let projectId: string = this.#activeUpdates.get(entry.name)?.projectId ?? `unknown:${entry.name}`;
+      let transactionId: string = this.#activeUpdates.get(entry.name)?.transactionId ?? 'unknown';
+      try {
+        if (!entry.isDirectory()) throw contractError('STORE_PATH_UNSAFE', `Project 저장 경로가 디렉터리가 아닙니다. directory=${entry.name}`, []);
+        if (await this.#fs.kind(this.#fs.path(entry.name, 'write.lock')) === 'missing') continue;
+        const [lockResult, projectResult] = await Promise.allSettled([
+          this.#readRecoveryLock(entry.name), this.#readProjectFile(this.#fs.path(entry.name, 'project.json')),
+        ]);
+        const lock: RecoveryLock | null = lockResult.status === 'fulfilled' ? lockResult.value : null;
+        const current: Project | null = projectResult.status === 'fulfilled' ? projectResult.value : null;
+        if (current !== null && projectKey(current.projectId) === entry.name) projectId = current.projectId;
+        const remembered: ActiveUpdateState | undefined = this.#activeUpdates.get(entry.name);
+        if (remembered !== undefined) { projectId = remembered.projectId; transactionId = remembered.transactionId; }
+        if (lock !== null) { this.#rememberActiveUpdate(lock); projectId = lock.metadata.projectId; transactionId = lock.metadata.transactionId; }
+        if (lockResult.status === 'rejected') throw lockResult.reason;
+        if (projectResult.status === 'rejected') throw projectResult.reason;
+        if (lock === null) continue;
+        if (current?.projectId !== projectId) throw contractError('STORE_RECOVERY_REQUIRED', `Project와 lock의 ID가 다릅니다. directory=${entry.name}`, []);
+        candidates.set(entry.name, { projectId, transactionId });
+      } catch (error: unknown) {
+        candidates.delete(entry.name);
+        await this.#recordUpdateObservationError(entry.name, projectId, transactionId, error);
       }
+    }
+    for (const [key, state] of candidates) {
+      try { await this.#refreshActiveUpdate(state.projectId); this.#activeUpdateErrors.delete(key); }
+      catch (error: unknown) { await this.#recordUpdateObservationError(key, state.projectId, this.#activeUpdates.get(key)?.transactionId ?? state.transactionId, error); }
     }
     return {
       activeCreates: this.activeCreates(), activeUpdates: this.activeUpdates(), activeUpdateErrors: [...this.#activeUpdateErrors.values()], recoveryBlocks: this.recoveryBlocks(),

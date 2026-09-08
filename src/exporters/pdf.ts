@@ -1,4 +1,5 @@
 import PDFDocument from 'pdfkit';
+import sharp from 'sharp';
 import { reviewTextOutput } from '../domain/output-policy.js';
 import type { OutputPolicy } from '../domain/output-policy.js';
 import { assertFinalReadiness, reviewFinalReadiness } from '../domain/final-readiness.js';
@@ -28,6 +29,12 @@ function assetErrorCode(error: unknown): string | null {
     ? error.code : null;
 }
 
+/** PDF의 흰 배경에서 합성한 불투명 PNG로 비동기 alpha 삽입의 객체 순서 변화를 제거한다. */
+async function pdfRaster(bytes: Buffer): Promise<Buffer> {
+  return sharp(bytes).flatten({ background: '#ffffff' }).removeAlpha().toColourspace('srgb')
+    .png({ compressionLevel: 9, adaptiveFiltering: false, progressive: false, palette: false }).toBuffer();
+}
+
 async function pageItems(project: Project, loadAsset: AssetLoader, policy: OutputPolicy): Promise<FramePageItem[]> {
   const orderedFrames: StoryboardFrame[] = project.shots.flatMap((shot: Shot): StoryboardFrame[] => project.frames
     .filter((frame: StoryboardFrame): boolean => frame.shotId === shot.id)
@@ -49,7 +56,7 @@ async function pageItems(project: Project, loadAsset: AssetLoader, policy: Outpu
     let integrityCode: string | null = null;
     if (frameIssues.length === 0 && frameDecision.renderBitmap && frameDecision.imageAssetId !== null) {
       try {
-        image = await loadAsset(frameDecision.imageAssetId);
+        image = await pdfRaster(await loadAsset(frameDecision.imageAssetId));
       } catch (error: unknown) {
         integrityCode = assetErrorCode(error);
         if (integrityCode === null || policy.maturity === 'final') throw error;
@@ -68,7 +75,7 @@ async function pageItems(project: Project, loadAsset: AssetLoader, policy: Outpu
 
 function addHeader(document: PDFKit.PDFDocument, project: Project, page: number, totalPages: number, policy: OutputPolicy): void {
   document.fillColor('#101820').fontSize(17).text(project.title, 32, 24, { width: 610, lineBreak: false });
-  document.fillColor('#59636d').fontSize(8).text(`STORYBOARD  ·  ${policy.maturity.toUpperCase()}  ·  ${project.profile.aspectWidth}:${project.profile.aspectHeight}  ·  REV ${project.revision}`, 32, 48, { width: 610, lineBreak: false });
+  document.fillColor('#59636d').fontSize(8).text(`STORYBOARD  ·  ${policy.exportLabel ?? policy.maturity.toUpperCase()}  ·  ${project.profile.aspectWidth}:${project.profile.aspectHeight}  ·  REV ${project.revision}`, 32, 48, { width: 610, lineBreak: false });
   document.fillColor('#101820').fontSize(9).text(`${page} / ${totalPages}`, 760, 31, { width: 50, align: 'right', lineBreak: false });
   document.moveTo(32, 64).lineTo(810, 64).lineWidth(0.8).strokeColor('#c8cdd2').stroke();
 }
@@ -127,7 +134,7 @@ export async function exportProjectPdfAt(project: Project, fontPath: string, loa
   if (policy.maturity === 'final') assertFinalReadiness(reviewFinalReadiness(project, integrity));
   const items: FramePageItem[] = await pageItems(project, loadAsset, policy);
   const totalPages: number = Math.max(1, Math.ceil(items.length / 4));
-  const document = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 0, autoFirstPage: false, info: { Title: `${policy.maturity.toUpperCase()} ${project.title} Storyboard`, Author: 'Storyboard Generator', CreationDate: new Date(createdAt), ModDate: new Date(createdAt) } });
+  const document = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 0, autoFirstPage: false, info: { Title: `${policy.exportLabel ?? policy.maturity.toUpperCase()} ${project.title} Storyboard`, Author: 'Storyboard Generator', CreationDate: new Date(createdAt), ModDate: new Date(createdAt) } });
   document.registerFont('Korean', fontPath);
   document.font('Korean');
   const chunks: Buffer[] = [];

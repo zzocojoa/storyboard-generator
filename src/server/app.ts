@@ -126,6 +126,7 @@ export function httpErrorPolicy(error: Error): HttpErrorPolicy {
   if (code === 'STORE_LOCK_ACQUISITION_FAILED' || code === 'PROCESS_HEARTBEAT_UNAVAILABLE') {
     return { status: 503, category: 'unavailable', scope: 'service', retryable: true, operatorActionRequired: false, mutationBlocked: false };
   }
+  if (code === 'REVIEW_SOURCE_NOT_QUIESCENT') return { status: 423, category: 'locked', scope: 'project', retryable: true, operatorActionRequired: true, mutationBlocked: false };
   if (code === 'INVALID_MEDIA_RANGE') return { status: 416, category: 'validation', scope: 'request', retryable: false, operatorActionRequired: false, mutationBlocked: false };
   if (['FINAL_OUTPUT_NOT_READY', 'SHOT_VISUAL_COVERAGE_GAP', 'VISUAL_OUTPUT_BLOCKED'].includes(code)) return { status: 409, category: 'conflict',
     scope: code === 'VISUAL_OUTPUT_BLOCKED' ? 'request' : 'project', retryable: code === 'FINAL_OUTPUT_NOT_READY', operatorActionRequired: false, mutationBlocked: false };
@@ -459,6 +460,7 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
     const output = await store.safeAudio(projectId, cueId);
     reply.header('Content-Type', output.mimeType).header('Cache-Control', 'no-store').header('Accept-Ranges', 'bytes');
     if (request.headers.range === undefined) return output.content;
+    reply.header('Content-Range', `bytes */${output.content.length}`);
     const range = mediaByteRange(request.headers.range, output.content.length);
     reply.code(206).header('Content-Range', `bytes ${range.start}-${range.end}/${output.content.length}`);
     return output.content.subarray(range.start, range.end + 1);
