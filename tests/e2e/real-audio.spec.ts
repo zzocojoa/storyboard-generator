@@ -51,7 +51,7 @@ async function startAudioApp(): Promise<RunningAudioApp> {
     reply.raw.once('close', (): void => { serverEvents.push({ event: 'close', elapsedMs: performance.now() - (requests.get(request.id) as number),
       status: reply.statusCode, bytes: null }); });
   });
-  app.addHook('onSend', async (request, reply, payload) => {
+  app.addHook('onSend', async (request: FastifyRequest, reply: FastifyReply, payload: unknown): Promise<unknown> => {
     if (requests.has(request.id)) serverEvents.push({ event: 'send', elapsedMs: performance.now() - (requests.get(request.id) as number),
       status: reply.statusCode, bytes: Buffer.isBuffer(payload) ? payload.length : null });
     return payload;
