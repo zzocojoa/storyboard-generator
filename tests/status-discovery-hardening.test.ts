@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import type { Dirent } from 'node:fs';
+import { mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Project } from '../src/domain/schema.js';
 import { sha256Text } from '../src/importers/integrity.js';
 import { ProjectStore } from '../src/server/store.js';
+import { SafeStoreFilesystem } from '../src/server/safe-filesystem.js';
 import { readinessOutline } from './readiness-fixtures.js';
 
 type Fixture = { root: string; store: ProjectStore; project: Project };
@@ -24,6 +26,23 @@ function createPath(value: Fixture, id: string): string { return join(value.root
 function updatePath(value: Fixture): string { return join(value.root, sha256Text(value.project.projectId), 'write.lock'); }
 
 describe('초기화 이후 외부 잠금 탐지', (): void => {
+  it('initialization_recognizes_live_lock_appearing_during_final_snapshot_check', async (): Promise<void> => {
+    const value = await fixture(); const directory: string = await realpath(join(value.root, sha256Text(value.project.projectId)));
+    const observer: ProjectStore = new ProjectStore(value.root);
+    const entries = SafeStoreFilesystem.prototype.entries;
+    let appeared: boolean = false;
+    const spy = vi.spyOn(SafeStoreFilesystem.prototype, 'entries').mockImplementation(async function (this: SafeStoreFilesystem, path: string): Promise<Dirent[]> {
+      if (path === directory && !appeared) { appeared = true; await lock(updatePath(value), value.project.projectId, process.pid); }
+      return entries.call(this, path);
+    });
+    try {
+      await observer.initialize(); expect(appeared).toBe(true);
+      expect(observer.recoveryBlocks()).toEqual([]);
+      expect(observer.activeUpdates()).toContainEqual(expect.objectContaining({ projectId: value.project.projectId }));
+      await expect(readFile(updatePath(value))).resolves.toBeInstanceOf(Buffer);
+      expect((await observer.read(value.project.projectId)).revision).toBe(value.project.revision);
+    } finally { spy.mockRestore(); await observer.close(); }
+  });
   it('status_discovers_external_create_started_after_initialize', async (): Promise<void> => {
     const value = await fixture(); const transactionId: string = await lock(createPath(value, 'new-project'), 'new-project', process.pid);
     expect((await value.store.statusSnapshot()).activeCreates).toContainEqual(expect.objectContaining({ projectId: 'new-project', transactionId }));

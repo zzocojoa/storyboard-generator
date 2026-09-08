@@ -1004,7 +1004,15 @@ export class ProjectStore {
       this.#activeUpdateErrors.delete(directoryName);
       this.#recordRecovery({ projectId, transactionId: lock.metadata.transactionId, outcome: 'stale-lock-removed' });
     }
-    await this.#verifyCurrentSnapshot(projectId);
+    try { await this.#verifyCurrentSnapshot(projectId); }
+    catch (error: unknown) {
+      if (errorCode(error) !== 'STORE_RECOVERY_REQUIRED') throw error;
+      // 마지막 잠금 확인 뒤 시작한 외부 Writer는 손상 상태로 기록하지 않는다.
+      const lateLock: RecoveryLock | null = await this.#readRecoveryLock(directoryName);
+      if (lateLock === null || !await this.#ownerIsActive(lateLock)) throw error;
+      this.#rememberActiveUpdate(lateLock);
+      await this.#readConsistentCurrentUnderLock(projectId, lateLock);
+    }
     return projectId;
   }
 

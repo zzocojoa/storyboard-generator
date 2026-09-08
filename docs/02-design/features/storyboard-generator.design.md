@@ -208,7 +208,7 @@ Summary Integrity Cache는 Project revision·Asset metadata와 실제 file dev/i
 3. 컷·시작/키/끝 프레임·독립 트랙·전환 생성과 편집·잠금, Text Mapping 상태 기계·Source Temporal Anchor·동적 Information Gate, JSON/CSV/PDF 보존: 구현 및 자동 검증됨.
 4. 로컬 저장/API·Mapping 편집 UI, 프로젝트 분리·재열기·원본 차이: 구현 및 자동 검증됨.
 5. 시각 기준, Codex App 컷·이미지·음성 요청과 결과 반영, 재생, PDF 출력: 구현 및 자동 검증됨. 합성 범용 사례와 PRJ-007 `SEG-008`의 실제 생성 흐름을 확인했다.
-6. 두 가지 이상의 구성으로 회귀·브라우저 검증, 전체 요구사항 감사: 48개 파일의 1,053개 단위·통합 테스트와 Chromium E2E 15개로 합성 자료와 초기 회귀 자료의 가져오기·편집·출력을 검증한다. 정확한 이름의 필수 계약 255개는 Proposal Frame·Visual Mode, 주기 Heartbeat, Historical Audit, Marker Quarantine, Asset Integrity, 열린 Placement, Timecode, Status Refresh와 브라우저 흐름을 포함한다. 격리된 실제 HTTP smoke는 동적 포트에서 정상 출력과 409·423·503을 검증하고 모든 임시 자원을 정리한다. PRJ-007 Golden은 실제 48,000Hz 2초 WAV를 `UNIT-045`의 849,000–851,000ms J-cut에 연결하고 Generation Record 불변성도 확인한다. 전체 분량의 시각·낭독 검토는 남아 있다.
+6. 두 가지 이상의 구성으로 회귀·브라우저 검증, 전체 요구사항 감사: 48개 파일의 1,054개 단위·통합 테스트와 Chromium E2E 15개로 합성 자료와 초기 회귀 자료의 가져오기·편집·출력을 검증한다. 정확한 이름의 필수 계약 256개는 Proposal Frame·Visual Mode, 주기 Heartbeat, Historical Audit, Marker Quarantine, Asset Integrity, 열린 Placement, Timecode, Status Refresh와 브라우저 흐름을 포함한다. 격리된 실제 HTTP smoke는 동적 포트에서 정상 출력과 409·423·503을 검증하고 모든 임시 자원을 정리한다. PRJ-007 Golden은 실제 48,000Hz 2초 WAV를 `UNIT-045`의 849,000–851,000ms J-cut에 연결하고 Generation Record 불변성도 확인한다. 전체 분량의 시각·낭독 검토는 남아 있다.
 
 필수 자동 검증은 원문 100% 보존과 단위 연결, 영상 시간 공백·중복, 잘못된 ID·구간 소유권, 미지원 버전·손상 해시, 공개 시점 위반, 잠근 필드 변경, 프로젝트 혼입, 저장·출력 정합성이다. 실제 제작 사례 수치는 fixture에만 둔다. 패널·반전이 없는 다른 분량의 프로젝트와 원본 ID가 겹치는 프로젝트도 검증한다.
 

@@ -97,7 +97,7 @@ JSON은 기준 규칙과 모든 재계산 입력을 보존한다. CSV는 `source
 
 기존 정보 공개 회귀를 유지하면서 Placement Mapping, Text 권한 복구·삭제, Canonical Cue identity, Frame 자산 무효화와 네 안전 출력 채널, PRJ-007 Source fidelity 검사를 추가했다.
 
-현재 로컬 자동 검사는 48개 파일의 1,053개 테스트, Chromium E2E 15개다. 필수 계약 이름 255개의 누락·중복·skip·only는 0이다. 실제 Audio 6개와 주기 Heartbeat 5개, Bundle Hardening 13개를 각각 3회 반복했다. 추가 CLI Profile·오류 계약도 임시 저장소에서 검사한다. 처음 재현한 수동 Coverage 우회, Gap 승인, Frame 1ms 해석과 Hold의 이전 초반 Frame 재사용을 차단했다. 추가 회귀는 Text Draft/Final, 실제 Playhead·전환 Gate, 명시 Frame 충돌, 최초 Unit 공개 순서, Canonical 감사, Active Update 오류, Build와 원본 불변 Bundle을 검증한다.
+현재 로컬 자동 검사는 48개 파일의 1,054개 테스트, Chromium E2E 15개다. 필수 계약 이름 256개의 누락·중복·skip·only는 0이다. 실제 Audio 6개와 주기 Heartbeat 5개, Bundle Hardening 13개를 각각 3회 반복했다. 추가 CLI Profile·오류 계약도 임시 저장소에서 검사한다. 처음 재현한 수동 Coverage 우회, Gap 승인, Frame 1ms 해석과 Hold의 이전 초반 Frame 재사용을 차단했다. 추가 회귀는 Text Draft/Final, 실제 Playhead·전환 Gate, 명시 Frame 충돌, 최초 Unit 공개 순서, Canonical 감사, Active Update 오류, Build와 원본 불변 Bundle을 검증한다.
 
 PRJ-007 회귀 fixture는 Scene 12, Segment 32, screenplay Unit 79, Panel Turn 16, Text Placement 25, 1,500,000ms와 UNIT-045의 849,000–851,000ms J-cut·PCM16 mono 48,000Hz 2초 WAV를 유지한다. 실제 로컬 저장본 4개는 자동 수정 없이 별도 Bundle로 재검증했다. revision 283만 현재 타임라인의 Final 조건을 통과하며 이 저장본의 기존 UNIT-045는 850,000–855,000ms, 5초 within-segment SFX다. 회귀 fixture와 기존 제작 결정의 차이를 숨기거나 원본을 자동 수정하지 않는다. 개별 수치와 실행 로그·CI 확인 위치는 Report에 기록한다.
 

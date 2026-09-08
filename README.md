@@ -161,7 +161,7 @@ CSV에서 같은 오디오 이벤트가 여러 컷 행에 나타나면 하나의
 npm run check
 ```
 
-이 명령은 서버·도메인 타입 검사, 웹 타입 검사, 자동 테스트, 필수 테스트 이름, 생성 스키마 정합성, 운영 웹 빌드를 순서대로 실행한다. 현재 단위·통합 검사는 48개 파일의 1,053개 테스트이며 Playwright Chromium 시나리오 15개를 별도로 실행한다. 필수 계약 이름 255개의 누락·중복·skip·only는 모두 0이다. 실제 `HTMLAudioElement` 6개 시나리오는 WAV 디코딩, metadata, Seek, Cue 종료, Monitor 종료와 Project 전환 정리를 검사하며 Audio API를 대체하지 않는다. PRJ-007 Golden은 12개 Scene, 32개 Segment, 79개 screenplay Source Unit, 16개 Panel Turn, Text Placement 25개, 1,500,000ms와 원문 불변을 확인한다. `UNIT-045` 회귀 fixture는 48,000Hz mono PCM16 WAV 2,000ms와 849,000–851,000ms J-cut을 유지한다.
+이 명령은 서버·도메인 타입 검사, 웹 타입 검사, 자동 테스트, 필수 테스트 이름, 생성 스키마 정합성, 운영 웹 빌드를 순서대로 실행한다. 현재 단위·통합 검사는 48개 파일의 1,054개 테스트이며 Playwright Chromium 시나리오 15개를 별도로 실행한다. 필수 계약 이름 256개의 누락·중복·skip·only는 모두 0이다. 실제 `HTMLAudioElement` 6개 시나리오는 WAV 디코딩, metadata, Seek, Cue 종료, Monitor 종료와 Project 전환 정리를 검사하며 Audio API를 대체하지 않는다. PRJ-007 Golden은 12개 Scene, 32개 Segment, 79개 screenplay Source Unit, 16개 Panel Turn, Text Placement 25개, 1,500,000ms와 원문 불변을 확인한다. `UNIT-045` 회귀 fixture는 48,000Hz mono PCM16 WAV 2,000ms와 849,000–851,000ms J-cut을 유지한다.
 
 브라우저와 실제 HTTP 검증은 다음 명령을 사용한다. `npm run smoke`는 임시 data/request root와 동적 포트를 만들고 종료 시 listener, Worker, timer와 임시 파일을 정리한다.
 

@@ -32,6 +32,7 @@ const REQUIRED_TEST_NAMES: readonly string[] = [
   'status_continues_reporting_healthy_projects',
   'status_does_not_delete_live_external_lock',
   'recovered_external_lock_does_not_reappear',
+  'initialization_recognizes_live_lock_appearing_during_final_snapshot_check',
   'invalid_audio_range_returns_416_with_content_range',
   'unsatisfiable_suffix_range_returns_416_with_full_size',
   'multi_range_request_is_rejected_with_content_range',
