@@ -282,6 +282,13 @@ flowchart LR
 10. Frame 공개 시점과 표시 구간을 분리하고 모호한 기존 구간은 추측하지 않는다. 생성 결과는 당시 Build와 감사 자료를 연결하며 기존 Build 불명 상태를 보존한다.
 11. 기존 저장본은 원본·전체 Version·Asset·요청 해시를 바꾸지 않고 별도 검토 디렉터리에 재검증한다. 실제 Chromium의 WAV Decode·Metadata·Seek·Cue 종료·정리를 확인한다. 세부 계약과 결과는 Design·Report를 기준으로 유지한다.
 
+11. Mode와 Source Links는 원자 변경하고 성공은 revision 하나, 실패는 원본 불변으로 확인한다. 최초 시각 공개 순서는 실제 Temporal Anchor의 Unit별 최소 시각으로 검사한다.
+12. 생성 계약은 Skill·AGENTS·Schema·Runtime Voice까지 Fingerprint에 포함하고 HEAD와 dirty 상태를 분리한다. 이전 Build Pending은 감사 이력을 보존한 Superseded로 구분한다.
+13. Review Final은 저장소 Quiescence를 검사하고 Draft는 저장 문제를 표시한다. 열거 순서가 달라도 같은 입력·Build·시각의 Bundle checksum이 일치해야 한다.
+14. Transition 종류별 실제 Incoming 노출 시점에서 Gate를 검사하며 custom 미정 정책은 차단한다. Status는 초기화 뒤 생긴 외부 Lock을 발견한다.
+15. Bundle Builder와 Asset Generation Build를 구별한다. External 출력은 원문·Prompt·경로·지정 PII를 모든 출력 Projection에서 치환하고 미검사 이미지는 Placeholder로 제한한다.
+16. 목록 Cache는 안전 출력의 파일 재검증을 대체하지 않는다. Invalid Range는 전체 크기를 알리는 416이다. 운영 원본·Version·Asset·Request 해시가 검증 전후 같아야 한다.
+
 ### 9.2 사람이 확인할 기준
 
 - 대표 컷에서 인물, 의상, 공간 방향, 주요 소품이 연결된다.
@@ -351,7 +358,7 @@ flowchart LR
 
 다음 PDCA 작업은 [구현 일치 분석](../../03-analysis/storyboard-generator.analysis.md)의 남은 제작 품질 검토를 계획서 9.3절의 대표 예외로 확대하는 것이다.
 
-문서·코드 상태: Schema 1.7.0의 Final Readiness·Playhead 출력·Build 감사·Review Bundle이 구현돼 있다. 자동 검사와 실제 브라우저·HTTP·로컬 저장본 결과는 [완료 보고서](../../04-report/storyboard-generator.report.md)에 기록한다. PDCA 외부 상태 도구 호출이나 상태 등록을 완료 근거로 사용하지 않는다. 다음 범위는 사람의 제작 품질 검토다.
+문서·코드 상태: Schema 1.8.0의 Final Readiness·Playhead 출력·원자 Visual Plan·시간 기반 최초 공개·Build Fingerprint·Request Supersede·읽기 전용 Storage Health·결정적 Internal/External Review Bundle·외부 Lock Status·목록 Integrity Cache·Range 416이 구현돼 있다. 자동 검사와 실제 브라우저·HTTP·로컬 저장본 결과는 [완료 보고서](../../04-report/storyboard-generator.report.md)에 기록한다. PDCA 외부 상태 도구 호출이나 상태 등록을 완료 근거로 사용하지 않는다. 다음 범위는 사람의 제작 품질 검토다.
 
 [S01]: </Users/beatlefeed/Documents/ChatGPT/유튜브_V2/PROJECTS/PRJ-007/09_PRODUCTION/broadcast_readable_script.md>
 [S02]: </Users/beatlefeed/Documents/ChatGPT/유튜브_V2/PROJECTS/PRJ-007/09_PRODUCTION/reenactment_character_script.md>
