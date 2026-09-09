@@ -211,3 +211,132 @@ CI는 기존 check 명령·실패 Exit·check → e2e 의존성을 유지한다.
 각 독립 TMPDIR의 잔존 이름과 종료 상태는 `experiment-results.json`에 보관한다. 원본 전체 시험에는 export-io의 정리 Hook 없는 두 임시 Root와 Node/tsx/Vite 캐시가 남는다. 첫 잘못된 TMPDIR 실행에는 추가 디렉터리가 남았으며 정확한 재생성 주체는 unknown이다. 이는 원본 Ubuntu 사건의 Writer 증거가 아니다. 해당 실행 Process 종료와 경로를 확인한 뒤 조사 소유 Root만 정리했다. `root-cleanup.json`의 독립 상위 Root 10개는 모두 삭제 후 부재까지 확인했다. 안전한 종료를 확인하지 못해 최종 보존한 Test Root는 없다. 원본 로그·진단 JSON 등 감사 자료는 조사 디렉터리에 유지했다. 제한 실패 회귀가 의도적으로 보존한 Root는 Barrier를 풀고 본문 종료를 확인한 뒤 부모 시험에서 정리한다.
 
 이번 범위에서 재현한 Writer 정리 순서 및 Child close 결함의 미수정 항목은 없다. 대상 밖 export-io의 두 임시 Root 자체 정리 부재는 제품 결함이나 최초 timeout의 원인으로 분류하지 않고, 조사 실행 종료 후 상위 Root에서 정리했다. 잔여 판단은 최초 I/O·Process·Lock 지연의 원인, 원본 ENOTEMPTY 당시 잔존 파일과 Writer 소유자, Hosted 환경에서의 수정 검증이다. 재발 시 첫 `test-aborted` 이벤트의 진행 Operation과 `cleanup-start`/`operation-settled`/`root-remove-start` 순서를 먼저 대조한다. 그 증거에서 지연 위치가 좁혀진 경우에만 해당 경계의 fsync·IPC 시간을 추가 측정한다. 기능 확장이나 저장 시스템 재설계는 이 조사 결과에서 제안하지 않는다.
+
+## PR #7 후속 timeout 단계 조사
+
+이 절은 위 원본 사건과 별개인 [PR #7](https://github.com/zzocojoa/storyboard-generator/pull/7)의 후속 조사다. 작업 시작 Branch는 `codex/storyboard-ci-reproducibility`, 로컬·원격 Head는 `a853449f6118a93cbd46f15171242d2744270416`, PR Base는 `781d9f1478f5fbb830d7f84f3df403505520f1a2`였다. PR은 OPEN·미병합이었다. 이번 실행 코드 Commit은 `71de79f9353873004e20404e79338c91f38e23fe`다. 이후 문서 변경은 실행 코드와 구분한다.
+
+timeout 이후 진행 중 작업과 임시 Root 삭제가 경합하지 않도록 정리 계약을 보강했다. 원본 ENOTEMPTY의 실제 Writer와 최초 timeout 원인은 미확정이다.
+
+### 사건과 비교 기준
+
+| 사건 | 실제 checkout / 최초 오류 | 결과 및 관찰 한계 |
+|---|---|---|
+| 원본 34311587985 / 1 | `781d9f1`, 앞 절의 5개 Test 본문 timeout | 1,182 성공·5 실패·오류 6개. ENOTEMPTY Writer와 최초 지연의 단계 시간 미확정 |
+| [PR #7 34319353256 / 1](https://github.com/zzocojoa/storyboard-generator/actions/runs/34319353256/attempts/1) | `2b684eaa4f56e8cd0b9031aa465a9dbfe5adc102`, 아래 두 Test 본문 5,000ms timeout | 1,194 성공·2 실패·오류 3개, 260.41초. E2E·Audio 미실행 |
+| [PR #7 34319353256 / 2](https://github.com/zzocojoa/storyboard-generator/actions/runs/34319353256/attempts/2) | 같은 checkout, 최초 오류 없음 | 1,196 성공, 111.58초. E2E 16개 24.4초, 별도 Audio/RAF 7개 × 3회 21개 38.8초. 성공 lifecycle은 당시 업로드하지 않음 |
+
+실패 대상은 원본 check 로그와 Artifact의 Vitest JSON에서 직접 확인한 `apply_recovery_lock_order_does_not_deadlock`, `apply_claim_is_shared_by_proposal_image_and_speech`다. `review_bundle_source_project_remains_unchanged_during_race`, `codex_generation_records_remain_append_only`를 이 Run의 실패로 기록한 이전 대화 내용은 잘못된 것이다.
+
+복구 Test에는 timeout 뒤 Child `event=paused` 대기 실패가 추가로 보고됐다. Lifecycle상 timeout 취소 → 소유 Child 종료 → 대기 rejection 순서다. 이 후속 오류를 최초 Child 장애나 내부 Lock timeout으로 분류하지 않는다. 연쇄 적용 Test의 최초 오류는 본문 timeout 하나이며 Hook timeout·ENOTEMPTY는 보고되지 않았다. 최종 Reporter 요약 시각을 실제 Test 시작 시각으로 사용하지 않았다.
+
+PR #7 두 Attempt의 checkout 부모는 위 Base와 `a853449`이며 Tree는 `674574da00c8a5941a98839405d8a853e3cb300c`다. 두 Attempt 모두 Ubuntu 24.04.4, 이미지 `20260831.293.1`, Node 24.20.0, npm 11.19.0, Vitest 5.0.0이다. 원본 사건의 Attempt 2 이미지 변경과 혼합하지 않는다. 당시 실제 Host 부하·디스크 지연·fsync 시간은 unknown이다.
+
+[실패 Artifact 10091384713](https://github.com/zzocojoa/storyboard-generator/actions/runs/34319353256/artifacts/10091384713)을 실제 다운로드해 checkout·환경·설정 Hash·Vitest JSON·lifecycle·timeout Probe 원본·숨김 Build manifest를 확인했다. Build의 checkout·Source/Generation/Runtime 지문도 대조했다. ZIP digest는 `bf7d09cec66cab47ddbf419f57c525951c19d662e3c570b3dfda16454809da05`다. 실패 Artifact 업로드 설정의 존재와 실제 검증을 구분한다.
+
+### 유한 실험 계획과 측정 환경
+
+새 실행 전에 `.local/ci-investigation/pr-7-followup/experiment-plan.json`에 기존 Attempt 비교 → 현재 코드의 두 Test 기준 실행 1회 → 필요할 때만 동일 조건 비교 최대 1회 → 수정의 RED/GREEN → 관련 Suite → check → E2E → 실제 Audio 반복 순서를 기록했다. 변경 없는 추가 비교는 필요하지 않아 실행하지 않았다. 원본 Run을 다시 실행하지 않았고 자동 Retry를 추가하지 않았다.
+
+새 로컬 환경은 macOS 15.7.3 / Darwin 24.6.0 arm64, Node 24.6.0, npm 11.5.1, Vitest 5.0.0이다. 일반 timeout 5,000ms·Worker 2·retry 0을 유지했다. 설치 Vitest의 `resolved.testTimeout ??= ... : 5e3`와 실제 설정을 대조했다. E2E의 기존 Worker 1·retry 0도 유지했다. 기준 실행은 두 Test만 선택했으므로 동시에 두 파일을 실행한 전체 check와 같은 부하 조건은 아니다.
+
+각 실행의 `environment.json`·`result.json`에는 실제 SHA, dirty 상태, 명령, 시작·종료, OS·Node/npm/Vitest, Workflow·lockfile·Vitest 및 Test 파일 Hash, Process Group 종료와 임시 Root 정리를 기록했다. 사용자 미추적 파일 때문에 시작부터 worktreeDirty는 true이며 generationInputsDirty는 false다. 조사 Root는 저장소 밖 `/private/tmp/storyboard-pr7-followup-*`, 로그는 삭제 Root 밖 조사 디렉터리다. 원본 증거 177개 파일의 SHA-256을 별도로 보존해 변경 여부를 대조한다. Host·fsync 미계측 값을 0으로 기록하지 않는다.
+
+### 지연 구간
+
+아래 값은 해당 부모 Process 내부의 단조 시계 차이(ms)다. `≈`는 기존 범용 Operation 이벤트와 호출 순서로 묶은 구간이며 새 의미 단계 계측과 구분한다. 서로 다른 Process의 단조 시각을 빼지 않았다. Attempt 2의 성공 단계 기록은 없으므로 전체 Test 시간(복구 1,816ms, 연쇄 적용 1,049ms)만 비교 가능하다.
+
+| Test / 단계 | PR #7 Attempt 1 | 로컬 기준 실행 | 수정 후 관련 Suite | 판단 |
+|---|---:|---:|---:|---|
+| 복구: Store.create | 1,888.37 | 272.47 | 230.02 | Fixture 준비 지연 관찰; 내부 fsync 시간 아님 |
+| 복구: 초기 이미지 Request.create | 530.88 | 94.10 | 73.44 | 중단시킬 실제 Apply에 필요한 요청, 유지 |
+| 복구: Apply Child start→중단 Barrier | 1,739.32 | 439.87 | 387.39 | Child 작업·IPC·Lock을 포함한 부모 관찰 시간 |
+| 복구: committedCrash 전체 준비 | ≈4,413 | ≈1,202 | 1,015.48 | 첫 실패는 복구 Child 생성 전에 대부분의 예산을 사용 |
+| 복구: 복구 Child ready | ≈225 | ≈278 | 280.91 | PID로 Child 이벤트와 연결 |
+| 복구: reconciliation Barrier 대기 | 366.05에서 timeout; 423.15 뒤 종료 오류 | 105.58 | 104.75 | 실패 시 Barrier 미도달, deadlock 증명 아님 |
+| 복구: 소유 중 Project 편집 | 미실행 | 실행됨 | 186.09 | 후속 편집 보존 Assertion 유지 |
+| 복구: release→결과·exit | 미실행 | 실행됨 | 121.93 | stdio close는 별도 소유 정리에서 대기 |
+| 복구: 원래 resultRevision·편집 검사 | 미실행 | 실행됨 | 25.08 | 원래 resultRevision=1, 이후 Project 일치 확인 |
+| 연쇄: Store.create | 862.50 | 293.09 | 310.34 | 상위 저장 API 시간 |
+| 연쇄: 사용하지 않는 초기 이미지 요청 | 406.79 | 73.32 | 제거됨 | 추가 Request가 존재하는 RED 확인 뒤 제거 |
+| 연쇄: proposal 요청 / 적용 | 118.51 / 1,541.85 | 71.02 / 417.09 | 69.14 / 344.40 | 실제 저장·Revision 전이 유지 |
+| 연쇄: image 요청 / 적용 | 409.05 / 1,227.98 | 95.61 / 403.38 | 65.85 / 412.75 | 같은 Project의 다음 Revision |
+| 연쇄: speech 입력 / 요청 | 0.24 / 496.61 | 실행됨 / 74.25 | 0.70 / 74.80 | 첫 실패는 요청 생성 중 5초 초과 |
+| 연쇄: speech 적용 | 미실행 | 437.39 | 471.16 | 실제 WAV 검사·저장 포함 |
+| 연쇄: 각 Request·Receipt 검사 | 미실행 | 실행됨 | 39.74 / 39.31 / 34.44 | kind·requestId·startRevision·committedRevision 유지 |
+| 연쇄: proposal / speech replay | 미실행 | 57.16 / 59.39 | 60.33 / 55.92 | 동일 Project, Record 3개·Asset 2개 유지 |
+
+연쇄 Test의 PCM 입력은 이미 프로젝트 형식인 48kHz·PCM16이다. `inspectAudioBytes`의 실제 소스와 계측에서 `normalizer.normalize` 호출이 없음을 확인했다. 따라서 이 경로의 Worker 변환은 미실행이며 WAV 검사·복사 시간은 speech 적용 안에 포함돼 별도로 측정하지 않았다. 이를 Worker 변환 성능 검증으로 보고하지 않는다. 필요할 때 호출되는 `chain.speech-normalization.normalize` 경계는 같은 Scope에서 관찰하도록 연결했다.
+
+첫 복구 Test의 timeout은 5,004.19ms, 본문 settle는 5,061.35ms, Child close는 5,061.45ms, 마지막 Store close는 5,112.83ms, Root 삭제 시작은 5,112.91ms다. 연쇄 Test는 5,001.03ms timeout 뒤 진행 중 Request가 5,069.23ms에 정산되고 Root 삭제는 5,071.40ms에 시작했다. 두 실패를 포함한 152개 Scope의 Root 82개 모두 진행 Operation·등록 자원 0에서 삭제됐다. 정리 안전성의 증거이며 최초 지연 원인 해결의 증거는 아니다.
+
+| 가설 | 분류 | 결론 |
+|---|---|---|
+| 여러 저장·Child 단계의 누적 비용이 5초를 초과 | 관찰됨 | 실패 지점을 위 표까지 좁힘; Host/파일 시스템 내부 원인은 미확정 |
+| 연쇄 Fixture의 최초 이미지 요청이 검증에 필요 | 반증됨 | 삭제 전 요청 목록이 1개여서 RED, 삭제 후 전체 연쇄·Receipt·replay 검사 통과 |
+| 불필요한 요청을 만들지 않는 Fixture 계약 | 통제 실험으로 확인됨 | 새 빈 Request 목록 Assertion의 RED/GREEN. timeout 제거의 인과 실험은 아님 |
+| 미등록 Audio Normalizer가 첫 두 timeout을 유발 | 미확정, 근거 없음 | 첫 실패는 speech 적용 전이며 기존 PCM 입력은 Worker 변환을 호출하지 않음 |
+| Runner I/O·fsync 또는 Lock 자체 timeout이 근본 원인 | 미확정 | 상위 API 시간과 본문 timeout만으로 확정하지 않음 |
+| Test 분할·추가 제품 로직 수정이 필요 | 조건 불충족으로 수정 불필요 | 같은 Project 연쇄와 복구 소유 중 편집 시나리오 유지 |
+
+### G1–G5 처리와 변경 계약
+
+| 항목 | 기반영 여부 | 이번 처리 | 검증·남은 사항 |
+|---|---|---|---|
+| G1 사건·기준 고정 | 과거 Run 원본 보존 기반영 | Run/Attempt/checkout/정확한 Test 목록·오류 순서를 분리 | 원본 로그·Vitest JSON·Build·부모 Commit 직접 대조 |
+| G2 지연 구간 | Store·Request·Child 범용 계측 기반영 | 두 Test의 의미 단계 시작·종료·실패, Child PID 연결, 성공 진단 보존 | 성공 Attempt 2의 과거 단계는 복원 불가; Host·fsync 미계측 |
+| G3 증거 기반 개선 | Scope 정산·close 기반영 | 불필요 요청 제거, Test 소유 Normalizer 한 개 재사용·종료 확인 | 제품 결함 증거 없어 src·Coordinator·Schema 변경 없음 |
+| G4 계약 보존 | 취소·Writer·Root·stdio close·Probe 회귀 기반영 | phase 관찰이 Transaction 권한을 만들지 않음을 기존 취소·중첩 Writer 회귀에 연결 | 일반 제한·격리·Assertion·실제 저장·필수 이름 유지 |
+| G5 결과와 원인 구분 | 원본 원인 미확정 명시 기반영 | 새 로컬/원격 결과와 조사 한계를 이 절·PR 본문에서 구분 | 통과를 간헐 실패 완전 해결로 표현하지 않음 |
+
+| 파일 | 변경 이유 / 보존한 계약 | 회귀 근거 |
+|---|---|---|
+| `tests/apply-consistency.test.ts` | Project Fixture와 이미지 요청 Fixture 분리, 두 Test의 단계 구분, Normalizer 소유 종료. 같은 Project의 proposal→image→speech·Revision·Apply Intent·Receipt·replay·Record/Asset 검사 보존 | 두 우선 Test, 초기 요청 목록 RED/GREEN, 관련 Apply Suite |
+| `tests/owned-test-scope.ts` | `phase`는 관찰만 하며 진행 작업의 ALS 권한·정산 순서를 변경하지 않음 | 취소 후 새 쓰기 차단, 중첩 Writer 정산 |
+| `tests/owned-test-scope.test.ts` | 기존 결정적 회귀를 계측 Wrapper 안에서도 실행. 테스트 수·기존 Assertion 유지 | 정리 8개 + 실제 timeout Probe 1개 |
+| `tests/owned-test.ts` | Child Operation 이름에 PID 연결. 종료 구현 변경 없음 | 실제 close 회귀와 Apply Child 시험 |
+| `.github/workflows/ci.yml` | 기존 진단·Build를 성공과 실패 모두 보존. check stdout/stderr·Vitest 버전 추가. pipefail로 실패 Exit 유지 | YAML·조건·check→e2e 의존성 검사, 실제 원격 업로드 여부 별도 기록 |
+
+계측은 기존 작은 JSONL 이벤트를 사용하며 원문·Prompt·미디어 bytes를 추가하지 않는다. 단계 Wrapper는 새 ALS Transaction 문맥을 만들지 않는다. Child 경과 시간은 부모의 IPC 대기 시간이며 Child 내부 clock과 직접 차분하지 않는다. `resourceCount`는 소유 핸들 수다. Normalizer의 등록 누락은 객체 소유 경계 보완이며 실행 중 Worker 누수나 최초 timeout 원인을 재현했다는 뜻이 아니다.
+
+timeout Probe 자체 Assertion 실패 시 원본 stderr·JSON·lifecycle 보존은 앞 절의 별도 의도적 실패 증거로 확인했다. 해당 Probe·Worker 파일은 이번에 변경하지 않았고 실제 timeout 부모 회귀를 다시 실행했다. 의도적 Child 실패를 부모 회귀 실패로 집계하지 않는다.
+
+### 새 코드의 최종 검증 상태
+
+아래는 이번에 실제 실행한 결과다. 시간은 Test Runner가 보고한 시간이며 각 명령 전체 Wall time은 별도 `result.json`에 있다. `-t` 선택 실행의 제외 항목은 전체 검증의 skip으로 합산하지 않는다. 전체 check에서는 실행 누락 없이 통과했다.
+
+| 명령 / 실행 | 코드 기준 | 결과 | 시간 | 로그 디렉터리 |
+|---|---|---|---:|---|
+| 두 우선 Test 기준 실행 | a853449, 기존 사용자 미추적 파일만 존재 | 2 성공, 선택 밖 34개 제외 | 4.93초 | `baseline/` |
+| 초기 요청 목록 RED | a853449 + Assertion만 추가 | 1 예상 실패, 선택 밖 35개 제외 | 1.24초 | `unused-request-red/` |
+| 두 우선 Test + 정리 회귀 | 71de79f의 코드, 이후 명시 Type import만 추가 | 11 성공, 선택 밖 34개 제외 | 6.29초 | `priority-green/` |
+| 관련 5개 Suite | 71de79f에 고정한 변경 | 161 성공 | 67.15초 | `related/` |
+| `npm run check` | 71de79f | 58 파일·1,196 성공. TypeScript·Web TypeScript·Schema·Web Build 성공. Required 391, missing/duplicates/skip/only 모두 0 | Vitest 216.20초, 전체 220.31초 | `final-check/` |
+| `npm run check:e2e` | 71de79f | 16 성공 | 28.2초 | `final-e2e/` |
+| `npm run test:e2e -- tests/e2e/real-audio.spec.ts --repeat-each=3` 최초 | 71de79f, 공유 웹 출력 | 4 성공·7 실패·1 중단·9 미실행, Exit 130 | 전체 232.98초 | `final-audio/` |
+| `npm run check:e2e` 격리 비교 1회 | 같은 71de79f, `/private/tmp` 독립 worktree | 16 성공 | 25.2초 | `isolated-e2e/` |
+| 실제 Audio/RAF 격리 비교 1회 | 같은 격리 Build | 고유 7개 × 3회 = 21개 성공 | 41.4초 | `isolated-audio/` |
+
+최종 check의 복구 Test는 2,782.05ms, 연쇄 Test는 3,071.44ms였다. 복구 단계는 committedCrash 1,708.08, Child ready 278.42, Barrier 149.47, 소유 중 편집 387.65, release/result 194.07, Revision·편집 검사 32.59ms였다. 연쇄 Test의 proposal/image/speech 적용은 637.83/609.52/627.53ms였다. 관련 Suite 실행보다 느렸지만 통과했으며, 제거한 단일 요청 비용과 전체 실행 시간 차이를 같은 인과로 취급하지 않는다.
+
+최종 check 진단은 152개 Scope·3,562개 이벤트다. Child 58·App 18·Worker owner 40·Store 79개의 소유 핸들이 close됐고 Root 82개 모두 진행 작업·등록 자원 0에서 삭제됐다. `test-aborted`, `cleanup-failed`, `root-preserved`는 0개다. 직접 계측한 소유 자원 범위이며 OS 전체 자원 수가 아니다.
+
+### 새 로컬 Audio 검증의 환경 사건
+
+최초 반복 실행의 네 Test가 통과한 뒤부터 `.project-tile`의 `Real Audio A`를 기다리는 초기 화면 진입이 timeout됐다. Monitor 종료·Project 전환·Audio 본문에 도달한 실패가 아니다. Trace의 `/assets/index-D1CL4pdE.js` 응답은 HTTP 200·`text/html`이었으며 브라우저는 module MIME 오류를 보고했다. 당시 공유 `dist/web/assets`는 없고 `dist/web/assets 2`가 존재했다. 출력 디렉터리 변경의 주체와 정확한 경위는 미확정이며, 이를 iCloud·특정 Process 탓으로 확정하지 않았다.
+
+이 상태에서 같은 실행을 계속하는 것은 Audio 검증 근거가 되지 않아 소유 Playwright CLI에 SIGINT를 보냈다. 4 성공·7 실패·1 중단·9 미실행을 그대로 보존했으며 성공 실행으로 합쳐 보고하지 않는다. 종료한 12개 Test의 진단 모두 Browser Context·Heartbeat·Worker·Timer·Listener·Socket·Request 0과 Root 삭제를 확인했다. 원본 Trace·console·lifecycle·stderr는 `final-audio/playwright-artifacts/`와 `command.log`, 분류는 `failure-analysis.json`에 보존했다.
+
+새 증거에 따른 추가 비교를 `isolated-worktree.json`에 먼저 기록했다. 같은 Commit의 독립 임시 worktree에서 기존 설치 의존성을 참조하고 웹 Build·전체 E2E·Audio 3회 반복을 각각 한 번 실행했다. 최종 check와 Test·Script·설정 107개 파일의 Hash 및 제품 Build 지문이 일치한다. 제품 코드·시간 제한·Worker·Retry·Assertion을 바꾸지 않았다. 단위 check는 이미 같은 코드에서 통과했으므로 다시 반복하지 않았다. 격리 환경의 E2E 16개와 실제 Chromium 140.0.7339.16의 Audio 21개가 통과했다. 공유 디렉터리 변경 주체까지 규명했다는 뜻은 아니다.
+
+사용자 `test-results 2/`, 공유 `dist/web/assets 2`, 운영 데이터·Request·서버 PID 89219는 변경하지 않았다. 공유 웹 출력 복원이나 운영 배포는 수행하지 않았다. 각 실행의 Process Group 종료와 임시 Root 부재를 확인하고 격리 worktree의 필요한 증거를 복사한 뒤 소유 작업 공간만 정리한다.
+
+### 원격 상태와 남은 판단
+
+이 문서 작성 시 이번 코드의 원격 Push·PR 본문 갱신·새 CI는 미실행이다. `a853449`의 과거 PR CI 성공을 `71de79f`의 원격 검증으로 사용하지 않는다. 후속 원격 결과는 [PR #7의 check 및 본문](https://github.com/zzocojoa/storyboard-generator/pull/7)에서 실제 Feature Head·Base·checkout·Run/Attempt와 함께 확인해야 한다. 성공 진단 보존 설정은 로컬에서 검사했으나 새 설정의 실제 Hosted 업로드·내용 확인은 별도 검증 항목이다.
+
+로컬 구현·회귀 검증 범위의 판단은 GO다. 최종 병합 판단은 새 Head의 원격 check/e2e와 비교 Artifact 확인을 조건으로 하는 **조건부 GO**다. 자동 병합·master 직접 Push·보호 설정 변경·운영 배포는 수행하지 않는다. 이번 범위의 추가 권장 로직 수정: 없다. 미확정 원인 조사와 공유 웹 출력 환경 문제는 별도 잔여 사항이다.
+
+이번 후속 증거는 `.local/ci-investigation/pr-7-followup/`에 있으며 Git에서 제외한다. 계획·환경·원본 Hash는 `experiment-plan.json`, `start-environment.json`, `original-evidence-hashes.json`, 단계 비교는 `comparisons.json`, 격리 코드 대조는 `isolated-code-equivalence.json`이다. 새 실행마다 stdout/stderr·Vitest JSON·lifecycle·Build manifest·종료 상태를 별도로 보존했다. 조사 문서 Commit 이후 코드·설정 변경이 없다면 위 검증은 동일한 실행 코드에 적용된다.
+
+구현과 실행 가능한 로컬 검증은 완료했으며, 원본 최초 timeout과 ENOTEMPTY Writer의 원인 해결은 완료하지 않았다.
