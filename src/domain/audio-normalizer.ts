@@ -25,6 +25,7 @@ export type AudioNormalizationPlan = {
   outputBytes: number;
   sampleOperations: number;
 };
+export type AudioNormalizerDiagnostics = { closed: boolean; activeWorkers: number; queuedJobs: number; queueTimers: number; executionTimers: number; reservedInputBytes: number };
 export type AudioNormalizer = { normalize(plan: AudioNormalizationPlan): Promise<Buffer> };
 
 export type NormalizationWorker = {
@@ -97,6 +98,13 @@ export class WorkerAudioNormalizer implements AudioNormalizer {
       this.#queue.push(pending);
       this.#drain();
     });
+  }
+
+  /** 종료 검증용 현재 Worker·Queue·Timer 예약 수이며 원본 PCM은 노출하지 않는다. */
+  diagnostics(): AudioNormalizerDiagnostics {
+    return { closed: this.#closed, activeWorkers: this.#active.size, queuedJobs: this.#queue.length,
+      queueTimers: this.#queue.filter((pending: PendingNormalization): boolean => pending.queueTimer !== null).length,
+      executionTimers: this.#active.size, reservedInputBytes: this.#reservedInputBytes };
   }
 
   async close(): Promise<void> {

@@ -1,3 +1,5 @@
+import { migrateGeneratorBuildInput } from '../../src/domain/build-provenance.js';
+import { BuildManifestSchema } from '../../src/build-schema.js';
 import { z } from 'zod';
 import { GeneratorBuildProvenanceSchema, IssueSchema, ProjectSchema } from '../../src/domain/schema.js';
 import type { FinalReadinessReport } from '../../src/domain/final-readiness.js';
@@ -15,8 +17,8 @@ const ActiveStorageSchema = z.strictObject({ projectId: z.string(), transactionI
 const InvalidRecoveryMarkerSchema = z.strictObject({ fileName: z.string(), quarantinedPath: z.string(), code: z.string(), message: z.string(), detectedAt: z.string() });
 const ProcessHeartbeatSchema = z.strictObject({ processInstanceId: z.string(), healthy: z.boolean(), lastSuccessAt: z.string().nullable(),
   lastError: z.strictObject({ code: z.string(), message: z.string() }).nullable() });
-const StatusSchema = z.strictObject({ build: GeneratorBuildProvenanceSchema.extend({ journalVersion: z.number(), lockVersion: z.number(), registryVersion: z.number() }), provider: z.literal('codex-app'), totalRequests: z.number().int().nonnegative(), completedRequests: z.number().int().nonnegative(),
-  pendingRequests: z.number().int().nonnegative(), failedRequests: z.number().int().nonnegative(), repeatedRequests: z.number().int().nonnegative(),
+const StatusSchema = z.strictObject({ build: BuildManifestSchema, provider: z.literal('codex-app'), totalRequests: z.number().int().nonnegative(), completedRequests: z.number().int().nonnegative(),
+  pendingRequests: z.number().int().nonnegative(), supersededRequests: z.number().int().nonnegative(), failedRequests: z.number().int().nonnegative(), repeatedRequests: z.number().int().nonnegative(),
   averageLatencyMs: z.number().int().nonnegative().nullable(), maximumLatencyMs: z.number().int().nonnegative().nullable(), apiCostUsd: z.null(), costNote: z.string(),
   recentFailures: z.array(RequestFailureSchema), generationInstruction: z.string(), aiVoiceDisclosure: z.string(),
   storageRecovery: z.array(StorageRecoverySchema), storageRecoveryBlocks: z.array(StorageRecoveryBlockSchema),
@@ -32,7 +34,7 @@ const SummarySchema = z.strictObject({ projectId: z.string(), title: z.string(),
   textConfirmed: z.number(), textProposed: z.number(), finalOutputReady: z.boolean(),
   textPlayable: z.number(), textTotal: z.number(), blockedOutputCount: z.number(), issues: z.number(), updatedAt: z.string() });
 const CodexRequestSchema = z.strictObject({ id: z.uuid(), kind: z.enum(['proposal', 'image', 'speech']), projectId: z.string(), targetId: z.string(),
-  generatorBuild: GeneratorBuildProvenanceSchema.nullable().optional(), basisHash: z.string(), status: z.enum(['pending', 'completed', 'failed']), createdAt: z.string(), updatedAt: z.string(), resultRevision: z.number().nullable(),
+  generatorBuild: z.preprocess(migrateGeneratorBuildInput, GeneratorBuildProvenanceSchema.nullable().optional()), basisHash: z.string(), status: z.enum(['pending', 'completed', 'failed', 'superseded']), createdAt: z.string(), updatedAt: z.string(), resultRevision: z.number().nullable(),
   error: z.strictObject({ code: z.string(), message: z.string() }).nullable() });
 const SourceImpactSchema = z.strictObject({ changedSourceFileIds: z.array(z.string()), changedEntityIds: z.array(z.string()), impactedSegmentIds: z.array(z.string()),
   impactedShotIds: z.array(z.string()), lockedShotIds: z.array(z.string()), canApply: z.boolean() });

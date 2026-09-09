@@ -1,5 +1,6 @@
 import { mediaByteRange } from './media-range.js';
-import { readBuildManifest } from '../build.js';
+import { buildForSpeechVoice } from '../build.js';
+import { sameGenerationBuild } from '../build-fingerprint.js';
 import { assertFinalReadiness } from '../domain/final-readiness.js';
 import { randomUUID } from 'node:crypto';
 import { stat } from 'node:fs/promises';
@@ -12,7 +13,7 @@ import { codexRequestMetrics } from '../codex/metrics.js';
 import type { CodexRequestStore } from '../codex/requests.js';
 import type { CodexRequest, CodexRequestKind } from '../codex/schema.js';
 import { codexRequestBasis } from '../codex/work.js';
-import { approveShot, mergeShots, reorderShots, setShotLocks, splitShot, updateShotContent } from '../domain/edit.js';
+import { approveShot, mergeShots, reorderShots, setShotLocks, splitShot, updateShotContent, ShotVisualPlanInputSchema, updateShotVisualPlan } from '../domain/edit.js';
 import { attachAudioAsset } from '../domain/audio-asset.js';
 import { WorkerAudioNormalizer } from '../domain/audio-normalizer.js';
 import { contractError } from '../domain/errors.js';
@@ -56,6 +57,7 @@ const TextCueBodySchema = z.strictObject({ expectedRevision: z.number().int().no
 const TextCueAuthorityBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), resolution: TextCueAuthorityResolutionInputSchema });
 const TextMappingBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), decision: TextMappingDecisionInputSchema });
 const TextPlacementInformationBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), decision: TextPlacementInformationInputSchema });
+const VisualPlanBodySchema = RevisionSchema.extend({ visualPlan: ShotVisualPlanInputSchema });
 const SourceLinksBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), mapping: ShotSourceLinksInputSchema });
 const MoveSourceLinkBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), move: MoveShotSourceLinkInputSchema });
 const ReferenceBodySchema = z.strictObject({ expectedRevision: z.number().int().nonnegative(), kind: z.enum(['character', 'location', 'prop']),
@@ -88,6 +90,7 @@ export type HttpErrorBody = { error: {
 } };
 
 const conflictPolicies: ReadonlyMap<string, boolean> = new Map<string, boolean>([
+  ['CODEX_REQUEST_SETTLED', false], ['CODEX_REQUEST_STATE_CONFLICT', false], ['CODEX_REQUEST_STORE_BUSY', true], ['REVIEW_BUNDLE_EXISTS', false],
   ['CODEX_REQUEST_BUILD_UNVERIFIED', false], ['CODEX_REQUEST_BUILD_CHANGED', false], ['PROJECT_BUSY', true], ['REVISION_CONFLICT', true], ['AUDIT_SNAPSHOT_CHANGED', true],
   ['PROJECT_ALREADY_EXISTS', false], ['PROJECT_VERSION_EXISTS', false],
 ]);
@@ -97,7 +100,7 @@ const lockedCodes: ReadonlySet<string> = new Set<string>([
 ]);
 const storedAssetCodes: ReadonlySet<string> = new Set<string>([
   'STORED_ASSET_FILE_MISSING', 'STORED_ASSET_HASH_MISMATCH', 'STORED_ASSET_MIME_MISMATCH',
-  'STORED_ASSET_CONTENT_CORRUPT', 'STORED_ASSET_PATH_UNSAFE', 'STORED_AUDIO_METADATA_MISMATCH', 'STORED_AUDIO_DURATION_MISMATCH',
+  'STORED_ASSET_CONTENT_CORRUPT', 'STORED_ASSET_PATH_UNSAFE', 'STORED_ASSET_CHANGED_DURING_CHECK', 'STORED_AUDIO_METADATA_MISMATCH', 'STORED_AUDIO_DURATION_MISMATCH',
 ]);
 const notFoundCodes: ReadonlySet<string> = new Set<string>([
   'PROJECT_NOT_FOUND', 'SHOT_NOT_FOUND', 'FRAME_NOT_FOUND', 'AUDIO_CUE_NOT_FOUND', 'TEXT_CUE_NOT_FOUND',
@@ -115,6 +118,8 @@ function isValidationError(error: Error, code: string): boolean {
 /** 서버 오류 코드를 사용자 입력, 충돌, 복구 잠금과 일시 장애로 명시적으로 분류한다. */
 export function httpErrorPolicy(error: Error): HttpErrorPolicy {
   const code: string = 'code' in error && typeof error.code === 'string' ? error.code : error.name;
+  if (code === 'CODEX_REQUEST_RECOVERY_REQUIRED' || code === 'REVIEW_BUNDLE_CLAIM_RECOVERY_REQUIRED') return { status: 423, category: 'locked', scope: 'request', retryable: false, operatorActionRequired: true, mutationBlocked: false };
+  if (code === 'CODEX_REQUEST_STORE_UNAVAILABLE' || code === 'REVIEW_BUNDLE_WRITE_FAILED') return { status: 503, category: 'unavailable', scope: 'service', retryable: true, operatorActionRequired: false, mutationBlocked: false };
   if (storedAssetCodes.has(code)) {
     return { status: 423, category: 'locked', scope: 'asset', retryable: false, operatorActionRequired: true, mutationBlocked: false };
   }
@@ -124,6 +129,8 @@ export function httpErrorPolicy(error: Error): HttpErrorPolicy {
   if (code === 'STORE_LOCK_ACQUISITION_FAILED' || code === 'PROCESS_HEARTBEAT_UNAVAILABLE') {
     return { status: 503, category: 'unavailable', scope: 'service', retryable: true, operatorActionRequired: false, mutationBlocked: false };
   }
+  if (['REVIEW_REDACTION_PROFILE_INVALID', 'REVIEW_EXTERNAL_MEDIA_FORBIDDEN', 'REVIEW_REDACTION_PATTERN_INVALID', 'REVIEW_REDACTION_KEY_COLLISION', 'REVIEW_REDACTION_VALUE_INVALID'].includes(code)) return { status: 400, category: 'validation', scope: 'request', retryable: false, operatorActionRequired: false, mutationBlocked: false };
+  if (code === 'REVIEW_SOURCE_NOT_QUIESCENT') return { status: 423, category: 'locked', scope: 'project', retryable: true, operatorActionRequired: true, mutationBlocked: false };
   if (code === 'INVALID_MEDIA_RANGE') return { status: 416, category: 'validation', scope: 'request', retryable: false, operatorActionRequired: false, mutationBlocked: false };
   if (['FINAL_OUTPUT_NOT_READY', 'SHOT_VISUAL_COVERAGE_GAP', 'VISUAL_OUTPUT_BLOCKED'].includes(code)) return { status: 409, category: 'conflict',
     scope: code === 'VISUAL_OUTPUT_BLOCKED' ? 'request' : 'project', retryable: code === 'FINAL_OUTPUT_NOT_READY', operatorActionRequired: false, mutationBlocked: false };
@@ -197,13 +204,16 @@ async function ensureWebRoot(path: string): Promise<void> {
 
 export async function createApp(config: AppConfig, store: ProjectStore, requests: CodexRequestStore,
   audioNormalizerOverride?: WorkerAudioNormalizer): Promise<FastifyInstance> {
+  if (!sameGenerationBuild(requests.buildManifest(), buildForSpeechVoice(config.codex.speechVoice))) throw contractError('INVALID_CODEX_REQUEST_STORE_BUILD', 'Request Store의 Build와 현재 소스·음성 설정이 다릅니다.', []);
   await ensureWebRoot(config.webRoot);
   await store.initialize();
   await requests.initialize();
   const audioNormalizer: WorkerAudioNormalizer = audioNormalizerOverride ?? new WorkerAudioNormalizer(config.audioNormalization);
   const app: FastifyInstance = Fastify({ logger: { level: 'info' }, bodyLimit: MAX_AUDIO_BYTES + 1024 * 1024 });
   app.addHook('onClose', async (): Promise<void> => {
-    await Promise.all([audioNormalizer.close(), store.close()]);
+    const closed: PromiseSettledResult<void>[] = await Promise.allSettled([audioNormalizer.close(), store.close()]);
+    const failures: unknown[] = closed.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map((result: PromiseRejectedResult): unknown => result.reason);
+    if (failures.length > 0) throw new AggregateError(failures, 'App 종료 중 Worker·Store 정리에 실패했습니다.');
   });
   await app.register(fastifyMultipart, { limits: { fileSize: MAX_AUDIO_BYTES, files: 1, fields: 1, parts: 2 } });
 
@@ -215,7 +225,7 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
     const [allRequests, storageStatus] = await Promise.all([requests.list(null), store.statusSnapshot()]);
     const metrics = codexRequestMetrics(allRequests);
     const failed: CodexRequest[] = allRequests.filter((item: CodexRequest): boolean => item.status === 'failed');
-    return { provider: 'codex-app', build: readBuildManifest(), ...metrics,
+    return { provider: 'codex-app', build: requests.buildManifest(), ...metrics,
       recentFailures: failed.slice(-5).reverse().map((item: CodexRequest): object => ({ id: item.id, kind: item.kind, projectId: item.projectId, targetId: item.targetId, error: item.error })),
       storageRecovery: store.recoveryEvents(), storageRecoveryBlocks: storageStatus.recoveryBlocks,
       invalidRecoveryMarkers: storageStatus.invalidRecoveryMarkers,
@@ -309,6 +319,11 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
     const body = TextPlacementInformationBodySchema.parse(request.body);
     return { project: await store.update(params.projectId, body.expectedRevision,
       (project: Project): Project => updatePlacementInformationDecision(project, params.placementId, body.decision), []) };
+  });
+  app.patch('/api/projects/:projectId/shots/:shotId/visual-plan', async (request: FastifyRequest): Promise<object> => {
+    const { projectId, shotId } = ShotParamsSchema.parse(request.params);
+    const body = VisualPlanBodySchema.parse(request.body);
+    return { project: await store.update(projectId, body.expectedRevision, (project: Project): Project => updateShotVisualPlan(project, shotId, body.visualPlan), []) };
   });
   app.patch('/api/projects/:projectId/shots/:shotId/source-links', async (request: FastifyRequest): Promise<object> => {
     const { projectId, shotId } = ShotParamsSchema.parse(request.params);
@@ -451,6 +466,7 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
     const output = await store.safeAudio(projectId, cueId);
     reply.header('Content-Type', output.mimeType).header('Cache-Control', 'no-store').header('Accept-Ranges', 'bytes');
     if (request.headers.range === undefined) return output.content;
+    reply.header('Content-Range', `bytes */${output.content.length}`);
     const range = mediaByteRange(request.headers.range, output.content.length);
     reply.code(206).header('Content-Range', `bytes ${range.start}-${range.end}/${output.content.length}`);
     return output.content.subarray(range.start, range.end + 1);

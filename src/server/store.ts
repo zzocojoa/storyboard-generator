@@ -22,7 +22,7 @@ import { exportProjectJson } from '../exporters/json.js';
 import { sha256Bytes, sha256Text } from '../importers/integrity.js';
 import { parseProject } from '../io/project.js';
 import { SafeStoreFilesystem, sameFileIdentity } from './safe-filesystem.js';
-import type { FileIdentity, SafePathKind } from './safe-filesystem.js';
+import type { SafeFileMetadata, FileIdentity, SafePathKind } from './safe-filesystem.js';
 
 export { collectProjectAssetReferences } from '../domain/asset-references.js';
 export type { ProjectAssetReference } from '../domain/asset-references.js';
@@ -124,7 +124,7 @@ const TransactionJournalV3Schema = z.strictObject({
   previousProject: FileProofSchema, nextProject: FileProofSchema, versionFile: FileProofSchema,
   assets: z.array(AssetProofSchema),
 });
-const TransactionJournalSchema = z.union([LegacyTransactionJournalSchema, TransactionJournalV3Schema]);
+export const TransactionJournalSchema = z.union([LegacyTransactionJournalSchema, TransactionJournalV3Schema]);
 type TransactionJournal = z.infer<typeof TransactionJournalSchema>;
 type TransactionJournalV3 = z.infer<typeof TransactionJournalV3Schema>;
 
@@ -138,7 +138,7 @@ const CreateJournalV3Schema = z.strictObject({
   transactionId: z.uuid(), projectId: z.string().min(1), owner: TransactionOwnerSchema, projectDirectoryName: Sha256Schema,
   currentFile: FileProofSchema, versionFile: FileProofSchema,
 });
-const CreateJournalSchema = z.union([LegacyCreateJournalSchema, CreateJournalV3Schema]);
+export const CreateJournalSchema = z.union([LegacyCreateJournalSchema, CreateJournalV3Schema]);
 type CreateJournal = z.infer<typeof CreateJournalSchema>;
 type CreateJournalV3 = z.infer<typeof CreateJournalV3Schema>;
 
@@ -150,11 +150,11 @@ const StoreLockV3Schema = z.strictObject({
   version: z.literal(3), projectId: z.string().min(1), host: z.string().min(1), pid: z.number().int().positive(),
   transactionId: z.uuid(), createdAt: z.iso.datetime(), processInstanceId: z.uuid(), processStartedAt: z.iso.datetime(),
 });
-const StoreLockSchema = z.union([LegacyStoreLockSchema, StoreLockV3Schema]);
+export const StoreLockSchema = z.union([LegacyStoreLockSchema, StoreLockV3Schema]);
 type StoreLock = z.infer<typeof StoreLockSchema>;
 type RecoveryLock = { metadata: StoreLock; path: string; identity: FileIdentity };
 type LockAcquisitionState = { createdByThisCall: boolean; metadata: StoreLock; identity: FileIdentity | null };
-const StorageRecoveryBlockSchema = z.strictObject({
+export const StorageRecoveryBlockSchema = z.strictObject({
   version: z.literal(1), projectId: z.string().min(1), directoryName: Sha256Schema,
   transactionId: z.string().min(1), code: z.string().min(1), message: z.string().min(1), detectedAt: z.iso.datetime(),
 });
@@ -235,6 +235,10 @@ export function processHeartbeatTimerHasRef(root: string, processInstanceId: str
 
 export function projectStoreKey(projectId: string): string { return sha256Text(projectId); }
 function projectKey(projectId: string): string { return projectStoreKey(projectId); }
+function rootCreateEntryKey(entryName: string): string {
+  const match: RegExpMatchArray | null = entryName.match(/^(?:\.publish-)?([a-f0-9]{64})\.lock(?:$|-)/);
+  return match?.[1] ?? projectKey(`unknown:${entryName}`);
+}
 function transactionVersionFileName(revision: number): string { return `${String(revision).padStart(6, '0')}.json`; }
 function recoveryRequired(message: string): never { throw contractError('STORE_RECOVERY_REQUIRED', message, []); }
 function createRecoveryRequired(message: string, cause: unknown): never {
@@ -360,6 +364,10 @@ function normalizeJournal(journal: TransactionJournal): NormalizedJournal {
   };
 }
 
+type SummaryIntegrityEntry = { projectId: string; fingerprint: string; status: string; checkedAt: string; file: SafeFileMetadata };
+export type SummaryIntegrityCacheStatistics = { entries: number; hits: number; misses: number };
+const SUMMARY_INTEGRITY_CACHE_LIMIT: number = 1024;
+
 /** Project snapshot과 Asset 파일을 로컬 트랜잭션으로 보존한다. */
 export class ProjectStore {
   readonly #fs: SafeStoreFilesystem;
@@ -376,6 +384,9 @@ export class ProjectStore {
   readonly #activeCreates: Map<string, ActiveCreateState> = new Map<string, ActiveCreateState>();
   readonly #activeUpdateErrors: Map<string, ActiveUpdateError> = new Map<string, ActiveUpdateError>();
   readonly #activeUpdates: Map<string, ActiveUpdateState> = new Map<string, ActiveUpdateState>();
+  readonly #summaryIntegrityCache: Map<string, SummaryIntegrityEntry> = new Map<string, SummaryIntegrityEntry>();
+  #summaryIntegrityHits: number = 0;
+  #summaryIntegrityMisses: number = 0;
   #initialization: Promise<void> | null = null;
   #processInstanceRegistered: boolean = false;
   #closed: boolean = false;
@@ -757,20 +768,57 @@ export class ProjectStore {
     await this.#removePublishedTransactionFiles(projectId, journal, false);
   }
 
+  /** 게시 중인 알려진 Process의 임시 파일은 읽지 않고, 중단된 파일은 Registry·본문·inode를 증명한 뒤 정리한다. */
+  async #inspectLockPublication(parent: string, entryName: string): Promise<boolean> {
+    if (!entryName.startsWith('.publish-')) return false;
+    const path: string = join(parent, entryName);
+    try {
+      if (await this.#fs.kind(path) === 'missing') return true;
+      const parts: RegExpMatchArray | null = entryName.match(/^\.publish-(write\.lock|[a-f0-9]{64}\.lock)-([a-f0-9-]{36})\.([a-f0-9-]{36})\.tmp$/);
+      if (parts === null) recoveryRequired(`알 수 없는 Lock 게시 임시 파일입니다. path=${path}`);
+      const finalName: string = parts[1]!; const instanceId: string = parts[2]!; const transactionId: string = parts[3]!;
+      const instance: ProcessInstanceRecord | null = await this.#readProcessInstance(instanceId);
+      if (instance === null || instance.processInstanceId !== instanceId || instance.host !== hostname()) recoveryRequired(`Lock 게시 임시 파일의 소유 Process를 증명할 수 없습니다. path=${path}`);
+      if (finalName === 'write.lock' ? !/^[a-f0-9]{64}$/.test(parent.slice(parent.lastIndexOf(sep) + 1)) : parent !== this.#createLocksPath()) {
+        recoveryRequired(`Lock 게시 임시 파일의 디렉터리가 다릅니다. path=${path}`);
+      }
+      if (this.#processProbe(instance.pid)) {
+        const age: number = this.#now().getTime() - Date.parse(instance.heartbeatAt);
+        if (age < 0 || age > this.#heartbeatFreshnessMs) recoveryRequired(`Lock 게시 Process heartbeat가 유효하지 않습니다. path=${path}`);
+        return true;
+      }
+      const identity: FileIdentity = await this.#fs.identity(path);
+      const bytes: string = await this.#fs.readText(path);
+      let metadata: z.infer<typeof StoreLockV3Schema>;
+      try { metadata = StoreLockV3Schema.parse(JSON.parse(bytes) as unknown); }
+      catch (error: unknown) { recoveryRequired(`중단된 Lock 게시 본문을 증명할 수 없습니다. path=${path}, cause=${error instanceof Error ? error.message : String(error)}`); }
+      if (metadata.processInstanceId !== instanceId || metadata.transactionId !== transactionId || metadata.host !== instance.host
+        || metadata.pid !== instance.pid || metadata.processStartedAt !== instance.startedAt
+        || (finalName === 'write.lock' ? parent !== this.#directory(metadata.projectId) : finalName !== `${projectKey(metadata.projectId)}.lock`)) {
+        recoveryRequired(`중단된 Lock 게시 소유권이 다릅니다. path=${path}`);
+      }
+      const finalPath: string = join(parent, finalName);
+      if (await this.#fs.exists(finalPath) && !sameFileIdentity(identity, await this.#fs.identity(finalPath))) {
+        recoveryRequired(`중단된 Lock 게시 대상의 identity가 다릅니다. path=${path}`);
+      }
+      if (await this.#fs.readText(path) !== bytes) recoveryRequired(`중단된 Lock 게시 본문이 변경됐습니다. path=${path}`);
+      await this.#fs.unlinkFile(path, identity); await this.#fs.syncDirectory(parent);
+      return true;
+    } catch (error: unknown) {
+      if (await this.#fs.kind(path) === 'missing') return true;
+      throw error;
+    }
+  }
+
   async #readRecoveryLock(directoryName: string): Promise<RecoveryLock | null> {
     const path: string = this.#fs.path(directoryName, 'write.lock');
     if (await this.#fs.kind(path) === 'missing') return null;
-    let metadata: StoreLock | null = null;
-    let parseError: unknown = null;
-    for (let attempt: number = 0; attempt < 3 && metadata === null; attempt += 1) {
-      try { metadata = StoreLockSchema.parse(JSON.parse(await this.#fs.readText(path)) as unknown); }
-      catch (error: unknown) {
-        parseError = error;
-        if (await this.#fs.kind(path) === 'missing') return null;
-        if (attempt < 2) await new Promise<void>((resolveRetry): void => { setTimeout(resolveRetry, 0); });
-      }
+    let metadata: StoreLock;
+    try { metadata = StoreLockSchema.parse(JSON.parse(await this.#fs.readText(path)) as unknown); }
+    catch (error: unknown) {
+      if (await this.#fs.kind(path) === 'missing') return null;
+      recoveryRequired(`Project lock을 해석할 수 없습니다. directory=${directoryName}, cause=${error instanceof Error ? error.message : String(error)}`);
     }
-    if (metadata === null) recoveryRequired(`Project lock을 해석할 수 없습니다. directory=${directoryName}, cause=${parseError instanceof Error ? parseError.message : String(parseError)}`);
     if (projectKey(metadata.projectId) !== directoryName) recoveryRequired(`Project lock과 저장 디렉터리가 다릅니다. projectId=${metadata.projectId}`);
     const lock: RecoveryLock = { metadata, path, identity: await this.#fs.identity(path) };
     if (metadata.host !== hostname()) {
@@ -781,6 +829,7 @@ export class ProjectStore {
   }
 
   async #readRootCreateLock(entryName: string): Promise<RecoveryLock | null> {
+    if (await this.#inspectLockPublication(this.#createLocksPath(), entryName)) return null;
     if (!/^[a-f0-9]{64}\.lock$/.test(entryName)) {
       createRecoveryRequired(`Root Create lock 파일 이름이 올바르지 않습니다. entry=${entryName}`, 'invalid lock name');
     }
@@ -788,17 +837,12 @@ export class ProjectStore {
     const kind: SafePathKind = await this.#fs.kind(path);
     if (kind === 'missing') return null;
     if (kind !== 'file') createRecoveryRequired(`Root Create lock이 정규 파일이 아닙니다. entry=${entryName}`, 'invalid lock kind');
-    let metadata: StoreLock | null = null;
-    let parseError: unknown = null;
-    for (let attempt: number = 0; attempt < 3 && metadata === null; attempt += 1) {
-      try { metadata = StoreLockSchema.parse(JSON.parse(await this.#fs.readText(path)) as unknown); }
-      catch (error: unknown) {
-        parseError = error;
-        if (await this.#fs.kind(path) === 'missing') return null;
-        if (attempt < 2) await new Promise<void>((resolveRetry): void => { setTimeout(resolveRetry, 0); });
-      }
+    let metadata: StoreLock;
+    try { metadata = StoreLockSchema.parse(JSON.parse(await this.#fs.readText(path)) as unknown); }
+    catch (error: unknown) {
+      if (await this.#fs.kind(path) === 'missing') return null;
+      createRecoveryRequired(`Root Create lock을 해석할 수 없습니다. entry=${entryName}`, error);
     }
-    if (metadata === null) createRecoveryRequired(`Root Create lock을 해석할 수 없습니다. entry=${entryName}`, parseError);
     if (`${projectKey(metadata.projectId)}.lock` !== entryName) {
       createRecoveryRequired(`Root Create lock과 Project ID가 다릅니다. entry=${entryName}, projectId=${metadata.projectId}`, 'project key mismatch');
     }
@@ -844,7 +888,7 @@ export class ProjectStore {
     try {
       await this.#fault('before-lock-write');
       exclusiveWriteInProgress = true;
-      state.identity = await this.#fs.writeExclusiveWithIdentity(path, JSON.stringify(metadata));
+      state.identity = await this.#fs.publishExclusiveFileWithIdentity(path, JSON.stringify(metadata), `${this.#processInstanceId}.${metadata.transactionId}`);
       exclusiveWriteInProgress = false;
       state.createdByThisCall = true;
       await this.#fault('after-lock-file-created');
@@ -856,7 +900,7 @@ export class ProjectStore {
       await this.#verifyOwnedLock(lock);
       return lock;
     } catch (error: unknown) {
-      if (exclusiveWriteInProgress && errorCode(error) === 'EEXIST') {
+      if (exclusiveWriteInProgress && errorCode(error) === 'EXCLUSIVE_FILE_EXISTS') {
         await this.#fault('after-lock-write-eexist');
         throw contractError('PROJECT_BUSY', `${metadata.projectId}: 다른 저장 작업이 진행 중입니다.`, []);
       }
@@ -967,6 +1011,7 @@ export class ProjectStore {
   async #recoverProjectDirectory(directoryName: string): Promise<string> {
     const directory: string = this.#fs.path(directoryName);
     await this.#fs.requireDirectory(directory);
+    for (const entry of await this.#fs.entries(directory)) await this.#inspectLockPublication(directory, entry.name);
     const transactionsPath: string = join(directory, TRANSACTIONS_DIRECTORY);
     await this.#fs.ensureDirectory(transactionsPath);
     const entries = await this.#fs.entries(transactionsPath);
@@ -997,14 +1042,25 @@ export class ProjectStore {
       this.#activeUpdateErrors.delete(directoryName);
       this.#recordRecovery({ projectId, transactionId: lock.metadata.transactionId, outcome: 'stale-lock-removed' });
     }
-    await this.#verifyCurrentSnapshot(projectId);
+    try { await this.#verifyCurrentSnapshot(projectId); }
+    catch (error: unknown) {
+      if (errorCode(error) !== 'STORE_RECOVERY_REQUIRED') throw error;
+      // 마지막 잠금 확인 뒤 시작한 외부 Writer는 손상 상태로 기록하지 않는다.
+      const lateLock: RecoveryLock | null = await this.#readRecoveryLock(directoryName);
+      if (lateLock === null || !await this.#ownerIsActive(lateLock)) throw error;
+      this.#rememberActiveUpdate(lateLock);
+      await this.#readConsistentCurrentUnderLock(projectId, lateLock);
+    }
     return projectId;
   }
 
   async #verifyCurrentSnapshotEntries(projectId: string, allowed: ReadonlySet<string>): Promise<Project> {
     const directory: string = this.#directory(projectId);
     await this.#fs.requireDirectory(directory);
-    const unknown: string[] = (await this.#fs.entries(directory)).filter((entry): boolean => !allowed.has(entry.name)).map((entry): string => entry.name);
+    const unknown: string[] = [];
+    for (const entry of await this.#fs.entries(directory)) {
+      if (!allowed.has(entry.name) && !await this.#inspectLockPublication(directory, entry.name)) unknown.push(entry.name);
+    }
     if (unknown.length > 0) recoveryRequired(`Project 디렉터리에 알 수 없는 항목이 있습니다. projectId=${projectId}, entries=${unknown.join(',')}`);
     await this.#fs.requireDirectory(this.#versionsPath(projectId));
     await this.#fs.requireDirectory(join(directory, 'assets'));
@@ -1377,7 +1433,7 @@ export class ProjectStore {
     this.#activeUpdates.clear();
     this.#activeUpdateErrors.clear();
     for (const entry of await this.#fs.entries(this.#createLocksPath())) {
-      const fileKey: string = /^[a-f0-9]{64}\.lock$/.test(entry.name) ? entry.name.slice(0, -5) : projectKey(`unknown:${entry.name}`);
+      const fileKey: string = rootCreateEntryKey(entry.name);
       let lock: RecoveryLock | null = null;
       try {
         lock = await this.#readRootCreateLock(entry.name);
@@ -1557,8 +1613,57 @@ export class ProjectStore {
     }
   }
 
+  summaryIntegrityCacheStatistics(): SummaryIntegrityCacheStatistics {
+    return { entries: this.#summaryIntegrityCache.size, hits: this.#summaryIntegrityHits, misses: this.#summaryIntegrityMisses };
+  }
+
+  /** 목록은 불변 Asset과 파일 identity로만 재사용한다. 변경 중인 파일은 최대 두 번 검사하고 비검증으로 닫는다. */
+  async #summaryAssetIntegrity(project: Project, asset: Asset): Promise<string> {
+    const key: string = JSON.stringify([project.projectId, asset.id]);
+    try {
+      const path: string = this.#safeAssetPath(project.projectId, asset);
+      if (await this.#fs.kind(path) === 'missing') throw contractError('ASSET_FILE_MISSING', `목록 자산 파일이 없습니다. assetId=${asset.id}, path=${asset.path}`, []);
+      for (let attempt: number = 0; attempt < 2; attempt += 1) {
+        const before: SafeFileMetadata = await this.#fs.fileMetadata(path);
+        const fingerprint: string = sha256Text(JSON.stringify([project.projectId, asset, before,
+          asset.kind === 'audio' ? project.handoff.timebase.sampleRate : null]));
+        const cached: SummaryIntegrityEntry | undefined = this.#summaryIntegrityCache.get(key);
+        let status: string = 'verified';
+        if (cached?.fingerprint === fingerprint) status = cached.status;
+        else {
+          this.#summaryIntegrityMisses += 1;
+          try { await this.#assetForProject(project, asset.id); }
+          catch (error: unknown) { const code: string | null = assetFailureCode(error); if (code === null) throw error; status = code; }
+        }
+        const after: SafeFileMetadata = await this.#fs.fileMetadata(path);
+        this.#summaryIntegrityCache.delete(key);
+        if (JSON.stringify(before) !== JSON.stringify(after)) continue;
+        if (cached?.fingerprint === fingerprint) this.#summaryIntegrityHits += 1;
+        this.#summaryIntegrityCache.set(key, { projectId: project.projectId, fingerprint, status, checkedAt: this.#nowIso(), file: after });
+        while (this.#summaryIntegrityCache.size > SUMMARY_INTEGRITY_CACHE_LIMIT) {
+          const oldest: string | undefined = this.#summaryIntegrityCache.keys().next().value;
+          if (oldest === undefined) throw contractError('SUMMARY_INTEGRITY_CACHE_INCONSISTENT', '목록 캐시의 최대 항목 수를 확인할 수 없습니다.', []);
+          this.#summaryIntegrityCache.delete(oldest);
+        }
+        return status;
+      }
+      throw contractError('STORED_ASSET_CHANGED_DURING_CHECK',
+        `두 번의 검사 중 Asset 파일이 계속 변경됐습니다. projectId=${project.projectId}, assetId=${asset.id}`, []);
+    } catch (error: unknown) {
+      this.#summaryIntegrityCache.delete(key);
+      const mapped: Error = mapStoredAssetIntegrityError(error, project.projectId, asset.id);
+      const code: string | null = assetFailureCode(mapped); if (code === null) throw mapped; return code;
+    }
+  }
+
+  async #summaryIntegrityForProject(project: Project): Promise<Record<string, string>> {
+    const result: Record<string, string> = {};
+    for (const asset of project.assets) result[asset.id] = await this.#summaryAssetIntegrity(project, asset);
+    return result;
+  }
+
   async #summary(project: Project, updatedAt: string): Promise<ProjectSummary> {
-    const integrity: Record<string, string> = await this.#integrityForProject(project);
+    const integrity: Record<string, string> = await this.#summaryIntegrityForProject(project);
     const safeShotIds: Set<string> = new Set(project.shots.filter((shot): boolean => shotFinalVisualIssues(project, shot, integrity).length === 0).map((shot): string => shot.id));
     let framesOutputSafe: number = 0;
     for (const frame of project.frames) {
@@ -1566,16 +1671,16 @@ export class ProjectStore {
       const decision = reviewFrameOutput(project, frame.id, 'program-monitor');
       if (decision.renderMode === 'blocked') continue;
       if (decision.imageAssetId === null) { framesOutputSafe += 1; continue; }
-      try { await this.#assetForProject(project, decision.imageAssetId); framesOutputSafe += 1; }
-      catch (error: unknown) { if (assetFailureCode(error) === null) throw error; }
+      if (integrity[decision.imageAssetId] === 'verified') framesOutputSafe += 1;
     }
     let audioPlayable: number = 0;
     let audioRepairRequired: number = 0;
     for (const cue of project.audioCues) {
       const playable: boolean = reviewAudioPlaybackAt(project, cue.startMs).playable.some((candidate): boolean => candidate.id === cue.id);
       if (cue.assetId === null) continue;
-      try { await this.#assetForProject(project, cue.assetId); if (playable) audioPlayable += 1; }
-      catch (error: unknown) { const code: string | null = assetFailureCode(error); if (code === null) throw error; if (code.startsWith('AUDIO_ASSET_') || code.startsWith('STORED_AUDIO_')) audioRepairRequired += 1; }
+      const code: string = integrity[cue.assetId] ?? 'ASSET_NOT_FOUND';
+      if (code === 'verified' && playable) audioPlayable += 1;
+      if (code.startsWith('AUDIO_ASSET_') || code.startsWith('STORED_AUDIO_')) audioRepairRequired += 1;
     }
     const finalReport: FinalReadinessReport = reviewFinalReadiness(project, integrity);
     const textPlayable: number = project.textCues.filter((cue): boolean => reviewTextPlaybackAt(project, cue.startMs).playable.some((candidate): boolean => candidate.id === cue.id)).length;
@@ -1663,41 +1768,70 @@ export class ProjectStore {
       }
       this.#processInstanceRegistered = false;
     }
+    this.#summaryIntegrityCache.clear(); this.#summaryIntegrityHits = 0; this.#summaryIntegrityMisses = 0;
     this.#closed = true;
+  }
+
+  async #recordUpdateObservationError(directoryName: string, projectId: string, transactionId: string, error: unknown): Promise<void> {
+    const previous: ActiveUpdateError | undefined = this.#activeUpdateErrors.get(directoryName);
+    const code: string = errorCode(error); const message: string = error instanceof Error ? error.message : String(error);
+    this.#activeUpdateErrors.set(directoryName, previous?.code === code && previous.message === message ? previous
+      : { projectId, transactionId, code, message, detectedAt: this.#nowIso() });
+    await this.#writeRecoveryBlock(directoryName, projectId, transactionId, error);
   }
 
   async statusSnapshot(): Promise<StorageStatusSnapshot> {
     await this.initialize();
-    const createStates: readonly ActiveCreateState[] = [...this.#activeCreates.values()];
-    for (const state of createStates) {
+    const createCandidates: Map<string, ActiveCreateState> = new Map(this.#activeCreates);
+    for (const entry of await this.#fs.entries(this.#createLocksPath())) {
+      const key: string = rootCreateEntryKey(entry.name);
+      try {
+        const lock: RecoveryLock | null = await this.#readRootCreateLock(entry.name);
+        if (lock !== null) { this.#rememberActiveCreate(lock); createCandidates.set(key, this.#activeCreates.get(key)!); }
+      } catch (error: unknown) {
+        const prior: ActiveCreateState | undefined = this.#activeCreates.get(key);
+        createCandidates.delete(key);
+        await this.#writeRecoveryBlock(key, prior?.projectId ?? `unknown:${key}`, prior?.transactionId ?? 'root-create-lock', error);
+      }
+    }
+    for (const state of createCandidates.values()) {
       try { await this.#refreshActiveCreate(state.projectId); }
       catch (error: unknown) {
         this.#activeCreates.delete(projectKey(state.projectId));
         await this.#writeRecoveryBlock(projectKey(state.projectId), state.projectId, state.transactionId, error);
       }
     }
-    const candidates: Map<string, { projectId: string; transactionId: string }> = new Map(
-      [...this.#activeUpdates.values()].map((state: ActiveUpdateState) => [state.projectId, state]));
+    const candidates: Map<string, { projectId: string; transactionId: string }> = new Map(this.#activeUpdates);
     for (const entry of await this.#fs.entries(this.#fs.root())) {
-      if (!entry.isDirectory() || !/^[a-f0-9]{64}$/.test(entry.name)) continue;
-      if (await this.#fs.kind(this.#fs.path(entry.name, 'write.lock')) === 'missing') continue;
-      const currentPath: string = this.#fs.path(entry.name, 'project.json');
-      if (await this.#fs.kind(currentPath) !== 'file') continue;
-      const current: Project = await this.#readProjectFile(currentPath);
-      if (!candidates.has(current.projectId)) candidates.set(current.projectId, { projectId: current.projectId, transactionId: 'unknown' });
-    }
-    const updateStates = [...candidates.values()];
-    for (const state of updateStates) {
-      try { await this.#refreshActiveUpdate(state.projectId); this.#activeUpdateErrors.delete(projectKey(state.projectId)); }
-      catch (error: unknown) {
-        const key: string = projectKey(state.projectId);
-        const previous: ActiveUpdateError | undefined = this.#activeUpdateErrors.get(key);
-        const code: string = errorCode(error);
-        const message: string = error instanceof Error ? error.message : String(error);
-        this.#activeUpdateErrors.set(key, previous?.code === code && previous.message === message ? previous
-          : { projectId: state.projectId, transactionId: this.#activeUpdates.get(key)?.transactionId ?? state.transactionId, code, message, detectedAt: this.#nowIso() });
-        await this.#writeRecoveryBlock(key, state.projectId, this.#activeUpdates.get(key)?.transactionId ?? state.transactionId, error);
+      if (!/^[a-f0-9]{64}$/.test(entry.name)) continue;
+      let projectId: string = this.#activeUpdates.get(entry.name)?.projectId ?? `unknown:${entry.name}`;
+      let transactionId: string = this.#activeUpdates.get(entry.name)?.transactionId ?? 'unknown';
+      try {
+        if (!entry.isDirectory()) throw contractError('STORE_PATH_UNSAFE', `Project 저장 경로가 디렉터리가 아닙니다. directory=${entry.name}`, []);
+        for (const child of await this.#fs.entries(this.#fs.path(entry.name))) await this.#inspectLockPublication(this.#fs.path(entry.name), child.name);
+        if (await this.#fs.kind(this.#fs.path(entry.name, 'write.lock')) === 'missing') continue;
+        const [lockResult, projectResult] = await Promise.allSettled([
+          this.#readRecoveryLock(entry.name), this.#readProjectFile(this.#fs.path(entry.name, 'project.json')),
+        ]);
+        const lock: RecoveryLock | null = lockResult.status === 'fulfilled' ? lockResult.value : null;
+        const current: Project | null = projectResult.status === 'fulfilled' ? projectResult.value : null;
+        if (current !== null && projectKey(current.projectId) === entry.name) projectId = current.projectId;
+        const remembered: ActiveUpdateState | undefined = this.#activeUpdates.get(entry.name);
+        if (remembered !== undefined) { projectId = remembered.projectId; transactionId = remembered.transactionId; }
+        if (lock !== null) { this.#rememberActiveUpdate(lock); projectId = lock.metadata.projectId; transactionId = lock.metadata.transactionId; }
+        if (lockResult.status === 'rejected') throw lockResult.reason;
+        if (projectResult.status === 'rejected') throw projectResult.reason;
+        if (lock === null) continue;
+        if (current?.projectId !== projectId) throw contractError('STORE_RECOVERY_REQUIRED', `Project와 lock의 ID가 다릅니다. directory=${entry.name}`, []);
+        candidates.set(entry.name, { projectId, transactionId });
+      } catch (error: unknown) {
+        candidates.delete(entry.name);
+        await this.#recordUpdateObservationError(entry.name, projectId, transactionId, error);
       }
+    }
+    for (const [key, state] of candidates) {
+      try { await this.#refreshActiveUpdate(state.projectId); this.#activeUpdateErrors.delete(key); }
+      catch (error: unknown) { await this.#recordUpdateObservationError(key, state.projectId, this.#activeUpdates.get(key)?.transactionId ?? state.transactionId, error); }
     }
     return {
       activeCreates: this.activeCreates(), activeUpdates: this.activeUpdates(), activeUpdateErrors: [...this.#activeUpdateErrors.values()], recoveryBlocks: this.recoveryBlocks(),

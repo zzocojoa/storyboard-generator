@@ -5,6 +5,7 @@ import type { Issue, Project, Segment, TextCue } from './schema.js';
 export type OutputMaturity = 'draft' | 'final';
 export type OutputPolicy = {
   maturity: OutputMaturity;
+  exportLabel?: string;
   channel: 'program-monitor' | 'safe-http' | 'pdf-export' | 'csv-export' | 'readiness';
 };
 export type TextOutputDecision = {

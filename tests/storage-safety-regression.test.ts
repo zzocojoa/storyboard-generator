@@ -1,3 +1,4 @@
+import { readBuildManifest } from '../src/build.js';
 import { link, mkdir, mkdtemp, readFile, readdir, rm, rmdir, stat, symlink, unlink, writeFile } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -166,7 +167,7 @@ async function appForStore(fixtureRoot: string, dataRoot: string, store: Project
   const config: AppConfig = { host: '127.0.0.1', port: 4317, dataRoot, webRoot,
     pdfFontPath: resolve('assets/fonts/NanumGothic-Regular.ttf'), audioNormalization: TEST_AUDIO_NORMALIZATION_OPTIONS,
     codex: { requestRoot: join(fixtureRoot, 'requests'), speechVoice: 'Yuna' } };
-  const app: FastifyInstance = await createApp(config, store, new CodexRequestStore(config.codex.requestRoot));
+  const app: FastifyInstance = await createApp(config, store, new CodexRequestStore(config.codex.requestRoot, readBuildManifest()));
   apps.push(app);
   return app;
 }

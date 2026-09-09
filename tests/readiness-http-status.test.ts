@@ -1,19 +1,20 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { readBuildManifest } from '../src/build.js';
 import { CodexRequestStore } from '../src/codex/requests.js';
-import type { Project } from '../src/domain/schema.js';
+import { shotContent } from '../src/domain/edit.js';
+import type { Project, Shot } from '../src/domain/schema.js';
 import { importPackage } from '../src/importers/import-package.js';
 import { sha256Text } from '../src/importers/integrity.js';
 import { createSourceOutline } from '../src/proposal/outline.js';
 import { createApp } from '../src/server/app.js';
 import { ProjectStore } from '../src/server/store.js';
 import { nativeData, nativePackage, TEST_AUDIO_NORMALIZATION_OPTIONS, withNativeData } from './helpers.js';
-import { finalFixture, readinessOutline, withFirstGap } from './readiness-fixtures.js';
+import { finalFixture, nonSourcedShot, readinessOutline, withFirstGap } from './readiness-fixtures.js';
 
 type HttpFixture = { app: FastifyInstance; store: ProjectStore; dataRoot: string; project: Project; other: Project; lockPath: string };
 const fixtures: { app: FastifyInstance; root: string }[] = [];
@@ -34,7 +35,7 @@ async function fixture(): Promise<HttpFixture> {
     const requestRoot: string = join(root, 'requests');
     const app: FastifyInstance = await createApp({ host: '127.0.0.1', port: 0, dataRoot, webRoot,
       pdfFontPath: resolve('assets/fonts/NanumGothic-Regular.ttf'), audioNormalization: TEST_AUDIO_NORMALIZATION_OPTIONS,
-      codex: { requestRoot, speechVoice: 'Yuna' } }, store, new CodexRequestStore(requestRoot));
+      codex: { requestRoot, speechVoice: 'Yuna' } }, store, new CodexRequestStore(requestRoot, readBuildManifest()));
     fixtures.push({ app, root }); return { app, store, dataRoot, project, other, lockPath: join(dataRoot, sha256Text(project.projectId), 'write.lock') };
   } catch (error: unknown) {
     await store.close(); await rm(root, { recursive: true, force: true }); throw error;
@@ -50,6 +51,41 @@ async function corruptObservedLock(value: HttpFixture): Promise<string> {
 }
 
 describe('HTTP Final과 Playhead', (): void => {
+  it('visual_plan_http_update_increments_one_revision', async (): Promise<void> => {
+    const { app, store, project, dataRoot } = await fixture();
+    let current: Project = project;
+    const versionsPath: string = join(dataRoot, sha256Text(project.projectId), 'versions');
+    for (const mode of ['black', 'hold-previous'] as const) {
+      const originalShot: Shot = current.shots[1] as Shot;
+      for (const shot of [nonSourcedShot(originalShot, mode), originalShot]) {
+        const before: string[] = await readdir(versionsPath);
+        const response = await app.inject({ method: 'PATCH', url: `/api/projects/${project.projectId}/shots/${shot.id}/visual-plan`,
+          payload: { expectedRevision: current.revision, visualPlan: { visualMode: shot.visualMode, sourceLinks: shot.sourceLinks } } });
+        expect(response.statusCode).toBe(200);
+        const next: Project = response.json<{ project: Project }>().project;
+        expect(next.revision).toBe(current.revision + 1);
+        expect(next.shots[1]?.visualMode).toBe(shot.visualMode);
+        expect(next.assets).toEqual(project.assets);
+        expect(next.generationRecords).toEqual(project.generationRecords);
+        expect((await readdir(versionsPath)).length).toBe(before.length + 1);
+        current = next;
+      }
+    }
+    const beforeBytes: string = await readFile(join(dataRoot, sha256Text(project.projectId), 'project.json'), 'utf8');
+    const beforeVersions: string[] = await readdir(versionsPath);
+    const failed = await app.inject({ method: 'PATCH', url: `/api/projects/${project.projectId}/shots/shot-1/visual-plan`,
+      payload: { expectedRevision: current.revision, visualPlan: { visualMode: 'hold-previous', sourceLinks: nonSourcedShot(current.shots[0]!, 'hold-previous').sourceLinks } } });
+    expect(failed.statusCode).toBe(400);
+    expect(failed.json().error.issues).toContainEqual(expect.objectContaining({ code: 'HOLD_PREVIOUS_SOURCE_UNAVAILABLE' }));
+    expect(await readFile(join(dataRoot, sha256Text(project.projectId), 'project.json'), 'utf8')).toBe(beforeBytes);
+    expect(await readdir(versionsPath)).toEqual(beforeVersions);
+    const legacy = await app.inject({ method: 'PATCH', url: `/api/projects/${project.projectId}/shots/shot-1`,
+      payload: { expectedRevision: current.revision, content: { ...shotContent(current.shots[0]!), visualMode: 'black' } } });
+    expect(legacy.statusCode).toBe(400);
+    expect(legacy.json().error).toMatchObject({ code: 'VISUAL_PLAN_ATOMIC_UPDATE_REQUIRED', mutationBlocked: false });
+    expect((await store.read(project.projectId)).revision).toBe(current.revision);
+  // 네 번의 내구성 있는 저장과 두 번의 거부 응답을 같은 상태에서 확인한다.
+  }, 15_000);
   it('safe_visual_output_uses_actual_playhead', async (): Promise<void> => {
     const value = await fixture(); await value.store.update(value.project.projectId, value.project.revision, (project: Project): Project => withFirstGap(project, 1000), []);
     const path: string = `/api/projects/${value.project.projectId}/output/visual`;

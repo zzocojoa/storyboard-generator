@@ -1,0 +1,57 @@
+name: Native Audio Stress
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/audio-stress.yml'
+  workflow_dispatch:
+    inputs:
+      repetitions:
+        description: Real Chromium audio repetitions
+        type: choice
+        required: true
+        default: '50'
+        options:
+          - '50'
+          - '75'
+          - '100'
+  schedule:
+    - cron: '23 17 * * 0'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audio-stress-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  audio-stress:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build:web
+      - name: Exercise native audio and keep the first failure
+        shell: bash
+        env:
+          AUDIO_REPETITIONS: ${{ inputs.repetitions || '50' }}
+        run: |
+          mkdir -p .local/audio-stress
+          npm run test:e2e -- tests/e2e/real-audio.spec.ts --repeat-each="$AUDIO_REPETITIONS" --max-failures=1 --reporter=list,./scripts/audio-stress-reporter.ts 2>&1 | tee .local/audio-stress/console.log
+      - name: Upload failure trace, diagnostics, lifecycle and summary
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-audio-failure-${{ github.run_id }}
+          path: |
+            test-results/
+            .local/audio-stress/
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14

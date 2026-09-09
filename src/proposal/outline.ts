@@ -80,7 +80,7 @@ export function createSourceOutline(project: Project, settings: OutlineSettings)
       sourceLinks: sourceLinks(project, segment, units), visualMode: 'sourced', visualLocationId: null,
       action: units.filter((unit): boolean => unit.kind === 'ACTION').map((unit): string => unit.text).join('\n'),
       camera: { size: '', angle: '', move: '' }, presence: [], propIds: [], continuityBefore: [], continuityAfter: [], cameraAxis: null, screenDirection: null,
-      informationIds: [], transitionOut: { kind: 'cut', durationMs: 0, note: '' },
+      informationIds: [], transitionOut: { kind: 'cut', durationMs: 0, note: '', incomingExposure: 'none' },
       proposalOrigin: 'source-outline', approvalStatus: 'proposed', lockedFields: [],
     };
   });

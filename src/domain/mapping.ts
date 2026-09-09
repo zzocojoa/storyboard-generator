@@ -8,8 +8,9 @@ import type {
   Asset, AudioCue, Dataset, InformationRule, Issue, Project, Segment, Shot, ShotSourceLink,
   SourceRef, SourceTemporalAnchor, SourceUnit, StoryboardFrame, TextCue, TextMappingDecision, TextPlacement,
 } from './schema.js';
-import { assertVisualCoverageChange, shotVisualCoverageIssues, sourcePolicyIssues, visualModeStructureIssues } from './source-policy.js';
+import { assertVisualCoverageChange, firstVisualRevealOrderIssues, shotVisualCoverageIssues, sourcePolicyIssues, visualModeStructureIssues } from './source-policy.js';
 import { activeVisualSourceLinks, directVisualLinks, sourceAnchorRange, sourceRevealEvidenceMs } from './source-anchor.js';
+import { transitionVisualPolicy } from './transition.js';
 import type { SourceAnchorRange } from './source-anchor.js';
 export { directVisualLinks, sourceAnchorRange } from './source-anchor.js';
 export type { SourceAnchorRange } from './source-anchor.js';
@@ -305,15 +306,15 @@ function requireEditableSourceShot(project: Project, shotId: string): Shot {
   return shot;
 }
 
-function sourcePolicyReviewIssues(project: Project, segmentId: string): Issue[] {
-  return sourcePolicyIssues(
+export function sourcePolicyReviewIssues(project: Project, segmentId: string): Issue[] {
+  return [...sourcePolicyIssues(
     project.dataset.units.filter((unit: SourceUnit): boolean => unit.segmentId === segmentId),
     project.shots.filter((shot: Shot): boolean => shot.segmentId === segmentId),
-  );
+  ), ...firstVisualRevealOrderIssues(project, segmentId)];
 }
 
-function sourcePolicyIssueKey(value: Issue): string {
-  return `${value.code}\u0000${value.entityId}\u0000${value.expected ?? ''}\u0000${value.actual ?? ''}`;
+export function sourcePolicyIssueKey(value: Issue): string {
+  return JSON.stringify([value.code, value.severity, value.entityId, value.field, value.expected, value.actual]);
 }
 
 function assertSourcePolicyChange(current: Project, next: Project, segmentId: string): void {
@@ -470,12 +471,29 @@ export function reviewIssuesForShot(project: Project, shotId: string): Issue[] {
   return [...textMappingReviewIssues(project, shot.segmentId), ...sourcePolicyReviewIssues(project, shot.segmentId).filter((value: Issue): boolean => value.entityId === shot.id), ...sourceMappingReviewIssues(project, shot), ...revealReviewIssues(project, shot)];
 }
 
+/** 원자적 시각 계획을 저장하기 전에 같은 구간의 Source 정책과 해당 컷의 Anchor·Gate를 검사한다. */
+export function reviewSourcePlanIssues(project: Project, shot: Shot): Issue[] {
+  return [...sourcePolicyReviewIssues(project, shot.segmentId), ...sourceMappingReviewIssues(project, shot), ...revealReviewIssues(project, shot)];
+}
+
 export function approvalIssuesForShot(project: Project, shotId: string): Issue[] {
   const shot: Shot | undefined = project.shots.find((candidate: Shot): boolean => candidate.id === shotId);
   if (shot === undefined) return reviewIssuesForShot(project, shotId);
   const frameIssues: Issue[] = shot.visualMode === 'sourced' && !project.frames.some((frame: StoryboardFrame): boolean => frame.shotId === shot.id && frame.offsetMs === 0 && frame.role === 'start')
     ? [issue('SHOT_START_FRAME_REQUIRED', 'conflict', shot.id, 'frames', 'sourced 컷에는 시작 Frame이 필요합니다.', 'start frame at zero', null, [])] : [];
-  return [...reviewIssuesForShot(project, shotId), ...shotVisualCoverageIssues(project, shot), ...visualModeStructureIssues(project, shot), ...frameIssues];
+  return [...reviewIssuesForShot(project, shotId),
+    ...sourcePolicyReviewIssues(project, shot.segmentId).filter((value: Issue): boolean => value.entityId !== shot.id),
+    ...shotVisualCoverageIssues(project, shot), ...visualModeStructureIssues(project, shot), ...reviewTransitionInformationIssues(project, shot), ...frameIssues];
+}
+
+/** 다음 컷의 시작 영상이 실제 전환 시각에 먼저 공개돼도 되는지 같은 Gate로 검사한다. */
+export function reviewTransitionInformationIssues(project: Project, shot: Shot): Issue[] {
+  const incoming: Shot | undefined = project.shots[project.shots.findIndex((value: Shot): boolean => value.id === shot.id) + 1];
+  const policy = transitionVisualPolicy(shot.transitionOut, shot, incoming ?? null);
+  if (incoming === undefined || policy.incomingRevealMs === null) return policy.issues;
+  const informationIds: string[] = [...new Set(activeVisualSourceLinks(project, incoming, incoming.startMs).flatMap((link: ShotSourceLink): string[] =>
+    project.dataset.units.find((unit: SourceUnit): boolean => unit.id === link.unitId)?.informationIds ?? []))];
+  return [...policy.issues, ...informationIds.flatMap((id: string): Issue[] => gateIssue(project, shot.id, id, policy.incomingRevealMs as number))];
 }
 
 export function reviewIssuesForFrame(project: Project, frameId: string): Issue[] {

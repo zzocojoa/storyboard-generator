@@ -2,12 +2,13 @@ import { frameInformationIds, reviewInformationEmission } from './emission.js';
 import { issue } from './errors.js';
 import { reviewFrameBitmap } from './frame-output.js';
 import type { FrameOutputChannel, FrameOutputDecision } from './frame-output.js';
-import { reviewIssuesForVisualAt } from './mapping.js';
+import { reviewIssuesForVisualAt, reviewTransitionInformationIssues } from './mapping.js';
 import { activeStoryboardFrame } from './playback.js';
 import type { Issue, Project, Shot, ShotSourceLink, SourceUnit, StoryboardFrame } from './schema.js';
 import { activeVisualSourceLinks, sourceAnchorRange } from './source-anchor.js';
 import { shotVisualCoverageIssues, visualModeStructureIssues } from './source-policy.js';
 import { frameEvaluationAbsoluteMs } from './time.js';
+import { transitionVisualPolicy } from './transition.js';
 
 export type VisualOutputChannel = FrameOutputChannel;
 export type VisualOutputAtDecision = {
@@ -65,14 +66,16 @@ export function reviewVisualOutputAt(project: Project, playheadMs: number, chann
       `0..${project.dataset.segments.at(-1)?.endMs ?? 0} (end exclusive)`, String(playheadMs), [])] };
   if (channel === 'transition-preview') {
     const next: Shot | undefined = project.shots[project.shots.indexOf(shot) + 1];
-    if (next === undefined || next.startMs !== shot.endMs || shot.transitionOut.kind === 'cut' || shot.transitionOut.durationMs <= 0
-      || playheadMs < shot.endMs - shot.transitionOut.durationMs) return { shotId: null, playheadMs, channel,
+    const policy = transitionVisualPolicy(shot.transitionOut, shot, next ?? null);
+    if (policy.issues.length > 0) return { shotId: shot.id, playheadMs, channel, renderMode: 'blocked', frameId: null, sourceFrameId: null,
+      imageAssetId: null, activeSourceUnitIds: [], issues: policy.issues };
+    if (next === undefined || policy.incomingRevealMs === null || playheadMs < policy.incomingRevealMs) return { shotId: null, playheadMs, channel,
       renderMode: 'blocked', frameId: null, sourceFrameId: null, imageAssetId: null, activeSourceUnitIds: [], issues: [issue(
         'TRANSITION_PREVIEW_INACTIVE', 'conflict', shot.id, 'transitionOut', '현재 Playhead에는 다음 컷 전환이 없습니다.', 'active adjacent transition', String(playheadMs), [])] };
     const incoming: VisualOutputAtDecision = resolveShotOutput(project, next, next.startMs, channel, new Set<string>());
     const informationIds: string[] = incoming.activeSourceUnitIds.flatMap((unitId: string): string[] => project.dataset.units.find((unit: SourceUnit): boolean => unit.id === unitId)?.informationIds ?? []);
-    const issues: Issue[] = uniqueOutputIssues([...incoming.issues, ...reviewInformationEmission(project, {
-      entityId: next.id, channel: 'image', atMs: playheadMs,
+    const issues: Issue[] = uniqueOutputIssues([...incoming.issues, ...reviewTransitionInformationIssues(project, shot), ...reviewInformationEmission(project, {
+      entityId: incoming.sourceFrameId ?? next.id, channel: 'image', atMs: policy.incomingRevealMs,
       informationIds: [...informationIds, ...(incoming.sourceFrameId === null ? [] : frameInformationIds(project, incoming.sourceFrameId))],
     })]);
     return { ...incoming, playheadMs, issues, renderMode: issues.length > 0 ? 'blocked' : incoming.renderMode,
@@ -93,8 +96,10 @@ export function reviewShotVisualTimeline(project: Project, shot: Shot, channel: 
     ...project.dataset.informationRules.map((rule): number => rule.baseNotBeforeMs),
   ];
   const samples: number[] = [...new Set(times)].filter((time: number): boolean => shot.startMs <= time && time < shot.endMs).sort((a: number, b: number): number => a - b);
-  const transitionIssues: Issue[] = shot.transitionOut.kind !== 'cut' && shot.transitionOut.kind !== 'fade' && shot.transitionOut.durationMs > 0
-    ? [Math.max(shot.startMs, shot.endMs - shot.transitionOut.durationMs), shot.endMs - 1]
+  const incoming: Shot | undefined = project.shots[project.shots.findIndex((value: Shot): boolean => value.id === shot.id) + 1];
+  const transitionPolicy = transitionVisualPolicy(shot.transitionOut, shot, incoming ?? null);
+  const transitionIssues: Issue[] = transitionPolicy.incomingRevealMs !== null && transitionPolicy.incomingRevealMs < shot.endMs
+    ? [transitionPolicy.incomingRevealMs, shot.endMs - 1]
       .flatMap((time: number): Issue[] => reviewVisualOutputAt(project, time, 'transition-preview').issues) : [];
-  return uniqueOutputIssues([...shotVisualCoverageIssues(project, shot), ...samples.flatMap((time: number): Issue[] => reviewVisualOutputAt(project, time, channel).issues), ...transitionIssues]);
+  return uniqueOutputIssues([...shotVisualCoverageIssues(project, shot), ...samples.flatMap((time: number): Issue[] => reviewVisualOutputAt(project, time, channel).issues), ...transitionPolicy.issues, ...transitionIssues]);
 }

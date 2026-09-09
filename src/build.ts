@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { runtimeGenerationConfigHash } from './build-fingerprint.js';
 import { BuildManifestSchema } from './build-schema.js';
 import type { BuildManifest } from './build-schema.js';
 import type { GeneratorBuildProvenance } from './domain/schema.js';
@@ -14,6 +15,12 @@ export function readBuildManifest(): BuildManifest {
 }
 
 export function generatorBuildProvenance(build: BuildManifest): GeneratorBuildProvenance {
-  return { commitSha: build.commitSha, appVersion: build.appVersion, projectSchemaVersion: build.projectSchemaVersion,
+  return { provenanceVersion: build.provenanceVersion, gitStateAvailable: build.gitStateAvailable, headCommitSha: build.headCommitSha, worktreeDirty: build.worktreeDirty, generationInputsDirty: build.generationInputsDirty,
+    generationContractSha256: build.generationContractSha256, runtimeGenerationConfigSha256: build.runtimeGenerationConfigSha256,
+    commitSha: build.commitSha, appVersion: build.appVersion, projectSchemaVersion: build.projectSchemaVersion,
     builtAt: build.builtAt, sourceTreeSha256: build.sourceTreeSha256 };
+}
+
+export function buildForSpeechVoice(speechVoice: string): BuildManifest {
+  return { ...readBuildManifest(), runtimeGenerationConfigSha256: runtimeGenerationConfigHash(speechVoice) };
 }

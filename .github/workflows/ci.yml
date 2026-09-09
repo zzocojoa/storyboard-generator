@@ -30,3 +30,4 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm run check:e2e
+      - run: npm run test:e2e -- tests/e2e/real-audio.spec.ts --repeat-each=3

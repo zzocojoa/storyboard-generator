@@ -1,3 +1,4 @@
+import { buildForSpeechVoice } from '../build.js';
 import { parseArgs } from 'node:util';
 import { dirname } from 'node:path';
 import { mkdir } from 'node:fs/promises';
@@ -42,13 +43,13 @@ async function pending(requests: CodexRequestStore): Promise<void> {
 async function context(args: string[], store: ProjectStore, requests: CodexRequestStore): Promise<void> {
   const request: CodexRequest = await requests.read(requestArgument(args));
   if (request.status !== 'pending') throw contractError('CODEX_REQUEST_SETTLED', `${request.id}: 이미 ${request.status} 상태인 요청입니다.`, []);
-  output(await buildCodexWork(request, await store.read(request.projectId), store));
+  output(await buildCodexWork(request, await store.read(request.projectId), store, requests.buildManifest()));
 }
 
 async function prepareSpeech(args: string[], store: ProjectStore, requests: CodexRequestStore): Promise<void> {
   const { values } = parseArgs({ args, options: { request: { type: 'string' }, output: { type: 'string' } }, strict: true, allowPositionals: false });
   const request: CodexRequest = await requests.read(required(values.request, '--request'));
-  const work: CodexWork = await buildCodexWork(request, await store.read(request.projectId), store);
+  const work: CodexWork = await buildCodexWork(request, await store.read(request.projectId), store, requests.buildManifest());
   if (work.kind !== 'speech') throw contractError('CODEX_REQUEST_KIND_MISMATCH', `${request.id}: 음성 작업이 아닙니다.`, []);
   const speechWork: SpeechWork = work;
   const path: string = required(values.output, '--output');
@@ -87,17 +88,21 @@ const help: string = `Codex App 콘티 생성 브리지\n\npending\ncontext --re
 async function main(configPath: string, args: string[]): Promise<void> {
   const config: AppConfig = await loadConfig(configPath);
   const store: ProjectStore = new ProjectStore(config.dataRoot);
-  const requests: CodexRequestStore = new CodexRequestStore(config.codex.requestRoot);
-  const [command, ...rest] = args;
-  if (command === 'pending') return pending(requests);
-  if (command === 'context') return context(rest, store, requests);
-  if (command === 'prepare-speech') return prepareSpeech(rest, store, requests);
-  if (command === 'apply-proposal') return applyProposal(rest, store, requests);
-  if (command === 'apply-image') return applyImage(rest, store, requests);
-  if (command === 'apply-speech') return applySpeech(rest, config, store, requests);
-  if (command === 'fail') return fail(rest, requests);
-  if (command === '--help') { process.stdout.write(help); return; }
-  throw contractError('UNKNOWN_COMMAND', help, []);
+  const requests: CodexRequestStore = new CodexRequestStore(config.codex.requestRoot, buildForSpeechVoice(config.codex.speechVoice));
+  try {
+    const [command, ...rest] = args;
+    if (command === 'pending') return await pending(requests);
+    if (command === 'context') return await context(rest, store, requests);
+    if (command === 'prepare-speech') return await prepareSpeech(rest, store, requests);
+    if (command === 'apply-proposal') return await applyProposal(rest, store, requests);
+    if (command === 'apply-image') return await applyImage(rest, store, requests);
+    if (command === 'apply-speech') return await applySpeech(rest, config, store, requests);
+    if (command === 'fail') return await fail(rest, requests);
+    if (command === '--help') { process.stdout.write(help); return; }
+    throw contractError('UNKNOWN_COMMAND', help, []);
+  } finally {
+    await store.close();
+  }
 }
 
 try {

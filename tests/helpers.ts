@@ -61,5 +61,5 @@ export function pcmWav(durationMs: number, sampleRate: number, channels: 1 | 2, 
 }
 
 export function testGeneratorBuild(): GeneratorBuildProvenance {
-  return { commitSha: null, appVersion: 'test-fixture', projectSchemaVersion: '1.7.0', builtAt: null, sourceTreeSha256: null };
+  return { provenanceVersion: 1, gitStateAvailable: null, headCommitSha: null, worktreeDirty: null, generationInputsDirty: null, generationContractSha256: null, runtimeGenerationConfigSha256: null, commitSha: null, appVersion: 'test-fixture', projectSchemaVersion: '1.9.0', builtAt: null, sourceTreeSha256: null };
 }
