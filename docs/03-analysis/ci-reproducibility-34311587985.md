@@ -1,0 +1,183 @@
+# PR #6 병합 후 CI 재현성 조사
+
+## 판정과 조사 경계
+
+조사 기준 사건은 `781d9f1478f5fbb830d7f84f3df403505520f1a2`의 CI Run `34311587985`다. 최초 timeout 원인과 원본 ENOTEMPTY의 Writer는 미확정이다. 실제 Vitest timeout 뒤 진행 중인 Project update와 Fixture 정리가 겹치는 결함, Child `stop()`이 stdio `close` 전에 반환하는 결함은 별도 통제 시험으로 확인하고 Test 코드에서 수정했다. 제품 Runtime·Schema·Apply Coordinator는 변경하지 않았다. 허용된 로컬 조사·확인된 결함 수정·종합 검증·문서화·자원 정리는 완료했다. 전체 Hosted CI 재현성은 추가 확인이 필요하며, 검증 범위에서 제품 기능 회귀는 발견하지 않았다.
+
+이번 조사에서 확인된 추가 제품 로직 결함: 없다.
+
+최초 CI timeout의 근본 원인: 미확정.
+
+병합 전후 기능 검증 성공, 최초 실패 재현, 정리 결함 재현·수정, Hosted CI 재검증은 서로 다른 상태다. 재실행 성공을 원인 해결로 해석하지 않는다.
+
+## Git 및 원본 증거
+
+- 사건 Commit·수정 Base·시작 HEAD: `781d9f1478f5fbb830d7f84f3df403505520f1a2`.
+- 작업 Branch: `codex/storyboard-ci-reproducibility`. 시작 시 fetch 후 origin/master와 같은 Commit에서 생성했다.
+- 최종 실행 코드 검증 HEAD: `6684b308778baa9fc826a45279d2c4baade7c2b4`. 이후 Commit은 조사 문서와 기존 보고서의 링크만 갱신한다. RED `41c8e5f` → 정리 수정 `b5e19f7` → CI 진단 `4c2296e` → 의도적 timeout 시작 고정 `6684b30`을 로컬 Commit으로 보존했다.
+- Feature HEAD: `0008a8db1f64bad77606c159d476c8cb7d933d74`. 이전 Base: `2ecb5038e3444bfeb1beeb29530492e0920f914f`.
+- PR CI 실제 Checkout: `a83935eee31fb7d0dbaf47a14549849043d7090c`. 병합본과 Tree `e68f61dd766cce41410830b284d7d1acc5009922`가 같고 부모도 같다.
+- 사용자 미추적 `test-results 2/`는 열거나 변경·Stage하지 않았다. 운영 데이터·Request·서버는 변경하지 않았다.
+- 이번 조사에서는 GitHub 조회와 fetch만 수행했다. Push·PR 생성/수정·Workflow 실행/재실행·Merge·보호 규칙 변경은 수행하지 않았다. PR #6 병합과 Attempt 2 재실행은 이번 조사 이전에 완료된 별도 승인 작업이다.
+
+직접 조회한 [PR #6](https://github.com/zzocojoa/storyboard-generator/pull/6)은 2026-09-09 04:35:52 UTC에 병합됐다. 원본은 Git에서 제외되는 `.local/ci-investigation/34311587985/`에 보관했다. `pr-6.json`, `merge-commit.json`, `pr-checkout.json`, Attempt별 metadata·check 로그, Attempt 2 e2e 로그, `pr-ci.log`를 각각 수집했다. 최신 Run 요약으로 첫 Attempt를 대체하지 않았다.
+
+## 원본 Attempt별 사실
+
+| 실행 | check | 단위·통합 | 시간 | e2e / Audio·RAF |
+|---|---|---|---:|---|
+| [PR CI 34309755322 / 1](https://github.com/zzocojoa/storyboard-generator/actions/runs/34309755322/attempts/1) | 성공 | 56 파일·1,187 성공 | 110.54초 | 16 / 21 성공 |
+| [34311587985 / 1](https://github.com/zzocojoa/storyboard-generator/actions/runs/34311587985/attempts/1) | 실패 | 53 파일 성공·3 실패, 1,182 성공·5 실패 | 293.82초 | check 의존성으로 미실행 |
+| [34311587985 / 2](https://github.com/zzocojoa/storyboard-generator/actions/runs/34311587985/attempts/2) | 성공 | 56 파일·1,187 성공 | 97.67초 | 16 / 21 성공 |
+
+PR CI와 Attempt 2의 Required는 382, missing/duplicates/skip/only는 모두 0이다. Attempt 1은 npm test에서 중단돼 뒤의 이름 검사·Schema·웹 Build를 실행하지 않았다. Attempt 2의 e2e 16개는 24.2초, 별도 Audio·RAF 7개 × 3회는 36.5초다. 같은 실행 내 하위 명령을 별도 독립 성공으로 세지 않는다.
+
+| Test | Attempt 1 보고 시간 | Attempt 2 보고 시간 | 최초 오류 | 추가 정리 오류 |
+|---|---:|---:|---|---|
+| proposed_audio_is_not_counted_as_playable | 5,062ms | unknown | Test 본문 5,000ms timeout | 보고 없음 |
+| request_supersession_is_crash_recoverable | 5,018ms | 1,469ms | Test 본문 5,000ms timeout | 보고 없음 |
+| later_project_edit_does_not_change_request_result_revision | 5,131ms | 999ms | Test 본문 5,000ms timeout | 보고 없음 |
+| legacy_applied_record_uses_introduction_revision | 5,052ms | 412ms | Test 본문 5,000ms timeout | `.transactions/<transactionId>` rmdir ENOTEMPTY |
+| legacy_terminal_record_conflict_is_not_silently_rewritten | 5,391ms | 449ms | Test 본문 5,000ms timeout | 보고 없음 |
+
+이 시간은 Reporter가 출력한 Test duration이며 개별 단계 측정치가 아니다. 빠른 성공 시험의 개별 시간을 생략하는 Reporter 때문에 첫 행의 Attempt 2 시간은 unknown이다. 5개 실패 Test에 오류가 총 6개 보고된 것이며 실패 Test가 6개인 것은 아니다. Hook·Request Lock·Audio Worker timeout 메시지로 보고된 실패는 없다.
+
+원본의 Fixture 생성·Store 초기화·Request 생성·Barrier 도달·복구·Assertion·Close·Root 삭제 시작/종료 시간은 unknown이다. 일부 기존 로그는 다음 사실만 보여준다.
+
+- Attempt 1에서 later-project-edit Test 문맥의 Child kill 이벤트가 04:38:45.3825833 UTC, Request lock 대기 이벤트가 04:38:45.5014529 UTC에 기록됐다. 최종 Revision 증거 이벤트는 없다.
+- 같은 Test의 Attempt 2에는 kill·lock 대기 이후 `appliedRevision=1`, `currentRevision=2`, `resultRevision=1`, 추가 Record/Asset/Revision 0, 후속 편집 보존이 기록됐다.
+- request-supersession Test의 lock 대기 로그는 Attempt 1에서 두 번, Attempt 2에서 세 번 보인다. 개별 대기 종료·지연 원인은 기록되지 않았다. 이 빈도만으로 5초 Lock timeout을 판정할 수 없다.
+- 실패 목록 출력 시각은 모든 시험이 끝난 뒤의 요약 시각이다. 이를 Test 시작·실패·삭제의 실제 시각으로 사용하지 않았다.
+
+## 환경 및 지문 비교
+
+| 항목 | PR CI | Attempt 1 | Attempt 2 | 로컬 재현 |
+|---|---|---|---|---|
+| OS | Ubuntu 24.04.4 | Ubuntu 24.04.4 | **Ubuntu 24.04.5** | macOS / Darwin 24.6.0 arm64 |
+| Runner 이미지 | 20260831.293.1 | 20260831.293.1 | **20260907.300.1** | 해당 없음 |
+| Runner Agent | 2.337.0 | 2.337.0 | 2.337.0 | 해당 없음 |
+| Node | 24.20.0 | 24.20.0 | 24.20.0 | 24.6.0 |
+| npm | 11.19.0 | 11.19.0 | 11.19.0 | 11.5.1 |
+| Vitest | 5.0.0 | 5.0.0 | 5.0.0 | 설치본·lockfile 5.0.0 |
+| 일반 Worker / timeout / Retry | 2 / 5,000ms / 0 | 동일 | 동일 | 동일 |
+| Host 부하·디스크 지연·fsync별 소요 시간 | unknown | unknown | unknown | 미계측 |
+
+Attempt 2는 같은 Ubuntu 이미지 버전이 아니다. PR CI와 Attempt 1은 이미지 버전이 같아도 서로 다른 실행이다. 이미지 버전만으로 실제 Host I/O 조건이 같거나 달랐던 원인을 증명할 수 없다. 로컬 Linux Container·새 Hosted CI 재현은 수행하지 않았다. 로컬 Docker daemon은 확인했지만 관련 Node/Ubuntu 이미지가 설치돼 있지 않았고, 이번 유한 재현은 macOS에서 수행했다.
+
+다음 SHA-256은 Git 객체의 실제 바이트를 읽어 계산했으며 세 원본 CI의 Tree 동일성으로 대조했다. 전체 값은 `environment-comparison.json`에도 보관한다.
+
+| 대상 | PR CI·Attempt 1·2 공통 SHA-256 |
+|---|---|
+| `.github/workflows/ci.yml` | `2299923464960ac3d680c40017d235ce3fdaa9dd50acd9f70c60d61e6983c399` |
+| `package-lock.json` | `9c91a0fca545341fa56c55e517b290115042ce14605f6341c188c182b368ac77` |
+| `vitest.config.ts` | `fd84d4336f8845769f6b53d7368755e3c561c981eb8e0a9b817284196d1e50d6` |
+| Source Tree | `8d4c2fdf08546b9ba43f88bba8beeb385a9fa0faaf2cfbf7d451425d4ae5b4c9` |
+| Generation Contract | `ae75aa3c0654337d0e4e0e00f398f5b26e5cc5248ed6ee20a8df0da16596664f` |
+| Runtime Config | `fa910c7c36f2db35cf13eb8586604fc5263ae5bcc89a7087a092878026ff52a8` |
+
+수정 후에도 제품 Source·Generation Contract·Runtime Config 지문과 lockfile은 같다. Workflow·Vitest 설정의 진단 항목은 변경됐다. Source 지문이 같다는 사실을 Test/Workflow까지 같다는 뜻으로 사용하지 않는다.
+
+## 가설 및 인과 판단
+
+| 가설 | 관찰·실험 | 판단 |
+|---|---|---|
+| Runner I/O·fsync 경합이 최초 timeout을 만들었다 | Attempt 1에서 저장 중심 Suite가 느리지만 fsync/Host 계측이 없다. 로컬 원본 시험은 timeout 미재현 | 미확정 |
+| 일반 Worker 2가 원인이다 | Worker 2의 유한 로컬 실행은 통과. Worker 1 비교는 최초 timeout이 미재현돼 수행하지 않음 | 미확정; 병렬 설정 변경 근거 없음 |
+| Request Lock의 자체 5초 제한이 터졌다 | 원본은 `Test timed out`이다. 자체 실패 코드는 `CODEX_REQUEST_STORE_BUSY`이며 성공 Attempt에도 대기 로그가 있다 | 최초 오류 유형으로는 지지하지 않음; 전체 지연 기여는 unknown |
+| Child 시작·IPC·종료가 최초 지연을 만들었다 | 일부 kill/대기만 기록됨. `stop()`의 close 이전 반환은 별도 결정적 시험에서 확인 | 최초 지연은 미확정; Helper 종료 계약 결함은 확인 |
+| timeout 후 본문·Writer와 정리가 겹친다 | 설치 Vitest 계약과 실제 Project update Barrier를 둔 별도 Vitest Child에서 확인 | Test 정리 결함 확인·수정 |
+| 그 Writer가 원본 ENOTEMPTY를 만들었다 | 원본 잔존 파일·Writer PID·삭제 중 신규 파일·원래 Promise 종료 로그가 없음 | **미확정** |
+| Heartbeat가 원본 Root 삭제 후 다시 썼다 | Store.close는 공유 Timer를 제거하고 알려진 in-flight heartbeat를 기다린다. 원본의 실제 Timer 상태는 없음 | 미확정; 알려진 heartbeat 종료 경계는 회귀 확인 |
+| Mock 복원·전역 배열이 다음 Test와 섞일 수 있다 | 이전 코드는 본문 정산 전 Mock 복원과 공유 배열 splice를 수행함 | Test별 소유 Scope·정산 뒤 복원으로 경계 수정; 원본 연쇄 발생 여부는 unknown |
+
+저장 중심 Suite의 PR/Attempt 1/Attempt 2 시간(ms)은 apply `36,709 / 109,290 / 30,457`, request transaction `9,954 / 27,445 / 11,246`, media workflow `8,350 / 32,573 / 8,510`, storage safety `14,592 / 59,037 / 12,406`이다. 모든 시험이 같은 비율로 느려졌다고 주장하지 않는다. 낮은 계산 비용의 Suite까지 포함한 전체 시간 비율은 I/O 지연의 직접 계측이 아니다.
+
+## 설치 코드 계약과 통제된 재현
+
+설치된 Vitest 5의 `dist/chunks/run.CQOUYP-x.js`에서 `withTimeout`, `abortIfTimeout`, `runTest`, `afterEach` 호출을 읽었다. 5초 제한은 `dist/chunks/index.B89dZ0-N.js`의 기본값이다. Timeout은 Wrapper를 reject하고 Test Context의 AbortSignal을 발생시킨다. 원래 비동기 함수 Promise의 종료를 기다리지 않은 채 Hook으로 진행한다.
+
+ProjectStore.close는 공유 Heartbeat 참조·Timer·알려진 in-flight heartbeat와 Process registry를 정리한다. 이미 시작한 create/update Promise의 정산 API는 아니다. 기존 테스트는 그 차이를 처리하지 않았다. 제품 서버의 종료 순서와 Test Hook을 같은 것으로 취급하지 않았으며 Store.close 제품 계약을 변경하지 않았다.
+
+Node 설치본의 recursive rm 구현은 디렉터리 항목을 읽고 하위 삭제를 끝낸 뒤 rmdir한다. 그 사이 작성이 생기면 ENOTEMPTY가 가능하지만, 원본 CI의 신규 파일이나 작성자는 증명되지 않았다. 이 가능성만으로 원인을 확정하지 않았다.
+
+RED `41c8e5f`의 부모 회귀는 별도 Vitest Child에서 의도적 250ms timeout을 실행하고 Writer settle가 Store close보다 먼저인지 검사한다. 기존 순서에서는 `7 < 4` Assertion이 실패했다. 별도 원본 이벤트 확보 실행의 순서는 다음과 같다. 값은 해당 Child Process 내부 monotonic elapsed(ms)이며 다른 Process와 직접 비교하지 않는다.
+
+| 단계 | 기존 정리 | 동일 Fixture·Barrier의 수정 후 |
+|---|---:|---:|
+| Test 시작 | 280.881 | 454.762 |
+| Journal 준비·Writer Barrier | 387.085 | 581.012 |
+| Vitest timeout 신호 | 536.317 | 709.985 |
+| Store close 시작 / 끝 | 537.379 / 546.981 | 903.199 / 908.706 |
+| Root 삭제 시작 | 547.248 | 908.991 |
+| update Promise settle | **555.755, 삭제 시작 뒤** | **902.687, Close·삭제 전** |
+| Writer 또는 삭제 rejection 관찰 | 556.333 | 없음 |
+| 최종 Root 삭제 종료 | 556.515 | 911.651 |
+
+기존 관찰용 Child는 모든 결과를 정산한 뒤 전용 Root를 정리했다. 로그의 rejection 구분은 Writer/삭제를 합친 관찰값이므로 이를 ENOTEMPTY 재현으로 보고하지 않는다. 원본 실패를 해소하는 코드로 rm 재시도나 sleep을 추가한 것은 아니다.
+
+현재 회귀는 Fixture 준비 지연이 의도적 timeout으로 오인되지 않도록 Journal Barrier에 도달한 뒤 Test 본문을 시작한다. Barrier 자체와 250ms timeout, 부모의 순서·실패 종류 검사는 유지했다. 일반 Test glob에서 제외한 `writer.fixture.ts`만 Child 설정으로 실행한다. 부모는 Exit 1, 실패 Test 1개, 오류 메시지 **정확히 1개인 의도적 timeout**, Unhandled/Uncaught 오류 부재와 정리 순서를 검사한다. Child가 다른 이유로 실패하면 부모도 실패한다. Child Process 전체 제한은 4초이며 Thread Pool을 사용해 부모의 제한 종료가 별도 Test Process를 남기지 않게 한다.
+
+별도 `controlled_process_stop_waits_for_stdio_close` 회귀는 기존 helper의 stop 직후 `close=false`로 실패했다. 수정 후 stop은 실제 `close`와 남은 stdio 종료를 기다리며, 확인하지 못하면 제한된 시간 안에 오류를 반환한다.
+
+## 실제 수정
+
+- `tests/owned-test-scope.ts`, `tests/owned-test.ts`: Test별 Root·본문·상위 비동기 작업·Child·App·Worker owner·Store를 추적한다. 새 Test 호출은 종료 뒤 거부한다. 이미 시작한 Apply/HTTP/Transaction 내부 호출은 완료하도록 두고 상위 작업의 실제 settle를 기다린다.
+- `apply-consistency`, `request-store-transaction`, `media-workflow-regression`: 공유 배열과 조기 afterEach 삭제를 소유 Scope로 교체했다. 기존 Test 본문 판단·Assertion·장애 지점은 유지했다. 직접 Fixture 파일 작업도 Scope를 사용한다. 설정된 로컬 Audio Normalizer는 소유 자원으로 닫는다.
+- 정리는 Barrier 해제 → 소유 Child close → 본문·진행 작업 정산 → App/Worker/Store 종료 → Root 삭제 순서다. App 종료 Hook의 Store 종료 같은 소유 의존 호출은 허용한다. Mock은 정산 뒤 복원한다.
+- 정산 제한은 일반 Scope 4초다. 미종료 Writer가 있으면 Store·Root를 보존하고 오류를 보고한다. 같은 Worker Process의 다음 Fixture는 시작하지 않는다. 각 독립 종료 실패를 모으며 최초 Vitest 오류를 성공으로 바꾸지 않는다. 삭제 retry·timeout 상향·Worker 감소·자동 Test retry를 넣지 않았다.
+- `tests/controlled-process.ts`: exit 이후 stdio close까지 기다린다. Child close 제한은 2초이며 소유 Child에만 SIGKILL을 사용한다.
+- 7개 핵심 회귀를 Required에 등록했다. 성공 횟수를 고유 검증 수로 과장하지 않는다. 152개 기존 Test를 분할하거나 Assertion을 줄이지 않았다.
+- 제품 `src/`, package.json, lockfile, Schema, 제작 Skill, AGENTS와 Audio Stress Workflow는 변경하지 않았다.
+
+## 재현 횟수와 검증 기록
+
+원본 기본 전체 실행은 최대 3회 중 2회, 원본 3개 파일은 최대 5회 중 2회로 끝냈다. 실행 성공까지 무한 반복하지 않았다. Worker 1/2 비교는 실행하지 않았다. 최초 timeout이 재현되지 않은 macOS에서 Worker 수 비교만 추가해도 원래 Ubuntu Host 지연과의 인과를 구분할 수 없기 때문이다. 결정적 정리 결함은 별도 Barrier로 검증했다.
+
+| 조건 | 코드 기준 | 반복 | 결과 | 시간·근거 |
+|---|---|---:|---|---|
+| 원본 전체, 잘못된 TMPDIR 조건 | 781d9f1 | 1 | 1,183 성공·4 실패, timeout 없음 | 224.72초; baseline-full-1.log |
+| 원본 전체, 저장소 밖 TMPDIR | 781d9f1 | 1 | 1,187 성공 | 191.25초; baseline-full-2.log |
+| 원본 3개 파일 | 사건 당시 파일 그대로 | 2 | 매회 152 성공 | 52.73 / 54.54초; baseline-targeted-1/2.log |
+| 수정 3개 파일, 진단 OFF | b5e19f7에 포함한 변경 | 1 | 152 성공 | 53.43초; fixed-targeted-1.log |
+| 원래 Writer 순서 회귀 | 41c8e5f | 1 | 예상 RED | controlled-red.log |
+| 원래 순서 이벤트 보관 | 동일 관찰 Fixture | 1 | 예상 Child timeout·정리 겹침 | controlled-red-events.jsonl |
+| Scope·Child close 회귀 최초 | 수정 Scope·기존 Child helper | 1 | 5 성공·1 RED | scope-regression-first.log |
+| 수정 정리 회귀 | 최종 수정 과정 | 3 | 매회 7 성공 | green-1/2/3; 1.67 / 1.82 / 1.69초 |
+| Journal 도달 뒤 timeout 시작 | 6684b30 | 1 | 1 성공 | controlled-barrier-final.log; 2.02초 |
+| npm run typecheck | 수정 코드 | 1 | 성공 | final-typecheck.log |
+| npm run typecheck:web | 수정 코드 | 1 | 성공 | final-typecheck-web.log |
+| npm run test:names | 수정 코드 | 1 | Required 389, 네 오류 수 0 | final-test-names.log |
+| npm run schemas:check | 수정 코드 | 1 | 성공 | final-schemas-check.log |
+| npm run build:web | 4c2296e + Probe 준비 보강 | 1 | 성공 | final-build-web.log |
+| npm test, 진단 OFF | fd26727; 이후 Workflow 환경 항목·Probe 시작 시점만 보강 | 1 | 58 파일·1,194 성공 | 194.55초; final-npm-test.log |
+| npm run check, 진단 ON | 6684b30 | 1 | 58 파일·1,194 성공, Required 389·네 오류 수 0 | 210.62초; final-check.log |
+| npm run check:e2e | 6684b30 | 1 | 16 성공 | 27.0초; final-check-e2e.log |
+| 실제 Audio·RAF 3회 | 6684b30 | 3 | 고유 7개, 실행 21개 성공 | 40.9초; final-audio-raf.log |
+| npm run smoke | 6684b30 | 1 | 69 검사 성공·동적 포트 7개 | final-smoke.log; cleaned=true |
+| git diff --check | 최종 문서 포함 | 1 | 성공 | 공백 오류 없음 |
+
+첫 전체 실행의 임시 Root를 저장소 아래로 지정해 Git 부재 Fixture가 상위 저장소를 발견했다. 그 4건은 조사 실행 조건 오류이며 원본 CI timeout과 다르다. 코드나 기대값을 바꾸지 않고 다음 실행부터 저장소 밖 독립 Root를 사용했다. Raw 로그와 실패 결과는 보존했다. 별도 관찰 Child를 로그 경로 없이 호출한 1건도 설정 오류로 남겼고 재현 성공·실패 통계에 넣지 않았다. 컴파일 중간 확인은 최종 검증 반복 수로 세지 않았다.
+
+## 재발 시 진단 경로
+
+일반 로컬 실행의 계측은 꺼져 있다. 선택한 실행에만 `STORYBOARD_TEST_RUN_ID`, 삭제 Root 밖 절대경로인 `STORYBOARD_TEST_DIAGNOSTICS_DIR`을 지정한다. Vitest JSON에는 빠른 성공을 포함한 시험별 duration과 실패 메시지가 남는다. 세 대상 파일의 lifecycle JSONL은 Test·Fixture·Operation·PID·Worker ID·단계·monotonic 시간·오류 코드를 기록한다. `resourceCount`는 등록된 소유 핸들 수이며 살아 있는 OS Process/Thread 수를 뜻하지 않는다. 측정하지 않은 Timer 수는 null이다. 실제 제작 원문·Prompt·미디어 bytes·전체 환경변수는 추가하지 않았다.
+
+```sh
+STORYBOARD_TEST_RUN_ID=local-storage-investigation \
+STORYBOARD_TEST_DIAGNOSTICS_DIR="$PWD/.local/ci-investigation/manual-run-1" \
+npm test -- tests/apply-consistency.test.ts tests/request-store-transaction.test.ts tests/media-workflow-regression.test.ts
+```
+
+새 실행마다 별도 진단 디렉터리를 지정하고 Git에서 제외되는지 확인한다. TMPDIR을 바꾼다면 저장소 밖에 별도로 만든 전용 Root를 사용한다. 같은 출력 디렉터리의 JSON 보고서를 덮어쓰며 성공 횟수를 누적하지 않는다. 계측 ON의 파일 I/O 비용과 관찰 영향을 OFF 결과와 구분한다.
+
+CI는 기존 check 명령·실패 Exit·check → e2e 의존성을 유지한다. 선택적 계측을 check에 켜고 실패 시 Run ID·Attempt·SHA가 포함된 Artifact에 JSON·lifecycle·Checkout·설정 Hash·Node/npm·Runner 이미지·Build 지문을 수집한다. 업로드는 별도 Step이며 수집 실패가 Test 성공으로 바뀌지 않는다. continue-on-error, 자동 rerun, schedule, Audio Stress 변경은 없다. 새 CI 실행과 실제 Artifact 업로드의 Hosted 검증은 아직 하지 않았다.
+
+## 자원 및 잔여 사항
+
+운영 서버 PID 89219는 변경하지 않았다. 별도 시험은 포트 0 또는 HTTP inject를 사용한다. 종료된 조사 실행에 대해 관련 apply/request/Vitest Child가 남아 있지 않은 것을 Process snapshot으로 확인했다. 검사하지 않은 사용자 Process·OS 전체 Timer·Host I/O 상태를 0으로 보고하지 않는다.
+
+진단 ON의 최종 check에서는 대상 Test Scope 152개·이벤트 3,098개를 확인했다. 등록 Child 핸들 58개, App 18개, Worker owner 39개, Store 79개가 Close를 마쳤고 Root 82개는 진행 Operation 및 등록 자원 수가 0인 상태에서 삭제됐다. 이 세 파일의 진단에는 timeout·cleanup-failed·root-preserved 이벤트가 없다. 다른 Suite나 OS 전체의 미계측 자원 수로 확대하지 않는다. Smoke는 실제 중단 Child 1개의 종료(ESRCH), 남은 registry의 소유자, 전체 Root 정리를 검증했다.
+
+각 독립 TMPDIR의 잔존 이름과 종료 상태는 `experiment-results.json`에 보관한다. 원본 전체 시험에는 export-io의 정리 Hook 없는 두 임시 Root와 Node/tsx/Vite 캐시가 남는다. 첫 잘못된 TMPDIR 실행에는 추가 디렉터리가 남았으며 정확한 재생성 주체는 unknown이다. 이는 원본 Ubuntu 사건의 Writer 증거가 아니다. 해당 실행 Process 종료와 경로를 확인한 뒤 조사 소유 Root만 정리했다. `root-cleanup.json`의 독립 상위 Root 10개는 모두 삭제 후 부재까지 확인했다. 안전한 종료를 확인하지 못해 최종 보존한 Test Root는 없다. 원본 로그·진단 JSON 등 감사 자료는 조사 디렉터리에 유지했다. 제한 실패 회귀가 의도적으로 보존한 Root는 Barrier를 풀고 본문 종료를 확인한 뒤 부모 시험에서 정리한다.
+
+이번 범위에서 재현한 Writer 정리 순서 및 Child close 결함의 미수정 항목은 없다. 대상 밖 export-io의 두 임시 Root 자체 정리 부재는 제품 결함이나 최초 timeout의 원인으로 분류하지 않고, 조사 실행 종료 후 상위 Root에서 정리했다. 잔여 판단은 최초 I/O·Process·Lock 지연의 원인, 원본 ENOTEMPTY 당시 잔존 파일과 Writer 소유자, Hosted 환경에서의 수정 검증이다. 재발 시 첫 `test-aborted` 이벤트의 진행 Operation과 `cleanup-start`/`operation-settled`/`root-remove-start` 순서를 먼저 대조한다. 그 증거에서 지연 위치가 좁혀진 경우에만 해당 경계의 fsync·IPC 시간을 추가 측정한다. 기능 확장이나 저장 시스템 재설계는 이 조사 결과에서 제안하지 않는다.

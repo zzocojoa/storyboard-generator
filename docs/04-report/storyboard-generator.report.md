@@ -4,6 +4,8 @@
 
 Request와 Project 결과 적용의 경쟁 및 실제 resultRevision 유실을 수정했다. 결과 적용 일관성과 실제 Revision 보존 구현은 완료이며 로컬 단위·통합·종합·반복·브라우저·Smoke 검증은 모두 성공했다. 사용 판단은 로컬 협력 Worker에 GO, 원격 CI·병합에는 CONDITIONAL GO다. 이번 목표는 로컬 구현·검증·문서·Feature Branch Commit이며 새 원격 작업은 실행하지 않는다. 생성 완료와 Final Ready는 여전히 별개다.
 
+아래 구현 검증은 병합 전 기준이다. 이후 PR #6은 `781d9f1`로 병합됐고 첫 CI Attempt의 timeout 5건·추가 ENOTEMPTY 뒤 Attempt 2는 성공했다. 최초 원인은 미확정이며, 별도로 재현한 Test 정리 결함과 최신 검증 상태는 [CI 재현성 조사](../03-analysis/ci-reproducibility-34311587985.md)에 기록한다.
+
 시작 시 fetch와 GitHub 조회로 확인한 master·실제 Base·작업 시작 HEAD는 `2ecb5038e3444bfeb1beeb29530492e0920f914f`다. 새 Branch는 `codex/storyboard-apply-consistency`다. 이전 PR #5와 #4는 이미 병합됐고 master의 CI Run 34299571463은 성공이었다. 이 과거 결과를 이번 최종 HEAD의 CI로 사용하지 않는다. Project 1.9.0·Build Provenance 3·Project Journal/Lock/Registry 3/3/1을 유지한다. Request Schema 2·Apply Intent 1·Request Journal 2·Request Lock 1을 별도로 관리한다.
 
 ## 최초 실패 재현
