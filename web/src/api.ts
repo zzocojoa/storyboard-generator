@@ -2,6 +2,8 @@ import { CodexRequestSchema } from '../../src/codex/request-schema.js';
 import { ApplyStatusSchema } from '../../src/codex/apply-schema.js';
 import { BuildManifestSchema } from '../../src/build-schema.js';
 import { z } from 'zod';
+import { DocumentPreviewSchema } from '../../src/documents/schema.js';
+import type { DocumentBindings, DocumentPreview, DocumentSettings } from '../../src/documents/schema.js';
 import { IssueSchema, ProjectSchema } from '../../src/domain/schema.js';
 import type { FinalReadinessReport } from '../../src/domain/final-readiness.js';
 import type { Project } from '../../src/domain/schema.js';
@@ -151,6 +153,14 @@ export async function fetchAssetIntegrity(projectId: string): Promise<AssetInteg
 
 export async function importProject(handoffPath: string, proposedTextHoldMs: number): Promise<Project> {
   return z.strictObject({ project: ProjectSchema }).parse(await request('/api/projects/import', json('POST', { handoffPath, proposedTextHoldMs }))).project;
+}
+
+export async function previewDocumentPackage(directory: string, bindings: DocumentBindings): Promise<DocumentPreview> {
+  return z.strictObject({ preview: DocumentPreviewSchema }).parse(await request('/api/document-packages/preview', json('POST', { directory, bindings }))).preview;
+}
+
+export async function createDocumentPackage(directory: string, output: string, settings: DocumentSettings): Promise<{ handoffPath: string; projectId: string }> {
+  return z.strictObject({ handoffPath: z.string(), projectId: z.string() }).parse(await request('/api/document-packages', json('POST', { directory, output, settings })));
 }
 
 export async function mutateProject(projectId: string, path: string, method: 'DELETE' | 'PATCH' | 'POST', body: unknown): Promise<Project> {

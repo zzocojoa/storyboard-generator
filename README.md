@@ -4,7 +4,8 @@
 
 현재 첫 완성본은 다음 흐름을 지원한다.
 
-- `native-v1` 또는 `production-v1` 입력 패키지 검증과 프로젝트별 저장
+- `native-v1`·`production-v1`·`production-documents-v1` 입력 패키지 검증과 프로젝트별 저장
+- 스토리별 제작 문서 8개에서 입력 패키지 생성, 연결 검토와 제작 설정 입력
 - 장면·구간 탐색, 원문 및 제작 지시 확인, 컷 분할·병합·재정렬·수정·전환·잠금·확정
 - 축약 자막과 Canonical 원문의 관계 검토, Text Cue 권한 복구·삭제, Shot별 역할 기반 Source Mapping, 공통 정보 출력 Gate
 - 화면비·매체·그림 스타일과 인물·장소·소품 기준 이미지 관리
@@ -27,7 +28,7 @@ npm start
 
 ## 빠른 사용법
 
-1. 왼쪽 **IMPORT PACKAGE**에 `storyboard_handoff.json` 경로를 입력하고 가져온다. 동작 확인용 production 예시는 `/Users/beatlefeed/Documents/ChatGPT/콘티제작/.worktrees/storyboard-generator/tests/fixtures/production/storyboard_handoff.json`이다. 구조화 계약 파일이 없는 `09_PRODUCTION` 폴더 자체는 바로 가져올 수 없다.
+1. 왼쪽 **IMPORT PACKAGE**에 `storyboard_handoff.json` 경로를 입력하고 가져온다. 동작 확인용 production 예시는 `/Users/beatlefeed/Documents/ChatGPT/콘티제작/.worktrees/storyboard-generator/tests/fixtures/production/storyboard_handoff.json`이다. 제작 문서 8개가 있는 폴더는 아래 **제작 문서 8개로 새 패키지 만들기**에서 먼저 변환한다.
 2. Scene과 Segment를 선택해 Shot의 시간, 행동, 카메라, Source Link, Frame, Audio Cue와 Text Cue를 검토한다. 종료가 없는 원본 Text Placement는 시작 시각을 유지한 채 종료 시각을 편집하고 **시각 확정**으로 검토를 마친다. `sourced`는 확인된 직접 시각 Source가 컷 전체를 덮어야 하며, `black`은 검은 화면, `hold-previous`는 직전 안전 프레임을 유지한다.
 3. **CODEX CUT**, **IMAGE**, **CODEX VOICE**로 생성 요청을 쌓는다. 같은 저장소를 연 Codex App 작업에서 `$storyboard-workbench 대기 중인 콘티 생성 요청을 처리해 주세요.`를 실행한다.
 4. 결과가 반영되면 **REFRESH**를 누르고 **시간순 재생**으로 이미지, 음성, 자막과 공개 시점을 확인한다.
@@ -86,7 +87,7 @@ $storyboard-workbench 대기 중인 콘티 생성 요청을 처리해 주세요.
 - [`storyboard_project.schema.json`](schemas/storyboard_project.schema.json): 재편집 프로젝트 계약
 - [검증 fixture 설명](tests/fixtures/README.md): 합성 범용 사례와 초기 실제 회귀 사례의 구분
 
-`native-v1`은 한 개의 공통 데이터 파일을 읽는다. `production-v1`은 구조화 대본·시간표·인물·장면과 제작 문서 역할을 명시적으로 연결한다. 형식 전용 파일명과 필드는 각 어댑터 안에서만 처리한다. 구조화 원본이 없는 임의 문서는 현재 지원하지 않으며 파싱 실패 시 추론 기반 가져오기로 전환하지 않는다.
+`native-v1`은 한 개의 공통 데이터 파일을 읽는다. `production-v1`은 구조화 대본·시간표·인물·장면과 제작 문서 역할을 명시적으로 연결한다. 형식 전용 파일명과 필드는 각 어댑터 안에서만 처리한다. `production-documents-v1`은 제작 문서 8개에서 원문과 편집표를 읽는다. 지원하지 않는 임의 문서는 오류로 처리하며 파싱 실패 시 추론 기반 가져오기로 전환하지 않는다.
 
 파일 경로는 패키지 루트 안으로 제한한다. `bytes-sha256`은 UTF-8 파일 바이트를 검사하고, `sorted-json-sha256`은 유니코드 코드 포인트 순으로 키를 정렬한 공백 없는 JSON을 검사한다. 필수 파일 누락, 해시 불일치, 끊어진 참조, 미지원 버전은 구체적인 오류로 끝난다. 문구나 선언의 제작상 차이는 원문을 고치지 않고 검토 항목으로 보존한다.
 
@@ -97,6 +98,33 @@ $storyboard-workbench 대기 중인 콘티 생성 요청을 처리해 주세요.
 Codex 컷 제안의 선택적 `sourceLinks[].anchor`는 `startPermille`, `endPermille`로 컷 내부 상대 범위를 표현한다. 범위는 `0 ≤ start < end ≤ 1000`이고, 생략하면 기존처럼 컷 전체를 사용한다. 컷 길이를 weight로 배분한 뒤 시작은 내림, 끝은 올림해 최소 1ms의 실제 offset으로 바꾼다. Information Gate와 원문 순서는 컷 시작이 아니라 이 실제 anchor 시작 시각으로 검사하며, 앞 프레임의 이미지 문맥에는 아직 시작하지 않은 source와 정보가 들어가지 않는다. 웹·CSV·PDF의 시간 표시는 프로젝트 timebase의 정수 프레임 산술을 공유하므로 PRJ-007의 500ms는 24fps 기준 `00:00:12`다.
 
 Source Update 뒤 Text 기반 Anchor 후보가 없으면 `MISSING_TEXT_ANCHOR_SOURCE`, 둘 이상이면 `AMBIGUOUS_TEXT_ANCHOR_SOURCE`가 Mapping Review에 표시된다. Issue에는 Shot·Source Unit, 후보 Cue와 Mapping Decision ID, 대상 필드와 해결 방향이 들어가며 복수 후보의 첫 항목을 자동 선택하지 않는다.
+
+## 제작 문서 8개에서 패키지 만들기
+
+한 폴더의 8개 문서가 한 스토리다. 다른 스토리도 같은 형식의 8개 문서와 그 작품의 설정으로 처리한다. `production-documents-v1`은 다음 파일을 요구하며 상위 구조화 파일 7개나 API 키를 읽지 않는다.
+
+`broadcast_readable_script.md`, `reenactment_character_script.md`, `edit_script.md`, `shooting_script.md`, `narration.md`, `panel_reaction_script.md`, `subtitle_script.md`, `production_manifest.json`.
+
+입력은 현행 한국어 표·발화 형식, 인물 대본 프로필 1.0.0, manifest 1.1.0이다. 패널·내레이션·자막을 사용하지 않는 작품은 해당 파일을 제목과 부재 설명만으로 제공할 수 있다. 파일당 4MB 이하의 UTF-8 일반 파일을 지원한다. 임의 Markdown/PDF 형식은 지원하지 않는다.
+
+1. **프로젝트 불러오기 → 제작 문서 8개로 새 패키지 만들기**를 열고 **제작 문서 폴더 → 문서 검토**를 누른다.
+2. 추출한 장면·구간·원문 수와 인물 ID를 확인한다. 문서에 ID 대응이 없는 인물은 직접 연결한다. 장면·구간이 모호하면 선택 후 **연결 다시 확인**을 누른다. 인물 표의 나열 순서로 ID를 추정하지 않는다.
+3. 프레임레이트·음성 샘플레이트·화면비·시작 타임코드·패키지 버전을 지정한다. 매체와 그림 스타일은 미정 상태로 시작하며 기존 편집기의 제작 프로필에서 정한다. 웹의 프레임레이트는 표시된 non-drop 선택지를 지원하며 다른 유효 timebase는 CLI 설정을 사용한다.
+4. 원본 폴더 밖의 **새 패키지 폴더**를 지정한다. 상위 폴더는 먼저 존재해야 한다. **패키지 생성**을 누른다. 기존 폴더·파일은 덮어쓰지 않는다.
+5. 생성된 handoff 경로를 확인하고 초안 글자 유지 시간을 입력한 뒤 **생성 패키지 불러오기**를 누른다. 이 시간은 미정 자막 종료의 편집용 제안이며 제작 확정이 아니다.
+
+출력은 `storyboard_handoff.json`, `document-settings.json`, 원본 8개를 보존한 `09_PRODUCTION/`이다. 각 원본의 SHA-256과 문서 행 출처를 유지한다. 검토 뒤 원본이 변경되면 다시 검토해야 한다. 파일 쓰기 도중 오류가 나면 성공 handoff를 만들지 않으며, 남은 출력 폴더를 자동 덮거나 삭제하지 않는다.
+
+자막 축약·표시 시점 차이는 기존 Text Mapping 검토로 이어지고 종료 시각은 미정이다. 문서에 없는 Canonical Unit·fact·clue ID는 복원하지 않는다. 새 문서 내부 Unit ID로 최초 공개 순서를 추적하지만 의미상 동일 정보의 재등장·반전 연결까지 자동 증명하지 않는다. 공통 제작 지시와 원문 스냅샷을 보존하며 의미·연출 검토는 계속 필요하다. manifest가 가리키는 상위 footprint 파일은 읽지 않으므로 검증했다고 표시하지 않는다.
+
+CLI도 같은 변환을 실행한다. 아래 설정 예시는 **독립 합성 스토리 전용 테스트값**이다. 실제 작품에는 미리보기의 `sourceFingerprint`와 제작자가 정한 값을 사용한다. 설정 계약은 [document_settings.schema.json](schemas/document_settings.schema.json), 예시는 [document-settings.example.json](tests/fixtures/document-settings.example.json)을 참고한다.
+
+```sh
+npm run cli -- documents-preview --input tests/fixtures/documents
+npm run cli -- documents-package --input tests/fixtures/documents --settings tests/fixtures/document-settings.example.json --output .local/document-package-demo
+```
+
+`bindings.people`는 이름→manifest 인물 ID, `bindings.scenes`는 장면 제목→편집표 장면 ID, `bindings.units`는 문서 Unit ID→편집 구간 ID 배열이다. 각 항목은 `{ "key": "검토 항목 키", "targetId": "선택한 ID" }` 형태다. 유일하게 확인된 연결은 생략할 수 있다. CLI에서 결정 목록을 반영해 다시 검토하려면 `documents-preview --input <폴더> --bindings <결정 목록 JSON>`을 사용한다.
 
 ## CLI
 

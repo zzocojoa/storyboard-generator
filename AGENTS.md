@@ -24,7 +24,7 @@
 
 ## 현재 상태와 다음 작업
 
-- Plan과 [Design](docs/02-design/features/storyboard-generator.design.md), 1.9.0 공통 데이터 모델, `native-v1`·`production-v1` 입력 어댑터, 검증·편집 함수, CLI, 로컬 저장/API, 웹 편집 화면, Codex App 요청·결과 브리지, Proposal Frame Plan과 Anchor 기반 Key Frame, `sourced`·`black`·`hold-previous` 출력, 독립 오디오/글자 트랙·컷 전환 편집, Text Mapping·독립 Placement Information·Source Temporal Anchor·동적 Information Gate·Text/Frame/Audio 공통 출력 인터록, 실제 PCM WAV 등록·이전 WAV 정규화 복구, Cue 범위에 묶인 시간순 재생, queue 제한 Worker 오디오 변환, 중앙 Asset 외래 키 closure, 전체 Version 합집합 Historical Generation Record 감사, symlink-safe 파일 연산과 journal version 3·lock version 3 기반 update·initial create 복구, 공유 주기 Process Heartbeat, 잘못된 Recovery Marker 격리, 프로젝트별 Active Create·Active Update와 영속 recovery block, 현재 출력 참조 Asset Integrity API, 범위가 명시된 HTTP 오류와 Web 차단 상태, Absolute·Duration timecode, JSON·CSV·PDF 출력이 있다. 실행 방법은 `README.md`, 실제 명령과 의존성은 `package.json`을 기준으로 확인한다.
+- Plan과 [Design](docs/02-design/features/storyboard-generator.design.md), 1.9.0 공통 데이터 모델, `native-v1`·`production-v1`·`production-documents-v1` 입력 어댑터, 검증·편집 함수, CLI, 로컬 저장/API, 웹 편집 화면, Codex App 요청·결과 브리지, Proposal Frame Plan과 Anchor 기반 Key Frame, `sourced`·`black`·`hold-previous` 출력, 독립 오디오/글자 트랙·컷 전환 편집, Text Mapping·독립 Placement Information·Source Temporal Anchor·동적 Information Gate·Text/Frame/Audio 공통 출력 인터록, 실제 PCM WAV 등록·이전 WAV 정규화 복구, Cue 범위에 묶인 시간순 재생, queue 제한 Worker 오디오 변환, 중앙 Asset 외래 키 closure, 전체 Version 합집합 Historical Generation Record 감사, symlink-safe 파일 연산과 journal version 3·lock version 3 기반 update·initial create 복구, 공유 주기 Process Heartbeat, 잘못된 Recovery Marker 격리, 프로젝트별 Active Create·Active Update와 영속 recovery block, 현재 출력 참조 Asset Integrity API, 범위가 명시된 HTTP 오류와 Web 차단 상태, Absolute·Duration timecode, JSON·CSV·PDF 출력이 있다. 실행 방법은 `README.md`, 실제 명령과 의존성은 `package.json`을 기준으로 확인한다.
 - 합성 범용 프로젝트와 실제 제작 프로젝트 PRJ-007의 `SEG-008`에서 Codex App의 컷 제안·내장 이미지·로컬 가이드 음성 요청과 결과 반영을 끝까지 확인했다. 실제 사례는 5개 컷의 시간 합계, 이미지 재생성과 시각 승인, 측정된 음성 길이를 확인했다. 생성 요청의 완료·실패·대기, 처리 시간, 반복 생성 횟수와 실패 원인을 영속 기록에서 집계해 화면에 표시한다. 요청별 비용은 Codex App에서 제공하지 않으므로 미측정으로 명시한다. 전체 제작 품질 검증은 계획서의 다른 대표 예외와 전체 분량으로 확대해야 한다.
 - 구현 요청을 받으면 현재 설계와 코드 상태를 확인하고, 누락된 설계를 요청 범위 안에서 구체화한 다음 구현한다. 이미 완료한 단계를 다시 시작하지 않는다.
 - 사용자가 생성 실행 환경을 Codex App으로 확정했다. `OPENAI_API_KEY`나 OpenAI SDK를 요구하지 않는다. 컷 제안은 현재 Codex 모델, 이미지는 내장 `image_gen`, 가이드 음성은 설정된 로컬 macOS 음성을 사용한다. 화면비·그림체·패널 표현·실사/AI/혼합 제작 방식은 프로젝트별 설정으로 다룬다.
@@ -44,7 +44,7 @@
 - 원문 보기, 컷 합치기·나누기·재정렬, 특정 컷 재생성, 확정 컷 잠금, 변경 영향 표시를 제공한다.
 - 출력은 재편집 가능한 프로젝트 JSON, 그림 콘티 PDF, 촬영·자산 목록 CSV다.
 - 텍스트 콘티는 중간 이정표다. 첫 완성본에는 그림과 가이드 음성을 이용한 시간순 검토가 포함된다.
-- 구조화 원본이 없는 문서 전용 가져오기, 편집기 프로젝트 출력, 영상 생성 서비스 연결은 후속 범위다. 특정 작품 전용 가져오기 기능으로 설계하지 않는다.
+- 제작 문서 8개를 하나의 스토리 묶음으로 읽는 `production-documents-v1`은 현재 범위다. 같은 8개 문서 형식의 다른 스토리도 작품별 데이터·설정만으로 처리한다. 임의 문서 형식 가져오기, 편집기 프로젝트 출력, 영상 생성 서비스 연결은 후속 범위다.
 - 새 이야기 생성, 채널 기획, 영상 자동 완성·업로드, 협업 권한·결제, 여러 생성 제공자의 동시 지원은 초기 범위에 추가하지 않는다.
 
 ## 구현 순서와 단계별 완료 조건
@@ -73,7 +73,7 @@ Design에서는 실제 사용할 언어·런타임·라이브러리와 검증 �
 - 화면 문구 원문과 자막 큐의 표시 시점을 각각 보존한다. 축약·불일치가 있으면 출처와 두 값을 제시하고 해결 상태를 기록한다.
 - 자막 Placement와 Canonical 원문의 관계는 `TextMappingDecision`에 저장한다. 정확히 일치하는 경우만 자동 확정하고 축약·대체·별도 요소의 모호함은 `unresolved`로 둔다. Canonical 문구를 별도로 렌더링할 때는 시작·종료 시각을 명시한다.
 - 계약상 필수 입력 누락, 지원하지 않는 버전, 끊어진 참조, 스키마 경로 문제를 명시적인 오류로 처리한다. 선택 요소가 없는 정상 프로젝트를 오류로 판정하지 않는다. 임의 파일 탐색·값 보정·문서 추론으로 성공을 가장하지 않는다.
-- 구조화 입력을 읽지 못했을 때 문서 전용 가져오기로 자동 전환하지 않는다. 후속 문서 전용 입력도 별도 계약과 미해결 매핑 상태를 갖춰야 한다.
+- 구조화 입력을 읽지 못했을 때 문서 전용 가져오기로 자동 전환하지 않는다. 문서 전용 입력은 사용자가 명시적으로 선택하는 별도 계약이다. 8개 원본·해시·행 출처와 사용자 매핑·제작 설정을 보존한다. 인물 표 순서로 ID를 배정하지 않으며 upstream 파일·API 키를 요구하지 않는다. 세부 입력 계약은 [문서 입력 설계](docs/02-design/features/document-handoff.design.md)를 따른다.
 - 파일 바이트 SHA-256과 정규 JSON SHA-256을 구분한다. 해시 규약은 지원 입력 형식에 명시하고 해당 어댑터에서 검사한다. 초기 제작 형식의 footprint에는 기존 키 정렬·공백 제거 규약을 적용한다.
 
 ## 데이터와 생성 규칙

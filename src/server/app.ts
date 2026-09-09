@@ -35,6 +35,9 @@ import { readPackage } from '../io/package.js';
 import { createSourceOutline } from '../proposal/outline.js';
 import type { AppConfig } from './config.js';
 import type { AssetWrite, ProjectStore } from './store.js';
+import { inspectDocuments } from '../documents/compile.js';
+import { readDocumentSources, writeDocumentPackage } from '../documents/io.js';
+import { DocumentBindingsSchema, DocumentSettingsSchema } from '../documents/schema.js';
 
 const ProjectParamsSchema = z.strictObject({ projectId: IdSchema });
 const ShotParamsSchema = ProjectParamsSchema.extend({ shotId: IdSchema });
@@ -90,6 +93,7 @@ export type HttpErrorBody = { error: {
 } };
 
 const conflictPolicies: ReadonlyMap<string, boolean> = new Map<string, boolean>([
+  ['DOCUMENT_OUTPUT_EXISTS', false],
   ['CODEX_REQUEST_SETTLED', false], ['CODEX_REQUEST_STATE_CONFLICT', false], ['CODEX_REQUEST_STORE_BUSY', true], ['REVIEW_BUNDLE_EXISTS', false],
   ['CODEX_REQUEST_APPLY_IN_PROGRESS', true], ['CODEX_APPLY_RESULT_CONFLICT', false],
   ['CODEX_REQUEST_BUILD_UNVERIFIED', false], ['CODEX_REQUEST_BUILD_CHANGED', false], ['PROJECT_BUSY', true], ['REVISION_CONFLICT', true], ['AUDIT_SNAPSHOT_CHANGED', true],
@@ -260,6 +264,16 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
     const project: Project = createSourceOutline(importPackage(await readPackage(body.handoffPath)), { proposedTextHoldMs: body.proposedTextHoldMs });
     reply.status(201);
     return { project: await store.create(project) };
+  });
+  app.post('/api/document-packages/preview', async (request: FastifyRequest): Promise<object> => {
+    const body = z.strictObject({ directory: z.string().min(1), bindings: DocumentBindingsSchema }).parse(request.body);
+    return { preview: inspectDocuments(await readDocumentSources(body.directory), body.bindings).preview };
+  });
+  app.post('/api/document-packages', async (request: FastifyRequest, reply: FastifyReply): Promise<object> => {
+    const body = z.strictObject({ directory: z.string().min(1), output: z.string().min(1), settings: DocumentSettingsSchema }).parse(request.body);
+    const result = await writeDocumentPackage(body.directory, body.settings, body.output);
+    reply.status(201);
+    return result;
   });
   app.post('/api/projects/:projectId/source-impact', async (request: FastifyRequest): Promise<object> => {
     const { projectId } = ProjectParamsSchema.parse(request.params);

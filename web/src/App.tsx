@@ -1,3 +1,4 @@
+import { DocumentImportPanel } from './DocumentImportPanel.js';
 import { intrinsicIncomingExposure, transitionVisualPolicy } from '../../src/domain/transition.js';
 import type { TransitionVisualPolicy } from '../../src/domain/transition.js';
 import { reviewShotVisualPlanChange } from '../../src/domain/edit.js';
@@ -123,14 +124,14 @@ export function ImportPanel(props: { working: boolean; onImport: (path: string, 
     void props.onImport(path, Number(hold)).finally((): void => { submittingRef.current = false; setSubmitting(false); });
   };
   const button = importButtonState(props.working, submitting);
-  return <form className="import-panel" onSubmit={submit}>
+  return <div><form className="import-panel" onSubmit={submit}>
     <div className="eyebrow">INPUT CONTRACT</div>
     <h2>새 콘티 시작</h2>
     <p>handoff JSON을 선택하면 원본을 검증하고 편집용 컷 초안을 만듭니다.</p>
     <label>handoff 파일 경로<input value={path} onChange={(event): void => { setPath(event.target.value); }} placeholder="/project/storyboard_handoff.json" required /></label>
     <label>임시 화면 글자 유지 시간<input type="number" min="1" value={hold} onChange={(event): void => { setHold(event.target.value); }} required /><span className="unit">ms</span></label>
     <button className="primary" disabled={button.disabled}>{button.label}</button>
-  </form>;
+  </form><DocumentImportPanel working={props.working} onImport={props.onImport} /></div>;
 }
 
 function ProjectRail(props: { summaries: ProjectSummary[]; currentId: string | null; working: boolean;

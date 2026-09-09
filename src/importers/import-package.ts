@@ -8,13 +8,14 @@ import { validateDataset } from '../domain/validation.js';
 import { validatePackage } from './integrity.js';
 import { importNative } from './native.js';
 import { importProduction } from './production.js';
+import { importDocumentPackage } from '../documents/package.js';
 
 export function importPackage(input: unknown): Project {
   const { payload, snapshots } = validatePackage(input);
   assertNoErrors(validateTimebase(payload.handoff.timebase), 'INVALID_TIMEBASE');
   const normalized: { dataset: Dataset; issues: Issue[] } = payload.handoff.adapter === 'native-v1'
     ? { dataset: importNative(payload.handoff, snapshots), issues: [] }
-    : importProduction(payload.handoff, snapshots);
+    : payload.handoff.adapter === 'production-documents-v1' ? importDocumentPackage(payload.handoff, snapshots) : importProduction(payload.handoff, snapshots);
   const initialDataset: Dataset = DatasetSchema.parse(normalized.dataset);
   const textMappingDecisions: TextMappingDecision[] = createInitialTextMappingDecisions(initialDataset);
   const textPlacementInformationDecisions: TextPlacementInformationDecision[] = createInitialPlacementInformationDecisions(textMappingDecisions);

@@ -1,0 +1,75 @@
+import { cp, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { expect, test } from '@playwright/test';
+import { readBuildManifest } from '../../src/build.js';
+import { CodexRequestStore } from '../../src/codex/requests.js';
+import { readPackage } from '../../src/io/package.js';
+import { createApp } from '../../src/server/app.js';
+import { ProjectStore } from '../../src/server/store.js';
+import { PRODUCTION_DOCUMENT_BINDINGS, SYNTHETIC_DOCUMENT_BINDINGS } from '../document-helpers.js';
+import { TEST_AUDIO_NORMALIZATION_OPTIONS } from '../helpers.js';
+
+test('e2e_eight_documents_review_settings_package_and_storyboard_import', async ({ page }): Promise<void> => {
+  const root: string = await mkdtemp(join(tmpdir(), 'document-e2e-'));
+  const input: string = join(root, 'input'); await cp('tests/fixtures/production/09_PRODUCTION', input, { recursive: true });
+  const store = new ProjectStore(join(root, 'data'));
+  const app = await createApp({ host: '127.0.0.1', port: 4317, dataRoot: join(root, 'data'), webRoot: resolve('dist/web'),
+    pdfFontPath: resolve('assets/fonts/NanumGothic-Regular.ttf'), audioNormalization: TEST_AUDIO_NORMALIZATION_OPTIONS,
+    codex: { requestRoot: join(root, 'requests'), speechVoice: 'Yuna' } }, store, new CodexRequestStore(join(root, 'requests'), readBuildManifest()));
+  try {
+    const url: string = await app.listen({ host: '127.0.0.1', port: 0 }); await page.goto(url);
+    const panel = page.locator('.welcome .document-import');
+    await panel.locator('summary').click();
+    await panel.getByLabel('제작 문서 폴더').fill(input);
+    await panel.getByRole('button', { name: '문서 검토', exact: true }).click();
+    await expect(panel).toContainText('12장면 · 32구간 · 원문 95개');
+    await expect(panel.getByLabel('프레임레이트', { exact: true })).toHaveValue('');
+    await expect(panel.getByRole('button', { name: '패키지 생성', exact: true })).toBeDisabled();
+    for (const binding of PRODUCTION_DOCUMENT_BINDINGS.people) await panel.getByLabel(`인물 ID: ${binding.key}`, { exact: true }).selectOption(binding.targetId);
+    await panel.getByLabel('프레임레이트', { exact: true }).selectOption('25/1');
+    await panel.getByLabel('음성 샘플레이트', { exact: true }).selectOption('44100');
+    await panel.getByLabel('화면비 가로', { exact: true }).fill('9');
+    await panel.getByLabel('화면비 세로', { exact: true }).fill('16');
+    await panel.getByLabel('패키지 버전', { exact: true }).fill('e2e-explicit-settings');
+    await panel.getByLabel('새 패키지 폴더', { exact: true }).fill(join(root, 'package'));
+    await panel.getByRole('button', { name: '패키지 생성', exact: true }).click();
+    await expect(panel.getByRole('status')).toContainText('패키지 생성 완료');
+    const payload = await readPackage(join(root, 'package', 'storyboard_handoff.json'));
+    expect(payload.handoff.profile.aspectWidth).toBe(9);
+    expect(payload.handoff.timebase.fpsNumerator).toBe(25);
+    await panel.getByLabel('초안 글자 유지 시간 (ms)', { exact: true }).fill('2000');
+    await panel.getByRole('button', { name: '생성 패키지 불러오기', exact: true }).click();
+    await expect(page.locator('.app-shell')).toBeVisible();
+    const project = await store.read('PRJ-007');
+    expect(project.dataset.units).toHaveLength(95);
+    expect(project.handoff.adapter).toBe('production-documents-v1');
+    expect(project.shots).toHaveLength(32);
+    await page.reload();
+    await expect(page.getByRole('button', { name: /의부증의 늪/ }).first()).toBeVisible();
+    await page.getByRole('button', { name: /의부증의 늪/ }).first().click();
+    const secondInput: string = join(root, 'second-input'); await cp('tests/fixtures/documents', secondInput, { recursive: true });
+    await page.locator('.rail-import > summary').click();
+    const secondPanel = page.locator('.rail-import .document-import'); await secondPanel.locator('summary').click();
+    await secondPanel.getByLabel('제작 문서 폴더').fill(secondInput);
+    await secondPanel.getByRole('button', { name: '문서 검토', exact: true }).click();
+    await expect(secondPanel).toContainText('2장면 · 2구간 · 원문 4개');
+    for (const binding of SYNTHETIC_DOCUMENT_BINDINGS.people) await secondPanel.getByLabel(`인물 ID: ${binding.key}`, { exact: true }).selectOption(binding.targetId);
+    for (const binding of SYNTHETIC_DOCUMENT_BINDINGS.scenes) await secondPanel.getByLabel(`장면 ID: ${binding.key}`, { exact: true }).selectOption(binding.targetId);
+    await secondPanel.getByRole('button', { name: '연결 다시 확인', exact: true }).click();
+    await expect(secondPanel.locator('select[aria-label^="원문 구간:"]')).toHaveCount(0);
+    await secondPanel.getByLabel('프레임레이트', { exact: true }).selectOption('30/1');
+    await secondPanel.getByLabel('음성 샘플레이트', { exact: true }).selectOption('48000');
+    await secondPanel.getByLabel('화면비 가로', { exact: true }).fill('16');
+    await secondPanel.getByLabel('화면비 세로', { exact: true }).fill('9');
+    await secondPanel.getByLabel('패키지 버전', { exact: true }).fill('second-story');
+    await secondPanel.getByLabel('새 패키지 폴더', { exact: true }).fill(join(root, 'second-package'));
+    await secondPanel.getByRole('button', { name: '패키지 생성', exact: true }).click();
+    await expect(secondPanel.getByRole('status')).toContainText('패키지 생성 완료');
+    await secondPanel.getByLabel('초안 글자 유지 시간 (ms)', { exact: true }).fill('1500');
+    await secondPanel.getByRole('button', { name: '생성 패키지 불러오기', exact: true }).click();
+    await expect(page.locator('.project-tile')).toHaveCount(2);
+    expect((await store.read('plant-doc-demo')).dataset.units).toHaveLength(4);
+    expect((await store.read('PRJ-007')).dataset.units).toHaveLength(95);
+  } finally { await page.context().close(); await app.close(); await rm(root, { recursive: true, force: true }); }
+});

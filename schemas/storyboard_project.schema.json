@@ -32,7 +32,8 @@
           "type": "string",
           "enum": [
             "native-v1",
-            "production-v1"
+            "production-v1",
+            "production-documents-v1"
           ]
         },
         "projectId": {

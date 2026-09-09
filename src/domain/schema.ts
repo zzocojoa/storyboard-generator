@@ -31,7 +31,7 @@ export const AuthoritySchema = z.strictObject({
   fileIds: z.array(IdSchema).min(1),
 });
 export const HandoffSchema = z.strictObject({
-  contractVersion: z.literal('1.0.0'), adapter: z.enum(['native-v1', 'production-v1']),
+  contractVersion: z.literal('1.0.0'), adapter: z.enum(['native-v1', 'production-v1', 'production-documents-v1']),
   projectId: IdSchema, packageVersion: z.string().min(1), upstreamRevision: z.string().nullable(),
   timebase: TimebaseSchema, profile: ProfileSchema,
   files: z.array(FileDescriptorSchema).min(1), authority: z.array(AuthoritySchema).min(1),

@@ -3,6 +3,12 @@ import { extname, join } from 'node:path';
 import { contractError } from '../src/domain/errors.js';
 
 const REQUIRED_TEST_NAMES: readonly string[] = [
+  'documents_eight_files_preserve_full_sources_timeline_and_reopen',
+  'documents_do_not_assign_character_ids_by_roster_order',
+  'documents_independent_project_without_optional_content_is_supported',
+  'documents_changed_review_rejects_before_output_creation',
+  'documents_shared_edit_parser_preserves_legacy_conflict_evidence',
+  'e2e_eight_documents_review_settings_package_and_storyboard_import',
   'vitest_timeout_drains_writer_before_store_close_and_root_removal',
   'cancelled_scope_finishes_started_writer_and_rejects_new_work',
   'unsettled_scope_preserves_root_and_reports_bounded_drain_failure',

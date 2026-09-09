@@ -41,7 +41,7 @@ flowchart LR
 
 `storyboard_handoff.json`은 기존 production manifest와 별개다. 필수 정보는 계약 버전, 어댑터·버전, 프로젝트 ID, 패키지 버전, 상위 revision, 명시적 시간 기준·제작 설정, 파일 역할·경로·필수 여부·해시, 데이터 필드별 권한 파일이다.
 
-초기 어댑터는 `native-v1`, `production-v1`이다. 이름에 포함된 v1은 어댑터 계약 버전이며 원본 파일별 schema version과 구분한다. 새 프로젝트 ID, 다른 분량·모드, 패널 없는 프로젝트도 같은 native 계약으로 처리한다. 새 문서 형식은 별도 어댑터가 필요하다.
+입력 어댑터는 `native-v1`, `production-v1`, `production-documents-v1`이다. 문서 전용 계약의 역할·결정·파일 생성은 [문서 입력 설계](document-handoff.design.md)를 따른다. 이름에 포함된 v1은 어댑터 계약 버전이며 원본 파일별 schema version과 구분한다. 새 프로젝트 ID, 다른 분량·모드, 패널 없는 프로젝트도 같은 native 계약으로 처리한다. 새 문서 형식은 별도 어댑터가 필요하다.
 
 | 데이터 역할 | native-v1 | production-v1 |
 |---|---|---|
