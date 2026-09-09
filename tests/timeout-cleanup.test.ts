@@ -37,6 +37,7 @@ it('vitest_timeout_drains_writer_before_store_close_and_root_removal', async ():
     }
     console.info(JSON.stringify({ event: 'timeout-cleanup-evidence', events }));
     expect(phases).toContain('journal-prepared'); expect(phases).toContain('test-aborted');
+    expect(phases.indexOf('journal-prepared')).toBeLessThan(phases.indexOf('test-start'));
     expect(phases.indexOf('operation-settled')).toBeLessThan(phases.indexOf('store-close-start'));
     expect(phases.indexOf('operation-settled')).toBeLessThan(phases.indexOf('root-remove-start'));
     expect(phases).not.toContain('cleanup-or-writer-error');
