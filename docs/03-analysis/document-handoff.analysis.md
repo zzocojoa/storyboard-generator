@@ -10,7 +10,7 @@
 | DH-04 | 미해결 인물 ID, 장면 ID, 여러 시각 구간과 반복 발화 occurrence 테스트 | 검증됨 |
 | DH-05 | `DocumentSettingsSchema`, 빈 FPS/화면비 입력, 설정 누락 거부 | 검증됨 |
 | DH-06 | CLI에서 생성한 handoff → readPackage → outline → parseProject, 원본 8개와 설정 포함 | 검증됨 |
-| DH-07 | CLI와 preview/create API, 웹 설정·패키지 생성·두 스토리 가져오기 E2E | 검증됨 |
+| DH-07 | CLI와 preview/create API, 독립 3단계 화면, 두 스토리 가져오기·모바일 오류 및 재시도 E2E | 검증됨 |
 | DH-08 | 변조·해시·버전·잘못된 행·중복 결정·symlink·UTF-8·크기·기존 출력 보호 테스트 | 검증됨 |
 | DH-09 | 독립 합성 스토리, 내레이션 전용 구성, 여러 시각 구간, 임의 ID와 비연속 장면 번호 | 검증됨 |
 | DH-10 | README·설정 스키마·합성 예시·Required Registry, 전체 check/e2e | 검증됨 |

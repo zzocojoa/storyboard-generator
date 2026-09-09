@@ -131,11 +131,11 @@ export function ImportPanel(props: { working: boolean; onImport: (path: string, 
     <label>handoff 파일 경로<input value={path} onChange={(event): void => { setPath(event.target.value); }} placeholder="/project/storyboard_handoff.json" required /></label>
     <label>임시 화면 글자 유지 시간<input type="number" min="1" value={hold} onChange={(event): void => { setHold(event.target.value); }} required /><span className="unit">ms</span></label>
     <button className="primary" disabled={button.disabled}>{button.label}</button>
-  </form><DocumentImportPanel working={props.working} onImport={props.onImport} /></div>;
+  </form></div>;
 }
 
 function ProjectRail(props: { summaries: ProjectSummary[]; currentId: string | null; working: boolean;
-  onSelect: (projectId: string) => Promise<void>; onImport: (path: string, holdMs: number) => Promise<void> }): ReactElement {
+  onSelect: (projectId: string) => Promise<void>; onImport: (path: string, holdMs: number) => Promise<void>; onDocuments: () => void }): ReactElement {
   return <aside className="project-rail">
     <div className="brand"><span className="brand-mark">C</span><div><strong>CUTROOM</strong><small>STORYBOARD SYSTEM</small></div></div>
     <div className="rail-label">PROJECTS · {String(props.summaries.length).padStart(2, '0')}</div>
@@ -146,6 +146,7 @@ function ProjectRail(props: { summaries: ProjectSummary[]; currentId: string | n
           sampleRate: summary.sampleRate })}</span><strong>{summary.title}</strong>
         <span>{summary.shots} CUTS · ASSET {summary.framesWithAsset} · REVIEWED {summary.framesAccepted} · OUTPUT SAFE {summary.shotsOutputSafe}/{summary.shotsTotal} SHOTS · TEXT {summary.textConfirmed}/{summary.textTotal} · {summary.finalOutputReady ? 'FINAL READY' : 'DRAFT'}{summary.audioRepairRequired > 0 ? ` · AUDIO REPAIR ${summary.audioRepairRequired}` : ''}</span>
       </button>)}</div>
+    <button className="rail-document-entry" type="button" disabled={props.working} onClick={props.onDocuments}>제작 문서 8개로 새 패키지 만들기 <span aria-hidden="true">↗</span></button>
     <details className="rail-import"><summary>＋ 프로젝트 불러오기</summary><ImportPanel working={props.working} onImport={props.onImport} /></details>
   </aside>;
 }
@@ -562,6 +563,7 @@ function Inspector(props: { project: Project; segment: Segment; shot: Shot | nul
 }
 
 export default function App(): ReactElement {
+  const [documentImportOpen, setDocumentImportOpen] = useState<boolean>(false);
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [summaries, setSummaries] = useState<ProjectSummary[]>([]);
   const [project, setProject] = useState<Project | null>(null);
@@ -682,6 +684,20 @@ export default function App(): ReactElement {
     finally { setWorking(false); }
   };
 
+  const importDocuments = async (path: string, holdMs: number): Promise<void> => {
+    setWorking(true); setNotice(null);
+    try {
+      const next: Project = await importProject(path, holdMs);
+      setProject(next); setSourceImpactReport(null);
+      setNotice({ tone: 'info', text: next.title + ' 문서 패키지에서 컷 초안을 만들었습니다.' });
+      // 생성은 완료됐으므로 목록 갱신 실패를 재가져오기 실패로 보고하지 않는다.
+      await Promise.all([refreshSummaries(), reconcileProjectAssets(next.projectId)]).catch(showError);
+    } finally { setWorking(false); }
+  };
+  const openDocuments = (): void => {
+    audioController.reset(); setPlaying(false); setMonitorOpen(false); setDocumentImportOpen(true);
+  };
+
   const mutate = async (path: string, method: 'DELETE' | 'PATCH' | 'POST', body: object): Promise<void> => {
     if (project === null) return;
     setWorking(true); setNotice(null);
@@ -795,14 +811,17 @@ export default function App(): ReactElement {
   const mutationDisabled: boolean = mutationControlsDisabled(working, project?.projectId ?? null, recoveryUi);
   const storageRecoveryRequired: boolean = projectRecoveryBlocked(recoveryUi, project?.projectId ?? null);
   const assetIntegrityIssues: readonly AssetIntegrityUiIssue[] = projectAssetIntegrityIssues(recoveryUi, project?.projectId ?? null);
-  if (project === null) return <main className="empty-shell"><ProjectRail summaries={summaries} currentId={null} working={working} onSelect={openProject} onImport={importHandoff} />
-    <div className="welcome"><div className="welcome-number">01</div><div className="eyebrow">SOURCE TO SEQUENCE</div><h1>원문에서<br/><em>촬영 가능한 콘티</em>까지.</h1><p>입력 계약을 검증하고, 컷·그림·가이드 음성·자막을 하나의 시간축에서 편집합니다.</p><ImportPanel working={working} onImport={importHandoff} /></div>
-    {notice !== null && <div className={`notice ${notice.tone}`}>{notice.text}</div>}</main>;
+  const documentImport: ReactElement = <DocumentImportPanel open={documentImportOpen} working={working} existingProjectIds={summaries.map((summary: ProjectSummary): string => summary.projectId)}
+    onClose={(): void => { setDocumentImportOpen(false); }} onImport={importDocuments}
+    onOpenProject={async (projectId: string): Promise<void> => { if (projectId !== project?.projectId) await openProject(projectId); }} />;
+  if (project === null) return <>{documentImport}<main className="empty-shell"><ProjectRail summaries={summaries} currentId={null} working={working} onSelect={openProject} onImport={importHandoff} onDocuments={openDocuments} />
+    <div className="welcome"><div className="welcome-number">01</div><div className="eyebrow">SOURCE TO SEQUENCE</div><h1>원문에서<br/><em>촬영 가능한 콘티</em>까지.</h1><p>입력 계약을 검증하고, 컷·그림·가이드 음성·자막을 하나의 시간축에서 편집합니다.</p><button type="button" className="welcome-document-entry" disabled={working} onClick={openDocuments}>제작 문서 8개로 새 패키지 만들기 →</button><ImportPanel working={working} onImport={importHandoff} /></div>
+    {notice !== null && <div className={`notice ${notice.tone}`}>{notice.text}</div>}</main></>;
 
   const exportBase: string = `/api/projects/${encodeURIComponent(project.projectId)}`;
   const providerLabel: string = status === null ? 'Codex App 상태를 불러오는 중입니다.' : `Codex App 완료 ${status.completedRequests}건, 대기 ${status.pendingRequests}건, 적용 ${status.applyingRequests}건, 실패 ${status.failedRequests}건, Build 대체 ${status.supersededRequests}건, 평균 처리 ${elapsed(status.averageLatencyMs)}, 반복 생성 ${status.repeatedRequests}건, 저장 복구 ${status.storageRecovery.length}건${status.recentFailures.map((failure): string => `, 최근 실패 ${failure.error?.code ?? 'UNKNOWN'}: ${failure.error?.message ?? '오류 설명이 없습니다.'}`).join('')}`;
-  return <main className="app-shell">
-    <ProjectRail summaries={summaries} currentId={project.projectId} working={working} onSelect={openProject} onImport={importHandoff} />
+  return <>{documentImport}<main className="app-shell">
+    <ProjectRail summaries={summaries} currentId={project.projectId} working={working} onSelect={openProject} onImport={importHandoff} onDocuments={openDocuments} />
     <section className="workspace"><header className="topbar"><div><span className="eyebrow">ACTIVE PRODUCTION</span><h1>{project.title}</h1></div><div className="project-facts"><span>REV <b>{project.revision}</b></span><span>{project.profile.aspectWidth}:{project.profile.aspectHeight}</span><span>{project.profile.medium.toUpperCase()}</span></div>
       <div className="top-actions"><a href={`${exportBase}/export.json`}>JSON</a><a href={`${exportBase}/export.csv?maturity=draft`}>DRAFT CSV</a><a href={`${exportBase}/export.csv?maturity=final`}>FINAL CSV</a><a href={`${exportBase}/export.pdf?maturity=draft`}>DRAFT PDF</a><a href={`${exportBase}/export.pdf?maturity=final`}>FINAL PDF</a><button onClick={(): void => { void refreshWorkspace(); }}>REFRESH</button><details className={status !== null && status.failedRequests > 0 ? 'provider-status failed' : 'provider-status'}><summary className="provider ready" aria-label={providerLabel}>CODEX APP · {status?.pendingRequests ?? 0} QUEUED · {status?.failedRequests ?? 0} FAILED</summary>{status !== null && <div className="status-popover"><div className="request-metrics"><span><b>{status.completedRequests}</b> 완료</span><span><b>{elapsed(status.averageLatencyMs)}</b> 평균</span><span><b>{elapsed(status.maximumLatencyMs)}</b> 최대</span><span><b>{status.repeatedRequests}</b> 반복 생성</span><span><b>{status.supersededRequests}</b> Build 대체</span><span><b>{status.applyingRequests}</b> 결과 적용</span><span><b>{status.storageRecovery.length}</b> 저장 복구</span><span title={status.costNote}><b>N/A</b> 요청별 비용</span></div>{status.recentFailures.length > 0 && <div className="failure-list">{status.recentFailures.map((failure): ReactElement => <article key={failure.id}><b>{failure.error?.code ?? 'UNKNOWN'}</b><span>{failure.projectId} · {failure.kind} · {failure.targetId}</span><p>{failure.error?.message ?? '오류 설명이 없습니다.'}</p></article>)}</div>}{status.applyRecovery.length > 0 && <div className="recovery-list">{status.applyRecovery.map((apply): ReactElement => <article key={apply.requestId}><b>{apply.state}</b><span>{apply.projectId} · {apply.requestId}</span><p>{apply.committedRevision === null ? apply.code : `적용 Revision ${apply.committedRevision}`}</p></article>)}</div>}{status.storageRecovery.length > 0 && <div className="recovery-list">{status.storageRecovery.map((recovery): ReactElement => <article key={`${recovery.projectId}:${recovery.transactionId}`}><b>{recovery.outcome.toUpperCase()}</b><span>{recovery.projectId} · {recovery.transactionId}</span></article>)}</div>}</div>}</details></div></header>
       <section className="final-readiness" aria-label="Final Readiness"><strong>{finalReadiness === null ? 'CHECKING FINAL READINESS' : finalReadiness.finalReady ? 'FINAL READY' : 'FINAL OUTPUT NOT READY'}</strong>
@@ -844,5 +863,5 @@ export default function App(): ReactElement {
     {assetIntegrityIssues.length > 0 && <div className="asset-integrity-banner" role="alert"><strong>ASSET REPAIR REQUIRED</strong><span>{assetIntegrityIssues.map((item: AssetIntegrityUiIssue): string => `${item.assetId} · ${item.code}`).join(' / ')}</span></div>}
     {notice !== null && <button className={`notice ${notice.tone}`} onClick={(): void => { setNotice(null); }}>{notice.text}<span>×</span></button>}
     {queuedRequest !== null && <div className="job-strip"><span></span>CODEX {queuedRequest.kind.toUpperCase()} · {queuedRequest.status.toUpperCase()}</div>}
-  </main>;
+  </main></>;
 }

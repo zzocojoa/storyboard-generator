@@ -33,6 +33,8 @@
 - Request는 Build를 제외한 논리 Key Lock·SHA-256 CAS·Journal로 선형화하고 Terminal과 감사 파일을 보존한다. Lock JSON은 임시 파일 fsync 뒤 no-replace 원자 공개한다. Visual Plan은 무관한 기존 Segment 오류를 비차단 검토로 남겨 순차 수리하되 승인·Final은 계속 차단한다. Summary는 최대 2회 안정 Snapshot을 검사하며 비Asset revision에서 기존 cache를 보존한다. Final·Safe 출력은 실제 파일을 다시 검사한다. Review 출력 Claim과 staging은 원본 밖에서 소유권을 증명하며 알 수 없는 증거를 자동 삭제하지 않는다. 세부 복구·오류 계약은 Design을 따른다.
 - 생성 결과 등록은 Proposal·Image·Speech 공통 `CodexRequestStore.applyResult`를 사용한다. Request 논리 Key 소유권 → Project Lock 순서를 지키고 소유 Context의 내부 완료 전이로 정산한다. `applying`의 영속 Intent를 먼저 저장하고 Project Current 게시를 Commit 지점으로 삼는다. `generationHistorySnapshot`의 실제 최초 도입 Version·Record·Asset·Request 결속만 완료 근거로 사용하며 `resultRevision`에 현재 Revision을 넣지 않는다. Commit 뒤 입력 파일이 없어도 지정 요청 `reconcile`로 후속 Project 편집을 보존하며 정산한다. 일반 Pending/실패 지표에서 Applying을 제외한다. Legacy Terminal·Record 모순이나 불명 Intent를 자동 덮거나 삭제하지 않는다. 읽기 전용 Review는 Apply 정산을 호출하지 않는다. 외부 생성 전체 시간 동안 Project Lock을 잡지 않는다.
 
+- 제작 문서 8개 입력은 `production-documents-v1` 어댑터와 독립된 3단계 웹 가져오기 화면을 사용한다. 실제 문서 근거로 후보를 보여 주고 미해결 ID·제작 설정을 명시적으로 받는다. 같은 Project의 새 패키지 생성과 기존 콘티의 Source Update를 구분한다. 상세 계약은 [문서 패키지 Design](docs/02-design/features/document-handoff.design.md), 시각 기준은 [DESIGN.md](DESIGN.md)를 따른다.
+
 - PDCA 도구 사용 여부와 실제 문서·구현 상태를 구분한다. 호출하지 않은 도구의 상태 등록이나 수행하지 않은 검증을 완료로 보고하지 않는다.
 - 이 절은 작업이 진척되면 현재 상태로 갱신한다. 작업 이력과 변경 일지를 누적하지 않는다.
 

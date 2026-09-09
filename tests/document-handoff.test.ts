@@ -72,6 +72,9 @@ describe('제작 문서 handoff', (): void => {
     const preview = inspectDocuments(sources, { people: [], scenes: [], units: [] }).preview;
     expect(preview.people.filter((choice): boolean => choice.selected === null).map((choice): string => choice.key)).toEqual(['백기철', '윤서진', '강태균', '박도현', '오민주']);
     expect(preview.people.find((choice): boolean => choice.key === '한가람')?.selected).toBe('PANEL-01');
+    expect(preview.candidateEvidence.find((entry): boolean => entry.field === 'people' && entry.targetId === 'CHAR-01')).toMatchObject({
+      description: expect.stringContaining('SCN-01'), sourceRefs: expect.arrayContaining([{ fileId: 'document-manifest', locator: '/scenes/0/cast_ids', originalId: 'CHAR-01' }]),
+    });
     expect(() => buildDocumentPackage(sources, documentTestSettings(sources, { people: [], scenes: [], units: [] }))).toThrowError(expect.objectContaining({ code: 'DOCUMENT_MAPPING_REQUIRED' }));
   });
 

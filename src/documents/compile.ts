@@ -4,7 +4,7 @@ import { validateDataset } from '../domain/validation.js';
 import { sha256Text } from '../importers/integrity.js';
 import { importEdit, importShooting, importSubtitles, readEditTimeline } from '../importers/production-views.js';
 import { compareReadable, documentRefs, documentRows, parseBroadcast, parseReenactment } from './readable.js';
-import type { DocumentBindings, DocumentPreview, DocumentSources, DocumentUnit, MappingChoice, ReadableDocument } from './schema.js';
+import type { CandidateEvidence, DocumentBindings, DocumentPreview, DocumentSources, DocumentUnit, MappingChoice, ReadableDocument } from './schema.js';
 import { DOCUMENT_FILES, DocumentPreviewSchema } from './schema.js';
 import { parseDocumentManifest, parseNarration, parsePanels, verifyShootingManifest } from './supporting.js';
 import type { DocumentManifest, NarrationRow, PanelBlock } from './supporting.js';
@@ -32,6 +32,29 @@ function matchingSegments(unit: DocumentUnit, narration: readonly NarrationRow[]
   if (unit.kind === 'NARRATION') return [...new Set(narration.filter((row: NarrationRow): boolean => row.name === unit.speakerName && row.text === unit.text).map((row: NarrationRow): string => row.segmentId))];
   if (unit.kind === 'PANEL') return [...new Set(panels.filter((block: PanelBlock): boolean => block.turns.some((turn): boolean => turn.text === unit.text)).map((block: PanelBlock): string => block.segmentId))];
   return [];
+}
+
+/** 이름을 추론하지 않고 후보 ID가 실제로 등장하는 문서 위치와 제작표 값만 제공한다. */
+function candidateEvidence(sources: DocumentSources, manifest: DocumentManifest, panels: readonly PanelBlock[], segments: readonly Segment[]): CandidateEvidence[] {
+  const characterIds: string[] = [...new Set(manifest.scenes.flatMap((scene): string[] => scene.cast_ids))];
+  const panelIds: string[] = [...new Set(panels.flatMap((block: PanelBlock): string[] => block.turns.map((turn): string => turn.personId)))];
+  return [
+    ...characterIds.map((id: string): CandidateEvidence => ({ field: 'people', targetId: id,
+      description: '등장 장면: ' + manifest.scenes.filter((scene): boolean => scene.cast_ids.includes(id)).map((scene): string => scene.scene_id).join(', '),
+      sourceRefs: manifest.scenes.flatMap((scene, index: number) => scene.cast_ids.includes(id) ? [{ fileId: sources.manifest.id, locator: '/scenes/' + index + '/cast_ids', originalId: id }] : []),
+    })),
+    ...panelIds.map((id: string): CandidateEvidence => ({ field: 'people', targetId: id,
+      description: '패널 발화 구간: ' + panels.filter((block: PanelBlock): boolean => block.turns.some((turn): boolean => turn.personId === id)).map((block: PanelBlock): string => block.segmentId).join(', '),
+      sourceRefs: panels.flatMap((block: PanelBlock) => block.turns.filter((turn): boolean => turn.personId === id).flatMap((turn) => turn.sourceRefs)),
+    })),
+    ...manifest.scenes.map((scene, index: number): CandidateEvidence => ({ field: 'scenes', targetId: scene.scene_id,
+      description: '장소: ' + scene.location_id + ' · 출연: ' + scene.cast_ids.join(', '),
+      sourceRefs: [{ fileId: sources.manifest.id, locator: '/scenes/' + index, originalId: scene.scene_id }],
+    })),
+    ...segments.map((segment: Segment): CandidateEvidence => ({ field: 'units', targetId: segment.id,
+      description: segment.sceneId + ' · ' + segment.mode + ' · ' + segment.startMs / 1000 + '–' + segment.endMs / 1000 + '초', sourceRefs: segment.sourceRefs,
+    })),
+  ];
 }
 
 /** 유일한 원문 연결과 명시적 결정으로만 후보를 좁힌다. 표의 행 순서는 ID 대응 근거로 쓰지 않는다. */
@@ -84,6 +107,7 @@ export function inspectDocuments(sources: DocumentSources, bindings: DocumentBin
   const preview: DocumentPreview = DocumentPreviewSchema.parse({ format: 'production-documents-v1', projectId: manifest.project_id, title: broadcast.title,
     sourceFingerprint: documentFingerprint(sources), scenes, people, units,
     counts: { scenes: scenes.length, segments: segments.length, units: units.length, narration: narration.length, panel: panels.reduce((sum: number, block: PanelBlock): number => sum + block.turns.length, 0) },
+    candidateEvidence: candidateEvidence(sources, manifest, panels, segments),
     notices: ['FPS·화면비·음성 샘플레이트는 제작자가 지정해야 합니다. 자막 종료는 미정으로 보존합니다.',
       '사람용 문서에 없는 Canonical Unit·fact·clue ID는 복원하지 않습니다. 새 문서 Unit ID와 원문 공개 순서를 사용하며 의미별 정보 공개는 별도 검토가 필요합니다.',
       '상위 footprint 원본은 읽지 않으므로 연결 해시 검증 범위에 포함하지 않습니다.'],

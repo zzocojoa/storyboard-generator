@@ -29,11 +29,16 @@ export const MappingChoiceSchema = z.strictObject({
   key: z.string(), label: z.string(), candidates: z.array(IdSchema), selected: IdSchema.nullable(), sourceRefs: z.array(SourceRefSchema),
 });
 export type MappingChoice = z.infer<typeof MappingChoiceSchema>;
+export const CandidateEvidenceSchema = z.strictObject({
+  field: z.enum(['people', 'scenes', 'units']), targetId: IdSchema, description: z.string(), sourceRefs: z.array(SourceRefSchema),
+});
+export type CandidateEvidence = z.infer<typeof CandidateEvidenceSchema>;
 export const DocumentPreviewSchema = z.strictObject({
   format: z.literal('production-documents-v1'), projectId: IdSchema, title: z.string(), sourceFingerprint: HashSchema,
   scenes: z.array(MappingChoiceSchema), people: z.array(MappingChoiceSchema), units: z.array(MappingChoiceSchema),
   counts: z.strictObject({ scenes: z.number(), segments: z.number(), units: z.number(), narration: z.number(), panel: z.number() }),
   notices: z.array(z.string()),
+  candidateEvidence: z.array(CandidateEvidenceSchema),
 });
 export type DocumentPreview = z.infer<typeof DocumentPreviewSchema>;
 export type DocumentPerson = { name: string; role: string; kind: 'character' | 'panel'; sourceRefs: SourceRef[] };

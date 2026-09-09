@@ -164,15 +164,3 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .final-readiness details p { line-height: 1.6; }
 .monitor-text small { display: block; font-size: 10px; letter-spacing: .08em; }
 .top-actions { flex-wrap: wrap; }
-
-.document-import { position: relative; max-width: 510px; margin-top: 20px; }
-.document-import > summary { cursor: pointer; padding: 12px 0; font-size: 13px; }
-.document-import .import-panel { box-sizing: border-box; min-width: 0; margin-top: 0; border: 1px solid #c8c5bd; }
-.document-import fieldset fieldset { min-width: 0; margin: 16px 0; padding: 10px; max-height: 300px; overflow: auto; border: 1px solid #c8c5bd; }
-.document-import select { width: 100%; padding: 8px; border: 1px solid #c8c5bd; background: white; }
-.document-import small, .document-import p { overflow-wrap: anywhere; line-height: 1.7; }
-.document-import label { font-size: 11px; }
-.document-import [role="alert"] { padding: 10px; background: #ffebe6; color: #9b351c; }
-.rail-import .document-import p { display: block; color: #c5c4b9; }
-.rail-import .document-import [role="alert"] { color: #9b351c; }
-.rail-import .document-import select { color: #f5f0e5; background: #23241f; border-color: #42433b; }

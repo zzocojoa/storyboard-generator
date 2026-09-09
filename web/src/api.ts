@@ -86,8 +86,10 @@ export class ApiError extends Error {
 
 export function apiErrorMessage(error: unknown): string {
   if (!(error instanceof ApiError)) return error instanceof Error ? error.message : String(error);
+  if (error.code === 'NETWORK_REQUEST_FAILED') return error.message;
   if (error.code === 'FINAL_OUTPUT_NOT_READY') return `FINAL OUTPUT NOT READY\n${error.message}`;
   if (error.code === 'PROJECT_BUSY') return '프로젝트 생성 또는 다른 작업이 진행 중입니다. 완료 후 다시 불러오거나 재시도하세요.';
+  if (error.code === 'DOCUMENT_OUTPUT_EXISTS') return '출력 폴더가 이미 존재합니다. 다른 새 폴더를 지정하세요.\n' + error.message;
   if (error.code === 'PROJECT_ALREADY_EXISTS') return '같은 Project가 이미 저장돼 있습니다.';
   if (error.category === 'locked' && error.scope === 'request') return `REQUEST RECOVERY REQUIRED\n생성 결과의 적용 상태를 확인하세요.\n${error.message}`;
   if (error.category === 'locked' && error.scope === 'asset') return `ASSET REPAIR REQUIRED\n해당 자산의 안전 출력이 차단됐습니다.\n${error.message}`;
@@ -111,7 +113,13 @@ export function shouldRetryApiError(error: unknown): boolean {
 }
 
 async function request(path: string, init: RequestInit): Promise<unknown> {
-  const response: Response = await fetch(path, init);
+  let response: Response;
+  try { response = await fetch(path, init); }
+  catch (error: unknown) {
+    if (!(error instanceof TypeError)) throw error;
+    throw new ApiError('NETWORK_REQUEST_FAILED', '서버에 연결하지 못했습니다. CUTROOM 서버 실행 상태를 확인한 뒤 재시도하세요.\n'
+      + (init.method ?? 'GET') + ' ' + path + ': ' + error.message, 0, 'unavailable', true, false, []);
+  }
   const data: unknown = await response.json();
   if (!response.ok) {
     const parsed = ErrorResponseSchema.safeParse(data);

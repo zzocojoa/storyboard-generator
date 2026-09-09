@@ -9,6 +9,7 @@ const REQUIRED_TEST_NAMES: readonly string[] = [
   'documents_changed_review_rejects_before_output_creation',
   'documents_shared_edit_parser_preserves_legacy_conflict_evidence',
   'e2e_eight_documents_review_settings_package_and_storyboard_import',
+  'e2e_document_workflow_mobile_validation_changed_source_and_retry',
   'vitest_timeout_drains_writer_before_store_close_and_root_removal',
   'cancelled_scope_finishes_started_writer_and_rejects_new_work',
   'unsettled_scope_preserves_root_and_reports_bounded_drain_failure',
