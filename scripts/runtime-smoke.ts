@@ -19,6 +19,7 @@ import { createApp } from '../src/server/app.js';
 import type { AppConfig } from '../src/server/config.js';
 import { ProjectStore } from '../src/server/store.js';
 import type { StorageFaultInjector, StorageFaultPoint } from '../src/server/store.js';
+import { runApplySmoke } from './apply-smoke.js';
 
 type RunningApp = { app: FastifyInstance; store: ProjectStore; url: string };
 type HttpResult = { body: unknown; bytes: Buffer; status: number; headers: Headers };
@@ -378,10 +379,19 @@ try {
   const active = await runActiveRefresh(root);
   const final = await runFinalSmoke(root);
   const hardening = await runHardeningSmoke(root);
+  const apply = await runApplySmoke(join(root, 'apply'));
   const registryFiles: string[][] = await Promise.all([
     join(root, 'hardening-data', '.process-instances'), join(root, 'primary-data', '.process-instances'), join(root, 'final-data', '.process-instances'), join(root, 'service-data', '.process-instances'), join(root, 'active-data', '.process-instances'),
   ].map((path: string): Promise<string[]> => readdir(path)));
   assert.ok(registryFiles.every((entries: string[]): boolean => entries.length === 0));
+  const applyRegistry: string = join(root, 'apply', 'data', '.process-instances');
+  const killedRegistry: string[] = await readdir(applyRegistry);
+  assert.equal(killedRegistry.length, apply.killedProcessIds.length);
+  for (const name of killedRegistry) {
+    const owner = JSON.parse(await readFile(join(applyRegistry, name), 'utf8')) as { host: string; pid: number; processInstanceId: string };
+    assert.equal(owner.host, hostname()); assert.equal(name, `${owner.processInstanceId}.json`); assert.ok(apply.killedProcessIds.includes(owner.pid));
+    assert.throws((): void => { process.kill(owner.pid, 0); }, { code: 'ESRCH' });
+  }
   await rm(root, { recursive: true, force: true });
-  process.stdout.write(`${JSON.stringify({ ports: [...primary.ports, service.port, active.port, final.port, hardening.port], checks: [...primary.checks, service.check, ...active.checks, ...final.checks, ...hardening.checks], cleaned: true })}\n`);
+  process.stdout.write(`${JSON.stringify({ ports: [...primary.ports, service.port, active.port, final.port, hardening.port, apply.port], checks: [...primary.checks, service.check, ...active.checks, ...final.checks, ...hardening.checks, ...apply.checks], applyEvidence: apply.evidence, applyProcessKills: apply.killedProcessIds.length, preservedDeadRegistryBeforeRootCleanup: killedRegistry.length, cleaned: true })}\n`);
 } finally { await rm(root, { recursive: true, force: true }); }
