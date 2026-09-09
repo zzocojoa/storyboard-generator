@@ -15,6 +15,7 @@ export function controlledProcess(script: string, input: string): ControlledProc
   child.stderr?.on('data', (bytes: Buffer): void => { stderr += bytes.toString('utf8'); });
   child.stdout?.resume();
   const exited: Promise<void> = new Promise<void>((done): void => { child.once('exit', (): void => { closed = true; done(); }); });
+  const streamsClosed: Promise<void> = new Promise<void>((done): void => { child.once('close', (): void => { listeners.clear(); done(); }); });
   child.on('message', (raw: unknown): void => {
     const message: WorkerMessage = WorkerMessageSchema.parse(raw); const waiting = listeners.get(message.event)?.shift();
     if (waiting !== undefined) waiting(message); else messages.push(message);
@@ -31,6 +32,14 @@ export function controlledProcess(script: string, input: string): ControlledProc
       ]);
     },
     send(value: string): void { child.send(value); },
-    async stop(): Promise<void> { if (!closed) child.kill('SIGKILL'); await exited; },
+    async stop(): Promise<void> {
+      if (!closed) child.kill('SIGKILL');
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        await Promise.race([streamsClosed, new Promise<never>((_resolve, reject): void => {
+          timer = setTimeout((): void => { reject(new Error(`Child Process close를 확인하지 못했습니다. pid=${child.pid}, script=${script}`)); }, 2000);
+        })]);
+      } finally { if (timer !== undefined) clearTimeout(timer); }
+    },
   };
 }

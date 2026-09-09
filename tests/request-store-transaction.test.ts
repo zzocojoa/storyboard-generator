@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
-import { hostname, tmpdir } from 'node:os';
+import { hostname } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect } from 'vitest';
+import { it, currentScope, ownedChild, fixtureFs } from './owned-test.js';
 import { readBuildManifest } from '../src/build.js';
 import { codexRequestKey, CodexRequestStore } from '../src/codex/requests.js';
 import type { RequestFaultContext } from '../src/codex/requests.js';
@@ -16,18 +16,14 @@ import { controlledProcess } from './controlled-process.js';
 import type { ControlledProcess, WorkerMessage } from './controlled-process.js';
 import type { RequestWorkerInput } from './request-store-worker.js';
 
-const roots: string[] = []; const children: ControlledProcess[] = [];
+const { readFile, readdir, writeFile } = fixtureFs;
 const now: string = '2026-09-08T12:00:00.000Z'; const basis: string = 'a'.repeat(64);
 const firstHash: string = 'b'.repeat(64); const nextHash: string = 'c'.repeat(64);
-afterEach(async (): Promise<void> => {
-  for (const child of children.splice(0)) await child.stop();
-  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
-});
-async function root(): Promise<string> { const path: string = await mkdtemp(join(tmpdir(), 'request-transaction-')); roots.push(path); return path; }
-function store(path: string, sourceHash: string): CodexRequestStore { return new CodexRequestStore(path, { ...readBuildManifest(), sourceTreeSha256: sourceHash }); }
+async function root(): Promise<string> { return currentScope().root('request-transaction-'); }
+function store(path: string, sourceHash: string): CodexRequestStore { return currentScope().guard(new CodexRequestStore(path, { ...readBuildManifest(), sourceTreeSha256: sourceHash }), 'request-store'); }
 async function worker(path: string, action: RequestWorkerInput['action'], sourceHash: string, id: string | null, point: string | null, index: number | null): Promise<ControlledProcess> {
-  const child: ControlledProcess = controlledProcess('tests/request-store-worker.ts', JSON.stringify({ root: path, action, sourceHash, id, point, index } satisfies RequestWorkerInput));
-  children.push(child); await child.event('ready'); return child;
+  const child: ControlledProcess = ownedChild(() => controlledProcess('tests/request-store-worker.ts', JSON.stringify({ root: path, action, sourceHash, id, point, index } satisfies RequestWorkerInput)));
+  await child.event('ready'); return child;
 }
 async function result(child: ControlledProcess): Promise<WorkerMessage> { const value: WorkerMessage = await child.event('result'); await child.exited; return value; }
 async function sameBuildRace(path: string, hash: string): Promise<[WorkerMessage, WorkerMessage]> {
@@ -85,9 +81,9 @@ describe('Request Key 직렬화와 Terminal CAS', (): void => {
   it('request_status_transition_uses_compare_and_swap', async (): Promise<void> => {
     const path: string = await root(); const old: CodexRequest = await seed(path);
     const foreign: string = JSON.stringify({ ...old, status: 'failed', error: { code: 'EXTERNAL', message: '외부 상태 변경' } });
-    const changed: CodexRequestStore = new CodexRequestStore(path, readBuildManifest(), {
+    const changed: CodexRequestStore = currentScope().guard(new CodexRequestStore(path, readBuildManifest(), {
       async trigger(context: RequestFaultContext): Promise<void> { if (context.point === 'before-state-cas') await writeFile(join(path, `${old.id}.json`), foreign); },
-    });
+    }), 'request-store');
     await expect(changed.complete(old.id, 1, now)).rejects.toMatchObject({ code: 'CODEX_REQUEST_STATE_CONFLICT' });
     expect(await readFile(join(path, `${old.id}.json`), 'utf8')).toBe(foreign);
     expect(await readdir(join(path, '.transactions'))).toEqual([]);
