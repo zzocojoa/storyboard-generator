@@ -167,7 +167,9 @@ G1 인접 검증 4파일/55건, G2 3파일/42건, G3 4파일/175건, G4 4파일/
 
 ## 9. 미반영·잔여 위험
 
-근본 원인 확정 안 됨. Stress Workflow와 실패 Artifact 수집 경로만 구축함.
+PR #4 병합 후보 `ba5dfc1`의 [Linux Stress 34297322182](https://github.com/zzocojoa/storyboard-generator/actions/runs/34297322182)는 36번째 반복의 `loadedmetadata`에서 실패했다. 211건 성공·1건 실패·88건 미실행, retry·예상 밖 Heartbeat 오류 0이며 첫 실패 Trace와 모든 소유 Resource 정리 증거를 보존했다. 이 결과가 나온 상태에서는 master 병합을 진행하지 않는다.
+
+재생 시작 시각보다 이른 첫 RAF 시각을 넣으면 Playhead가 Cue 시작점 이전으로 이동하면서 새 Audio를 정지하고 요청을 취소하는 결함을 실제 HTMLAudioElement로 재현했다. 경과 시간을 0 이상으로 제한한 뒤 같은 회귀가 통과했다. RAF timestamp와 `performance.now()`의 차이는 [MDN](https://developer.mozilla.org/en-US/docs/Web/API/Window/requestAnimationFrame)에 설명돼 있다. 수정 후 로컬 전체 check는 55파일/1,150건, 필수 이름 353건(missing/duplicates/skip/only 0), 전체 E2E는 16건 통과했다. 별도 Stress는 기존 6개 실제 Audio와 RAF 경계 회귀 1개를 각각 50회 실행하므로 총 350건이며, 그중 300건은 clock 주입 없는 기존 시나리오다. 이 경계 결함의 수정 증거와 과거 모든 간헐 실패의 원인 규명은 구분한다. 새 HEAD의 병합 여부는 최신 PR Checks에서 확인한다.
 
 Ubuntu CI 실행 결과와 이전 Linux 실패의 근본 원인 규명은 구분한다. 반복 성공만으로 간헐 실패가 해결됐다고 표현하지 않는다. Request·Bundle은 로컬 협력 Process 기준이며 SMB/NFS 다중 Host, 비협력 Writer의 임의 디스크 변경을 지원한다고 주장하지 않는다. 알 수 없는 Lock·Claim·Transaction은 자동 삭제하지 않고 운영자 확인을 요구한다. Project 적용과 Request 완료 기록을 하나의 분산 Transaction으로 묶지는 않는다.
 
@@ -175,4 +177,4 @@ Ubuntu CI 실행 결과와 이전 Linux 실패의 근본 원인 규명은 구분
 
 ## 10. 최종 권장 조치
 
-**운영 Pilot을 권장한다.** 로컬 전체 check·E2E·50회 실제 Audio·Runtime Smoke와 원본 불변 검증은 통과했다. 병합 후보 HEAD의 Ubuntu check·e2e와 별도 Linux Stress 결과를 PR Checks에서 확인한다. 이전 Linux Audio 실패는 근본 원인을 확정하지 않았으며 재발하면 첫 실패 Artifact로 분석해야 한다. Push·CI 실행은 승인됐으며 Merge에는 별도 승인이 필요하다.
+**운영 Pilot을 권장한다.** 로컬 전체 check·E2E·50회 실제 Audio·Runtime Smoke와 원본 불변 검증은 통과했다. 병합 후보 HEAD의 Ubuntu check·e2e와 별도 Linux Stress 결과를 PR Checks에서 확인한다. 초기 Playhead 역행 결함은 실패 재현과 회귀로 검증하며, 다른 원인의 간헐 실패가 재발하면 첫 실패 Artifact로 분석해야 한다. Push·CI 실행은 승인됐으며 Merge에는 별도 승인이 필요하다.

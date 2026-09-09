@@ -3,6 +3,7 @@ import { extname, join } from 'node:path';
 import { contractError } from '../src/domain/errors.js';
 
 const REQUIRED_TEST_NAMES: readonly string[] = [
+  'e2e_audio_start_survives_early_animation_frame_timestamp',
   'audio_stress_workflow_has_no_test_retry',
   'audio_stress_workflow_keeps_default_timeouts',
   'audio_stress_workflow_uses_real_audio_spec',

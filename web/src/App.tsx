@@ -653,7 +653,8 @@ export default function App(): ReactElement {
     const total: number = project.dataset.segments.at(-1)?.endMs ?? 0;
     let requestId: number = 0;
     const tick = (now: number): void => {
-      const next: number = Math.min(total, Math.floor(origin + now - startedAt));
+      // 첫 RAF 시각이 effect 시작보다 이르더라도 Cue 시작점 뒤로 이동하지 않는다.
+      const next: number = Math.min(total, Math.floor(origin + Math.max(0, now - startedAt)));
       setPlayhead(next);
       if (next >= total) { audioController.reset(); setPlaying(false); return; }
       requestId = requestAnimationFrame(tick);

@@ -23,7 +23,7 @@ type AudioHttpProbe = { timestamp: string; status: number; contentRange: string 
 type BrowserConsoleEntry = { timestamp: string; level: string; text: string };
 type AudioLoadProbe = { metadataSeen: boolean; playhead: string | null; activeAudioElements: number; notice: string | null;
   mediaEvents: MediaEventProbe[]; httpResponses: AudioHttpProbe[]; requestFailures: string[]; serverEvents: AudioServerProbe[] };
-declare global { interface Window { audioObservation: AudioObservation | null; audioMediaEvents: MediaEventProbe[] } }
+declare global { interface Window { audioObservation: AudioObservation | null; audioMediaEvents: MediaEventProbe[]; recordEarlyAudioFrame: () => Promise<void> } }
 type RunningAudioApp = { root: string; app: FastifyInstance; url: string; cue: AudioCue; projectId: string; transport: AudioServerDiagnostics; store: ObservedAudioStore; normalizer: ObservedAudioNormalizer };
 
 async function startAudioApp(record: AudioLifecycleRecorder): Promise<RunningAudioApp> {
@@ -235,4 +235,25 @@ test('e2e_real_audio_is_disposed_on_monitor_close', async ({ page, browser }, te
 test('e2e_real_audio_is_disposed_on_project_switch', async ({ page, browser }, testInfo): Promise<void> => {
   const evidence = await checkRealAudio(page, browser.version(), 'e2e_real_audio_is_disposed_on_project_switch', testInfo);
   await testInfo.attach('real-media-evidence', { body: JSON.stringify(evidence), contentType: 'application/json' });
+});
+
+test('e2e_audio_start_survives_early_animation_frame_timestamp', async ({ page, browser }, testInfo): Promise<void> => {
+  let injected: number = 0;
+  await page.exposeFunction('recordEarlyAudioFrame', (): void => { injected += 1; });
+  await page.addInitScript((): void => {
+    const nativeFrame: typeof window.requestAnimationFrame = window.requestAnimationFrame.bind(window);
+    let delivered: boolean = false;
+    window.requestAnimationFrame = (callback: FrameRequestCallback): number => {
+      const requestedAt: number = performance.now();
+      return nativeFrame((timestamp: number): void => {
+        if (!delivered && document.querySelector('audio[data-storyboard-audio]') !== null) {
+          delivered = true;
+          void window.recordEarlyAudioFrame();
+          callback(requestedAt - 20);
+        } else callback(timestamp);
+      });
+    };
+  });
+  await checkRealAudio(page, browser.version(), 'e2e_audio_start_survives_early_animation_frame_timestamp', testInfo);
+  expect(injected).toBe(1);
 });
