@@ -21,18 +21,25 @@ import { readApplyEvidence } from '../src/codex/apply-evidence.js';
 import { sha256Text } from '../src/importers/integrity.js';
 import { readReviewArchive, writeReviewBundle } from '../src/exporters/review-bundle.js';
 import { codexRequestMetrics } from '../src/codex/metrics.js';
+import type { WorkerAudioNormalizer } from '../src/domain/audio-normalizer.js';
+import type { OwnedTestScope } from './owned-test-scope.js';
 
 const { readFile, readdir, unlink, writeFile } = fixtureFs;
 const now: string = '2026-09-09T02:00:00.000Z';
-type Fixture = { root: string; project: Project; store: ProjectStore; requests: CodexRequestStore; request: CodexRequest; input: string };
-async function fixture(): Promise<Fixture> {
+type ProjectFixture = { root: string; project: Project; store: ProjectStore; requests: CodexRequestStore };
+type Fixture = ProjectFixture & { request: CodexRequest; input: string };
+async function projectFixture(): Promise<ProjectFixture> {
   const root: string = await currentScope().root('apply-consistency-');
   const store: ProjectStore = ownedStore(new ProjectStore(join(root, 'data')));
   const project: Project = await store.create(createSourceOutline(importPackage(await nativePackage()), { proposedTextHoldMs: 2000 }));
   const requests: CodexRequestStore = currentScope().guard(new CodexRequestStore(join(root, 'requests'), readBuildManifest()), 'request-store');
-  const request: CodexRequest = await requests.create('image', project.projectId, 'frame-1', codexRequestBasis(project, 'image', 'frame-1'), now);
-  const input: string = join(root, 'result.png'); await writeFile(input, await png(2, 2));
-  return { root, project, store, requests, request, input };
+  return { root, project, store, requests };
+}
+async function fixture(): Promise<Fixture> {
+  const f: ProjectFixture = await projectFixture();
+  const request: CodexRequest = await f.requests.create('image', f.project.projectId, 'frame-1', codexRequestBasis(f.project, 'image', 'frame-1'), now);
+  const input: string = join(f.root, 'result.png'); await writeFile(input, await png(2, 2));
+  return { ...f, request, input };
 }
 async function terminalBeforeApply(kind: 'failed' | 'superseded'): Promise<void> {
   const f: Fixture = await fixture();
@@ -283,33 +290,59 @@ it('apply_lock_order_does_not_deadlock', async (): Promise<void> => {
   expect((await f.requests.read(f.request.id)).status).toBe('completed');
 });
 it('apply_recovery_lock_order_does_not_deadlock', async (): Promise<void> => {
-  const f: Fixture = await committedCrash('before-request-completion'); const child = await worker(f, 'reconcile', 'during-apply-reconciliation');
-  child.send('start'); await child.event('paused');
-  const later: Project = await f.store.update(f.project.projectId, 1, (current: Project): Project => ({ ...current, title: '복구 소유 중 독립 편집' }), []);
-  child.send('release'); expect((await result(child)).ok).toBe(true);
-  expect((await f.requests.read(f.request.id)).resultRevision).toBe(1); expect(await f.store.read(f.project.projectId)).toEqual(later);
+  const scope: OwnedTestScope = currentScope();
+  const f: Fixture = await scope.phase('recovery.committed-crash', (): Promise<Fixture> => committedCrash('before-request-completion'));
+  const child: ControlledProcess = await scope.phase('recovery.child-ready', (): Promise<ControlledProcess> => worker(f, 'reconcile', 'during-apply-reconciliation'));
+  await scope.phase(`recovery.reconciliation-barrier:${child.child.pid}`, async (): Promise<void> => { child.send('start'); await child.event('paused'); });
+  const later: Project = await scope.phase('recovery.edit-while-owned', (): Promise<Project> =>
+    f.store.update(f.project.projectId, 1, (current: Project): Project => ({ ...current, title: '복구 소유 중 독립 편집' }), []));
+  await scope.phase(`recovery.release-result:${child.child.pid}`, async (): Promise<void> => { child.send('release'); expect((await result(child)).ok).toBe(true); });
+  await scope.phase('recovery.assert-original-revision-and-edit', async (): Promise<void> => {
+    expect((await f.requests.read(f.request.id)).resultRevision).toBe(1); expect(await f.store.read(f.project.projectId)).toEqual(later);
+  });
 });
 it('apply_claim_is_shared_by_proposal_image_and_speech', async (): Promise<void> => {
-  const f: Fixture = await fixture(); const segment = f.project.dataset.segments[0]!;
-  const proposalRequest: CodexRequest = await f.requests.create('proposal', f.project.projectId, segment.id, codexRequestBasis(f.project, 'proposal', segment.id), now);
+  const scope: OwnedTestScope = currentScope();
+  const f: ProjectFixture = await scope.phase('chain.fixture', projectFixture); const segment = f.project.dataset.segments[0]!;
+  expect(await f.requests.list(null)).toEqual([]);
+  const proposalRequest: CodexRequest = await scope.phase('chain.proposal-request', (): Promise<CodexRequest> =>
+    f.requests.create('proposal', f.project.projectId, segment.id, codexRequestBasis(f.project, 'proposal', segment.id), now));
   const proposalInput: string = join(f.root, 'proposal.json');
   await writeFile(proposalInput, JSON.stringify({ shots: [{ sourceLinks: f.project.dataset.units.filter((unit): boolean => unit.segmentId === segment.id).map((unit) => ({ unitId: unit.id, usage: 'primary-visual' })), durationWeight: 1,
     action: '원문 행동', visualLocationId: f.project.dataset.scenes[0]!.storyLocationId, camera: { size: 'MS', angle: 'eye-level', move: 'static' }, presence: [], propIds: [], cameraAxis: null, screenDirection: null,
     informationIds: [], transitionOut: { kind: 'cut', durationMs: 0, note: '' }, frameDescription: '원문 프레임' }] }));
-  const proposed: Project = await applyCodexProposal(proposalRequest.id, proposalInput, f.store, f.requests, now);
+  const proposed: Project = await scope.phase('chain.proposal-apply', (): Promise<Project> => applyCodexProposal(proposalRequest.id, proposalInput, f.store, f.requests, now));
   const frameId: string = proposed.frames[0]!.id;
-  const imageRequest: CodexRequest = await f.requests.create('image', proposed.projectId, frameId, codexRequestBasis(proposed, 'image', frameId), now);
-  const imaged: Project = await applyCodexImage(imageRequest.id, f.input, f.store, f.requests, now);
-  const cueId: string = imaged.audioCues[0]!.id; const speechInput: string = join(f.root, 'speech.wav'); await writeFile(speechInput, pcmWav(200, 48000, 1, 16));
-  const speechRequest: CodexRequest = await f.requests.create('speech', imaged.projectId, cueId, codexRequestBasis(imaged, 'speech', cueId), now);
-  const spoken: Project = await applyCodexSpeech(speechRequest.id, speechInput, 'Yuna', f.store, f.requests, now, testAudioNormalizer());
+  const imageRequest: CodexRequest = await scope.phase('chain.image-request', (): Promise<CodexRequest> =>
+    f.requests.create('image', proposed.projectId, frameId, codexRequestBasis(proposed, 'image', frameId), now));
+  const imageInput: string = join(f.root, 'result.png');
+  await scope.phase('chain.image-input', async (): Promise<void> => { await writeFile(imageInput, await png(2, 2)); });
+  const imaged: Project = await scope.phase('chain.image-apply', (): Promise<Project> => applyCodexImage(imageRequest.id, imageInput, f.store, f.requests, now));
+  const cueId: string = imaged.audioCues[0]!.id; const speechInput: string = join(f.root, 'speech.wav');
+  await scope.phase('chain.speech-input', (): Promise<void> => writeFile(speechInput, pcmWav(200, 48000, 1, 16)));
+  const speechRequest: CodexRequest = await scope.phase('chain.speech-request', (): Promise<CodexRequest> =>
+    f.requests.create('speech', imaged.projectId, cueId, codexRequestBasis(imaged, 'speech', cueId), now));
+  const normalizer: WorkerAudioNormalizer = testAudioNormalizer();
+  scope.own('worker', 'chain-speech-normalizer', async (): Promise<void> => {
+    await normalizer.close();
+    expect(normalizer.diagnostics()).toEqual({ closed: true, activeWorkers: 0, queuedJobs: 0, queueTimers: 0, executionTimers: 0, reservedInputBytes: 0 });
+  });
+  const observedNormalizer: WorkerAudioNormalizer = scope.guard(normalizer, 'chain.speech-normalization');
+  const spoken: Project = await scope.phase('chain.speech-apply', (): Promise<Project> =>
+    applyCodexSpeech(speechRequest.id, speechInput, 'Yuna', f.store, f.requests, now, observedNormalizer));
   for (const [index, request] of [proposalRequest, imageRequest, speechRequest].entries()) {
-    const completed: CodexRequest = await f.requests.read(request.id);
-    expect(completed).toMatchObject({ status: 'completed', resultRevision: index + 1, applyIntent: { kind: request.kind, requestId: request.id, startRevision: index } });
-    expect((await readApplyEvidence(completed, f.store)).receipt?.committedRevision).toBe(index + 1);
+    await scope.phase(`chain.assert-${request.kind}-receipt`, async (): Promise<void> => {
+      const completed: CodexRequest = await f.requests.read(request.id);
+      expect(completed).toMatchObject({ status: 'completed', resultRevision: index + 1, applyIntent: { kind: request.kind, requestId: request.id, startRevision: index } });
+      expect((await readApplyEvidence(completed, f.store)).receipt?.committedRevision).toBe(index + 1);
+    });
   }
-  expect(await applyCodexProposal(proposalRequest.id, proposalInput, f.store, f.requests, now)).toEqual(spoken);
-  expect(await applyCodexSpeech(speechRequest.id, speechInput, 'Yuna', f.store, f.requests, now, testAudioNormalizer())).toEqual(spoken);
+  await scope.phase('chain.replay-proposal', async (): Promise<void> => {
+    expect(await applyCodexProposal(proposalRequest.id, proposalInput, f.store, f.requests, now)).toEqual(spoken);
+  });
+  await scope.phase('chain.replay-speech', async (): Promise<void> => {
+    expect(await applyCodexSpeech(speechRequest.id, speechInput, 'Yuna', f.store, f.requests, now, observedNormalizer)).toEqual(spoken);
+  });
   expect(spoken.generationRecords).toHaveLength(3); expect(spoken.assets).toHaveLength(2);
 });
 

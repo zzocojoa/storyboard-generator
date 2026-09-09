@@ -23,14 +23,17 @@ jobs:
           git rev-parse HEAD > "$RUNNER_TEMP/storyboard-ci-diagnostics/checkout-sha.txt"
           node --version > "$RUNNER_TEMP/storyboard-ci-diagnostics/node-version.txt"
           npm --version > "$RUNNER_TEMP/storyboard-ci-diagnostics/npm-version.txt"
+          node -p 'require("vitest/package.json").version' > "$RUNNER_TEMP/storyboard-ci-diagnostics/vitest-version.txt"
           node -e 'console.log(JSON.stringify({platform:process.platform,arch:process.arch,imageOS:process.env.ImageOS??null,imageVersion:process.env.ImageVersion??null}))' > "$RUNNER_TEMP/storyboard-ci-diagnostics/runner-environment.json"
           sha256sum .github/workflows/ci.yml package-lock.json vitest.config.ts > "$RUNNER_TEMP/storyboard-ci-diagnostics/input-hashes.txt"
-      - run: npm run check
+      - run: |
+          set -o pipefail
+          npm run check 2>&1 | tee "$RUNNER_TEMP/storyboard-ci-diagnostics/check.log"
         env:
           STORYBOARD_TEST_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
           STORYBOARD_TEST_DIAGNOSTICS_DIR: ${{ runner.temp }}/storyboard-ci-diagnostics
-      - name: Retain failed check diagnostics
-        if: failure()
+      - name: Retain check comparison diagnostics
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: ci-check-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}

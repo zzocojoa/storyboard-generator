@@ -39,7 +39,7 @@ export function ownedStore(store: ProjectStore): ProjectStore {
 export function ownedChild(create: () => ControlledProcess): ControlledProcess {
   const scope: OwnedTestScope = currentScope(); const child: ControlledProcess = scope.guard({ create }, 'child-create').create();
   scope.own('child', String(child.child.pid), (): Promise<void> => child.stop());
-  return scope.guard(child, 'child');
+  return scope.guard(child, `child:${child.child.pid}`);
 }
 export function barrier(): PromiseWithResolvers<void> {
   const value = Promise.withResolvers<void>(); currentScope().releaseOnFinish(value.resolve); return value;

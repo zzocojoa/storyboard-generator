@@ -20,19 +20,20 @@ it('cancelled_scope_finishes_started_writer_and_rejects_new_work', async (): Pro
   const { scope, controller, events } = fixture(1000); const root: string = await scope.root('owned-writer-');
   const reached = Promise.withResolvers<void>(); const release = Promise.withResolvers<void>();
   scope.releaseOnFinish(release.resolve);
-  const body: Promise<void> = scope.body(async (): Promise<void> => {
+  const body: Promise<void> = scope.body((): Promise<void> => scope.phase('observed-sequence', async (): Promise<void> => {
     await scope.run('transaction', async (): Promise<void> => {
       reached.resolve(); await release.promise;
       // 이미 시작된 Transaction의 내부 쓰기는 취소 뒤에도 완료돼야 한다.
       await scope.run('transaction-final-write', (): Promise<void> => writeFile(join(root, 'result'), 'complete'));
     });
     await scope.run('unexpected-next-write', (): Promise<void> => writeFile(join(root, 'next'), 'bad'));
-  });
+  }));
   const rejected = expect(body).rejects.toMatchObject({ code: 'OWNED_TEST_STOPPED' });
   await reached.promise; controller.abort(new Error('통제된 취소')); await scope.close(); await rejected;
   expect(events.findIndex(e => e.phase === 'operation-settled' && e.operationId?.startsWith('transaction:')))
     .toBeLessThan(events.findIndex(e => e.phase === 'root-remove-start'));
   expect(events.some(e => e.operationId?.startsWith('unexpected-next-write'))).toBe(false);
+  expect(events.find(e => e.phase === 'phase-failed')).toMatchObject({ errorCode: 'OWNED_TEST_STOPPED' });
   await expect(scope.root('after-close-')).rejects.toMatchObject({ code: 'OWNED_TEST_STOPPED' });
   await expect(access(root)).rejects.toMatchObject({ code: 'ENOENT' });
   const next = fixture(1000); const nextRoot: string = await next.scope.root('owned-next-');
@@ -107,7 +108,7 @@ it('nested_writer_is_drained_after_its_parent_operation_returns', async (): Prom
   } }, 'nested-writer');
   let writing: Promise<void> | null = null;
   try {
-    await scope.run('parent', (): void => { writing = target.write(); });
+    await scope.phase('observed-parent', (): Promise<void> => scope.run('parent', (): void => { writing = target.write(); }));
     await scope.close();
     await writing;
     expect(phases).toEqual(['writer-settled', 'store-close']);

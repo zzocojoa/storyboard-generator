@@ -17,6 +17,7 @@ export type ScopeOptions = { signal: AbortSignal; testFile: string; testName: st
 export type OwnedTestScope = {
   body(operation: () => void | Promise<void>): Promise<void>;
   run<T>(label: string, operation: () => T | Promise<T>): Promise<T>;
+  phase<T>(label: string, operation: () => T | Promise<T>): Promise<T>;
   guard<T extends object>(target: T, label: string): T;
   root(prefix: string): Promise<string>;
   own(kind: ResourceKind, id: string, close: () => Promise<void>): void;
@@ -137,6 +138,14 @@ export function createOwnedTestScope(options: ScopeOptions): OwnedTestScope {
     },
     async run<T>(label: string, operation: () => T | Promise<T>): Promise<T> {
       return invoke(label, operation) as T | Promise<T>;
+    },
+    // 단계 관찰은 Transaction 문맥을 만들지 않아 취소 뒤 다음 작업을 허용하지 않는다.
+    async phase<T>(label: string, operation: () => T | Promise<T>): Promise<T> {
+      assertOpen();
+      const id: string = `${label}:${randomUUID()}`; emit('phase-start', id, null);
+      try {
+        const result: T = await operation(); emit('phase-end', id, null); return result;
+      } catch (error: unknown) { emit('phase-failed', id, error); throw error; }
     },
     guard<T extends object>(target: T, label: string): T {
       assertOpen();
