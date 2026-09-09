@@ -115,11 +115,11 @@ npm run cli -- export-csv --project .local/plant-care.project.json --output .loc
 
 ## Build와 읽기 전용 검토 번들
 
-`npm run build:manifest`는 `.build/build-manifest.json`에 provenanceVersion 3을 작성한다. Project Journal/Lock은 3/3, Process Registry는 1, Request Journal/Lock은 1/1이다. `headCommitSha`는 dirty여도 실제 HEAD를 유지한다. `worktreeDirty`는 전체 Git 상태, `generationInputsDirty`는 생성 계약 입력의 변경 여부이며 `commitSha`는 HEAD의 deprecated alias다. Git 조회가 모두 성공하면 `gitStateAvailable=true`이고 두 dirty 값은 실제 상태다. HEAD만 성공하면 HEAD를 보존하고 availability=false·dirty=null을 기록한다. Git 자체를 읽지 못하면 HEAD도 null이다. 환경의 Commit SHA로 clean을 추정하지 않는다. 런타임은 시작 시 읽은 Build를 고정한다.
+`npm run build:manifest`는 `.build/build-manifest.json`에 provenanceVersion 3을 작성한다. Project Journal/Lock은 3/3, Process Registry는 1, Request Schema/Apply Intent는 2/1, Request Journal/Lock은 2/1이다. `headCommitSha`는 dirty여도 실제 HEAD를 유지한다. `worktreeDirty`는 전체 Git 상태, `generationInputsDirty`는 생성 계약 입력의 변경 여부이며 `commitSha`는 HEAD의 deprecated alias다. Git 조회가 모두 성공하면 `gitStateAvailable=true`이고 두 dirty 값은 실제 상태다. HEAD만 성공하면 HEAD를 보존하고 availability=false·dirty=null을 기록한다. Git 자체를 읽지 못하면 HEAD도 null이다. 환경의 Commit SHA로 clean을 추정하지 않는다. 런타임은 시작 시 읽은 Build를 고정한다.
 
 Stable Fingerprint는 `sourceTreeSha256`(src·web·package 파일), `generationContractSha256`(Workbench Skill·AGENTS·Codex·Proposal·관련 Domain·Prompt·JSON Schema·lockfile), `runtimeGenerationConfigSha256`(음성·Provider·Audio 출력 설정)과 Project Schema Version이다. 경로는 상대경로 `/`로 정규화하고 정렬한 경로+NUL+bytes+NUL을 해시한다. Runtime 설정은 허용된 비밀 아닌 값만 Stable JSON으로 해시한다. builtAt·PID·Host·절대경로·Secret은 요청 동일성에 사용하지 않는다.
 
-같은 Target·Basis·Fingerprint의 Pending 요청만 재사용한다. 이전 Build의 Pending은 파일을 보존한 `superseded`가 되고 새 ID를 만든다. UI와 Metrics는 이를 일반 실패율에서 제외한다. kind·Project·Target·Basis의 논리 Key Lock 아래에서 재사용·Supersede·Terminal 전이를 직렬화하며 Build는 Lock Key에서 제외한다. 현재 파일 SHA-256 CAS와 Request Journal 1이 중단된 다중 파일 게시를 복구한다. Terminal은 다시 덮지 않으며 알 수 없는 복구 증거는 `CODEX_REQUEST_RECOVERY_REQUIRED` 423으로 보존한다. 상세 오류·fsync·소유권 계약은 Design을 따른다. Context·Apply도 Fingerprint를 검사한다. Project Schema 1.8.0의 1.7→1.8 메모리 Migration은 기존 Build에 알 수 없는 hash·dirty 값을 null로 남기고 Transition의 기존 의미를 명시한다. 1.8→1.9는 과거 Build의 `gitStateAvailable`을 null로 추가하며 이미 저장된 dirty 값을 보존한다. Legacy Project·Request 읽기는 메모리에서 이관하며 디스크와 이전 Record·Version 파일을 현재 Build로 다시 쓰지 않는다.
+같은 Target·Basis·Fingerprint의 Pending 요청만 재사용한다. 이전 Build의 Pending은 파일을 보존한 `superseded`가 되고 새 ID를 만든다. UI와 Metrics는 이를 일반 실패율에서 제외한다. kind·Project·Target·Basis의 논리 Key Lock 아래에서 재사용·Supersede·Terminal 전이를 직렬화하며 Build는 Lock Key에서 제외한다. 현재 파일 SHA-256 CAS와 Request Journal 2가 중단된 다중 파일 게시를 복구한다. Terminal은 다시 덮지 않으며 알 수 없는 복구 증거는 `CODEX_REQUEST_RECOVERY_REQUIRED` 423으로 보존한다. 상세 오류·fsync·소유권 계약은 Design을 따른다. Context·Apply도 Fingerprint를 검사한다. Project Schema 1.8.0의 1.7→1.8 메모리 Migration은 기존 Build에 알 수 없는 hash·dirty 값을 null로 남기고 Transition의 기존 의미를 명시한다. 1.8→1.9는 과거 Build의 `gitStateAvailable`을 null로 추가하며 이미 저장된 dirty 값을 보존한다. Legacy Project·Request 읽기는 메모리에서 이관하며 디스크와 이전 Record·Version 파일을 현재 Build로 다시 쓰지 않는다.
 
 ```sh
 npm run review-bundle -- --project-id PRJ-007 --output .local/reviews/PRJ-007-draft --maturity draft
@@ -154,6 +154,21 @@ npm run codex-workbench -- --help
 ```
 
 CSV에서 같은 오디오 이벤트가 여러 컷 행에 나타나면 하나의 이벤트 ID를 공유하는 것이며 발화를 반복 생성하지 않는다. 스프레드시트 수식으로 해석될 수 있는 셀은 작은따옴표로 보호한다. 원문 그대로의 교환과 재편집에는 프로젝트 JSON을 사용한다.
+
+### 결과 적용 상태와 복구
+
+Proposal·Image·Speech 등록은 Request 논리 Key 소유권을 먼저 얻고 Project를 저장한다. 적용 중인 요청은 `applying`이며 생성 Pending 목록과 실패율에서 제외된다. Fail·Supersede가 먼저 끝나면 결과 등록을 거부하고, 적용이 먼저 시작되면 경쟁 종결은 `CODEX_REQUEST_APPLY_IN_PROGRESS` 409로 응답한다. `completed`는 결과가 저장됐다는 뜻이며 Text Confirm·Frame Accept·Shot Approval이나 Final Ready를 뜻하지 않는다.
+
+```sh
+npm run codex-workbench -- apply-status --request <UUID>
+npm run codex-workbench -- reconcile --request <UUID>
+```
+
+HTTP는 `GET /api/codex/requests/:requestId/apply-status`, `POST /api/codex/requests/:requestId/reconcile`을 제공한다. Status는 `applying`, `committed-awaiting-request-settlement`, `completed`, `recovery-required`, `evidence-conflict`를 Request·Project ID와 검증된 `committedRevision`으로 구분한다. `/api/status`의 `applyRecovery`와 생성 지표에도 반영한다. App 시작과 일반 Workbench 명령은 중단된 Applying을 정산한다. `apply-status`는 Apply 정산을 실행하지 않고 `reconcile`은 지정한 요청을 처리한다. 두 CLI 모두 일반 저장소 초기화는 수행한다. 원본을 전혀 변경하지 않는 감사에는 Review Bundle의 읽기 전용 경로를 사용한다.
+
+`resultRevision`은 Generation Record가 처음 도입된 검증된 Version이다. 후속 편집의 현재 Revision으로 대체하지 않는다. Commit이 입증되면 입력 파일 없이도 `reconcile`할 수 있으며 Project·Asset·Record를 다시 생성하지 않는다. 동일 Request에 다른 결과를 등록하면 `CODEX_APPLY_RESULT_CONFLICT` 409다. Legacy Proposal·Speech에 입력 동일성 Hash가 없으면 파일 재등록으로 동일성을 추정하지 않고 입력 없는 `reconcile`을 사용한다. 과거 Failed/Superseded와 Record의 공존, 잘못된 Completed Revision, 해석 불가능한 Intent는 423 검토 오류이며 자동 덮어쓰지 않는다. 이 오류는 해당 Request 범위이고 다른 Project 편집을 잠그지 않는다.
+
+로컬 macOS·Ubuntu 파일 시스템의 협력 Writer를 대상으로 한다. 분산 파일 시스템·임의 파일 조작·외부 모델 호출 자체의 최대 1회 실행은 보장 범위에 포함하지 않는다. 저장 계약과 복구 증명은 Design, 실행 결과는 Report를 따른다.
 
 ## 검증
 

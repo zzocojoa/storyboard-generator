@@ -205,13 +205,36 @@ Summary Integrity Cache는 Project ID·불변 Asset 전체 metadata·file dev/in
 
 `SafeStoreFilesystem.publishExclusiveFileWithIdentity`는 같은 Directory의 임시 파일에 전체 JSON을 쓰고 file fsync → no-replace hard link → parent fsync → 본인 임시 파일 unlink → parent fsync 순서로 최종 Lock을 공개한다. Project write.lock·Root Create Lock·Request Lock·Review Claim이 이 Primitive를 공유하며 최종 경로의 부분 JSON을 재시도로 숨기지 않는다. Project 임시 Lock은 Registry·host·PID·process instance·transaction·bytes·inode로 소유권을 증명한다. 확인된 live 게시 중간 파일은 보존하며 증명할 수 없는 중단 파일은 자동 삭제하지 않는다.
 
-Request Lock 1과 Journal 1은 `.locks`와 `.transactions`에서 kind·projectId·targetId·basisHash의 SHA-256 Key를 공유한다. Build를 Key에서 제외해 서로 다른 Build의 Supersede도 직렬화한다. 협력 Process는 Lock을 제한된 5초 동안 기다릴 수 있으나 전이 callback·CAS 실패를 자동 재실행하지 않는다. 동일 Build의 pending은 같은 ID, 다른 Build는 새 pending과 기존 pending들의 superseded 전이를 하나의 Journal로 게시한다. Completed·Failed·Superseded는 immutable terminal이며 status 변경 직전 원시 직렬화 SHA-256을 CAS한다. Request의 나머지 metadata는 변경하지 않는다.
+Request Lock 1과 Journal 2는 `.locks`와 `.transactions`에서 kind·projectId·targetId·basisHash의 SHA-256 Key를 공유한다. Build를 Key에서 제외해 서로 다른 Build의 Supersede도 직렬화한다. 협력 Process는 Lock을 제한된 5초 동안 기다릴 수 있으나 전이 callback·CAS 실패를 자동 재실행하지 않는다. 동일 Build의 pending은 같은 ID, 다른 Build는 새 pending과 기존 pending들의 superseded 전이를 하나의 Journal로 게시한다. Completed·Failed·Superseded는 immutable terminal이며 status 변경 직전 원시 직렬화 SHA-256을 CAS한다. Request의 나머지 metadata는 변경하지 않는다.
 
-각 next 파일을 fsync하고 before/after bytes와 staging dev/ino를 Journal에 내구성 있게 기록한 뒤 신규 Request → 기존 Supersede/Terminal 순서로 게시하고 각 parent를 동기화한다. 중단 복구는 현재가 before 또는 after이고 staging bytes·identity가 증명될 때만 roll-forward한다. 복구 Process 경쟁과 재Crash는 부모 transaction에 연결한 배타 `.recovery-claims`로 직렬화한다. 완료된 복구 Claim은 감사 증거로 남고 활성 Lock과 구분한다. 다른 host·불명 상태·CAS 뒤 외부 Terminal 변경은 파일을 보존하며 423으로 닫힌다. Legacy raw JSON은 읽기만으로 다시 쓰지 않는다. Project 결과 적용과 Request terminal 기록을 하나의 분산 transaction으로 바꾸는 계약은 아니다.
+각 next 파일을 fsync하고 before/after bytes와 staging dev/ino를 Journal에 내구성 있게 기록한 뒤 신규 Request → 기존 Supersede/Terminal 순서로 게시하고 각 parent를 동기화한다. 중단 복구는 현재가 before 또는 after이고 staging bytes·identity가 증명될 때만 roll-forward한다. 복구 Process 경쟁과 재Crash는 부모 transaction에 연결한 배타 `.recovery-claims`로 직렬화한다. 완료된 복구 Claim은 감사 증거로 남고 활성 Lock과 구분한다. 다른 host·불명 상태·CAS 뒤 외부 Terminal 변경은 파일을 보존하며 423으로 닫힌다. Legacy raw JSON은 읽기만으로 다시 쓰지 않는다. 두 저장소의 동시 가시성을 보장하지 않으며 아래 공통 적용 프로토콜로 중단 상태를 식별하고 검증된 Commit에 수렴한다.
 
 Request Busy·Settled·State Conflict는 409/request, Recovery Required는 423/request·operatorActionRequired=true, 저장 일시 오류는 503/service다. 요청 범위 423은 Project mutation 전체를 잠그지 않는다. Project busy와 Asset 변경 중 검사 오류는 기존 Project conflict와 Asset integrity 423 정책을 따른다. 모든 오류는 category·scope·retryable·operatorActionRequired·mutationBlocked·projectId·resourceId를 유지하고 관리 경로의 원시 EEXIST·ENOENT·ENOTEMPTY를 계약 오류로 변환한다.
 
 ReviewBundlePublisher는 Source Root 밖의 canonical Output Parent에서 `.review-<outputHash>.claim`을 원자 공개한다. Claim 1은 outputHash·host·pid·transactionId·createdAt을 기록하며 staging은 같은 transaction과 directory identity에 묶인다. 모든 파일 fsync와 하위 directory fsync → Source snapshot 재검사 → Claim·staging identity 재검사 → 새 final directory rename → parent fsync → 본인 Claim unlink → parent fsync로 게시한다. 경쟁자와 기존 출력은 REVIEW_BUNDLE_EXISTS 409, 불명·다른 host·crash Claim은 REVIEW_BUNDLE_CLAIM_RECOVERY_REQUIRED 423/request/operator다. 게시 후 동기화 실패는 결과와 Claim을 보존한다. 정상 실패는 본인 staging·Claim만 정리한다. 소스 Quiescence·Final·Redaction 계약은 그대로 적용한다. 이 배타 게시 계약은 로컬 협력 Writer 기준이며 SMB/NFS 또는 비협력 Writer의 임의 파일 조작까지 보장하지 않는다.
+
+### Request·Project 결과 적용과 최초 Revision
+
+`CodexRequestStore.applyResult`가 Proposal·Image·Speech의 소유권·검증·Intent·Commit·정산을 공유한다. 요청을 관찰한 뒤 실제 논리 Key Lock 안에서 다시 읽는다. Fail/Supersede가 먼저 확정됐으면 Project를 쓰지 않는다. Apply가 먼저 Key를 얻었으면 경쟁 Terminal은 기다리거나 409이고, 영속 `applying` 뒤에는 공개 complete/fail/create도 먼저 정산하라는 구조화 충돌을 반환한다. 완료된 요청의 명시적인 재생성은 새 Request ID다. 저수준 complete는 Request Primitive 시험에 남지만 제품 결과 등록에서 사용하지 않는다.
+
+잠금 순서는 Request Key → Project Lock이다. 외부 모델·이미지 생성·macOS 음성 합성은 등록 전에 수행한다. 입력 읽기·디코딩·정규화는 Request 소유권 안에서 수행하되 Project Lock을 잡지 않으며, 검사한 bytes와 결과 Hash를 Commit까지 고정한다. 현재 Project의 Basis·Build·Target과 준비된 Record를 검사하고 `expectedRevision`을 사용한다. Project Busy/Revision Conflict는 Commit 전 오류 계약에 따라 Intent를 해제하고 Pending으로 돌려 재시도 가능한 409를 반환한다. 다른 저장 오류는 Applying을 유지하고 복구를 요구한다. 공개 complete 재진입이나 Project Lock에서 Request Lock 획득은 없다.
+
+Request Schema 2의 `applyIntent`는 별도 버전 1이다. Operation ID, Request/논리 Key/Project/Kind/Target/Basis, 안정적인 Generation Fingerprint Hash, 입력 결과 Hash, 준비된 Generation Record와 다음 Project의 Canonical Hash, 시작 Revision, Request Lock의 transaction/host/PID, 생성 시각을 결속한다. Journal 2가 pending→applying을 내구 게시한 뒤 ProjectStore.update를 호출한다. 새 Claim의 Owner는 실제 Request Journal Lock과 같아야 한다. 이전 Lock 복구는 기존 Owner 증명·부모 Transaction에 연결된 복구자 선출을 재사용한다. 다른 Host의 Applying Intent는 자동 정산하지 않는다.
+
+Project Commit의 선형화 지점은 기존 Current 게시다. 같은 Transaction이 게시한 Version에 Generation Record와 결과 Asset 참조가 들어 있으므로 별도 Receipt 파일을 쓰지 않는다. `generationHistorySnapshot`은 Current와 같은 Version 및 0부터 현재까지의 이력을 일관되게 읽는다. 기존 Historical Audit으로 `codex:<requestId>`의 유일한 최초 도입 Revision, 불변 Record·배열·대상·Asset·Request Build·직전 Basis를 확인하고 Intent의 Hash와 대조한다. Asset 없는 Proposal도 유효한 Commit이다. 이후 Frame/Shot 편집이나 Asset 무결성 문제는 과거 적용 증거와 현재 출력 안전성을 분리해 판단한다.
+
+검증된 도입 Revision을 `resultRevision`으로 사용해 소유 Context 내부에서 Applying→Completed를 Journal로 게시한다. 완료 Intent는 재등록 입력의 동일성 감사용으로 보존하고 임시 Journal만 정리한다. Commit 이후 정산 오류에는 이미 저장됐다는 설명과 검증된 committedRevision을 남긴다. 완료 응답 유실·정산 Journal 중단·정산 뒤 중단은 같은 증거로 멱등 복구한다. Intent만으로 Commit을 인정하지 않는다. ProjectStore 복구를 먼저 실행하고, 완전한 Version 이력에 결과가 없는 경우만 Applying을 Pending으로 해제한다. Commit이 있으면 입력 파일 없이 Request만 완료하며 후속 Current·Version·Asset·Record는 다시 쓰지 않는다. 복구 중 다시 중단돼도 같은 절차를 사용한다.
+
+앱 시작과 일반 CLI 시작은 Applying만 순회해 정산한다. 지정 요청 `reconcile`은 Legacy Pending+Record도 검증할 수 있다. 상태 조회의 metadata projection은 잘못된 Intent를 실행하지 않고 Applying 수와 해당 요청 오류를 표시하므로 무관한 요청의 생성·Pending 조회를 막지 않는다. Legacy Failed/Superseded+Record, Completed의 다른 resultRevision, 불명 Schema/Hash/Owner는 읽기 전용 증거 충돌이며 Terminal을 자동 수정하지 않는다. Legacy Proposal·Speech는 원본 입력 Hash가 없으므로 파일 재등록의 동일성을 추정하지 않고 명시적 입력 없는 reconcile로 Commit을 정산한다. Legacy JSON·Journal 1은 계속 읽으며 읽기만으로 Schema 버전이나 Build를 디스크에 채워 넣지 않는다. Project 1.9.0·Provenance 3·Project Journal/Lock/Registry 3/3/1은 그대로다.
+
+| 오류 | HTTP / scope | retryable / operatorActionRequired | mutationBlocked |
+|---|---|---|---|
+| CODEX_REQUEST_APPLY_IN_PROGRESS | 409 / request | true / false | false |
+| CODEX_APPLY_RESULT_CONFLICT | 409 / request | false / false | false |
+| CODEX_APPLY_RECOVERY_REQUIRED | 423 / request | true / false | false |
+| CODEX_APPLY_EVIDENCE_CONFLICT, CODEX_APPLY_RECEIPT_UNRESOLVED | 423 / request | false / true | false |
+
+상태는 Pending·Applying·Commit 후 Request 정산 대기·Completed·복구 필요·증거 충돌을 구분하고 Request/Project ID 및 검증된 committedRevision을 표시한다. 기존 Error Body 필드를 유지한다. Request Journal 자체의 불명 소유권은 기존 CODEX_REQUEST_RECOVERY_REQUIRED/operator 정책을 따른다. Applying은 Pending 큐와 일반 생성 실패율에서 제외한다. 읽기 전용 Review Bundle은 Store 초기화·Apply 정산을 수행하지 않는다. 이 프로토콜의 최대 1회 보장은 로컬 파일 시스템의 협력 Writer가 저장 결과를 적용하는 범위이며 외부 모델 호출·SMB/NFS·비협력 파일 조작까지 확장하지 않는다.
 
 ### 실제 Audio Stress 진단
 
