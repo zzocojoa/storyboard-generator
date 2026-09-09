@@ -1870,6 +1870,12 @@ export class ProjectStore {
   }
 
   async generationRecordAudit(projectId: string): Promise<GenerationRecordAuditEntry[]> {
+    const { current, versions } = await this.generationHistorySnapshot(projectId);
+    return auditGenerationRecords(current, versions);
+  }
+
+  /** Current와 연속된 Version 전체를 같은 관측값으로 검증해 최초 생성 Commit의 근거를 제공한다. */
+  async generationHistorySnapshot(projectId: string): Promise<{ current: Project; versions: Project[] }> {
     await this.initialize();
     await this.read(projectId);
     for (let attempt: number = 0; attempt < 2; attempt += 1) {
@@ -1891,7 +1897,7 @@ export class ProjectStore {
         for (let revision: number = 0; revision <= current.revision; revision += 1) if (!revisions.has(revision)) {
           recoveryRequired(`Generation Audit에 필요한 revision snapshot이 없습니다. projectId=${projectId}, revision=${revision}`);
         }
-        return auditGenerationRecords(current, versions);
+        return { current, versions };
       }
     }
     throw contractError('AUDIT_SNAPSHOT_CHANGED',

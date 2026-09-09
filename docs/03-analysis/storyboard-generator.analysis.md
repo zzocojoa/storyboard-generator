@@ -79,6 +79,12 @@ Generation Audit는 Current를 중복 Snapshot으로 추가하지 않으며 안�
 
 Review Reader는 Current/Version 불일치나 미완 Transaction을 고치지 않는다. Final은 저장 Quiescence를 요구하고 Draft는 auditAvailable=false와 증거를 남길 수 있다. 상태 조회는 외부 Lock을 능동 탐색하지만 안전 검증을 대신하지 않는다. Summary Cache는 Final·Safe Output·Generation Reference에서 사용하지 않는다.
 
+## Request·Project 적용 정합성
+
+기존 코드의 Pending 읽기와 Project 저장 사이에서 Fail/Supersede가 먼저 끝나도 결과가 Commit됐고, 완료 기록 전 중단 뒤 후속 편집이 있으면 현재 Revision을 resultRevision에 기록했다. 실제 두 Store를 사용하는 실패 선작성 시험으로 두 결함을 확인했다. 공통 Coordinator는 Request 소유권부터 Project Commit 증거 검증과 완료까지 직렬화하며, 중간 Applying은 별도 상태로 노출한다.
+
+최초 도입 Version의 증거를 재사용해 Project Shape와 기존 저장 복구를 유지한다. 정상 입력 재등록, 입력 파일 없는 Commit 정산, 후속 편집 보존과 Legacy 모순 비자동 수정은 각각 다른 회귀로 검증한다. Request Schema 2·Intent 1·Journal 2는 별도 계약이며 과거 Build를 갱신하지 않는다. 상세 Lock·Hash·오류·Migration 계약은 Design의 Request·Project 결과 적용 절을 기준으로 한다. 이번 실행의 수치와 원본 보존 범위는 Report에만 기록한다. 읽기 전용 Bundle 생성은 Applying이 남아 있어도 정산을 실행하지 않는다.
+
 ## Mapping과 편집 의미
 
 Canonical 후보는 `placement.unitId`, 허용 종류의 유일한 정확 일치, 유일한 휴리스틱 후보 순서로 선택한다. 중복 정확 일치는 unresolved로 남는다. `exact`, `abbreviation`, `replacement`, `separate-element`, `standalone-placement`는 Canonical 연결·별도 렌더링·시간 범위 조합을 Schema와 공통 Review 함수에서 검사한다. `separate-element` 분할 근거에는 Placement 시각 대신 Canonical 시각을 사용한다.
@@ -99,6 +105,6 @@ JSON은 기준 규칙과 모든 재계산 입력을 보존한다. CSV는 `source
 
 현재 단위·통합·Chromium 및 반복 시험의 실제 수치와 실패 재현·운영 해시 보존 증거는 Report를 따른다. G1~G7 회귀는 독립 Child Process·IPC Barrier·SIGKILL·inode/CAS 검증으로 Request와 Bundle 경쟁, 중단·복구 재중단, Lock 부분 게시, Integrity 중간 변경을 검사한다. Legacy 오류는 편집에서 격리하지만 Approval·Final에서 차단하며 Project 1.8→1.9와 Legacy Request는 읽기 전용 메모리 이관을 검사한다. 추가 CLI Profile·오류 계약도 임시 저장소에서 검사한다. 처음 재현한 수동 Coverage 우회, Gap 승인, Frame 1ms 해석과 Hold의 이전 초반 Frame 재사용을 차단했다. 추가 회귀는 Text Draft/Final, 실제 Playhead·전환 Gate, 명시 Frame 충돌, 최초 Unit 공개 순서, Canonical 감사, Active Update 오류, Build와 원본 불변 Bundle을 검증한다.
 
-PRJ-007 회귀 fixture는 Scene 12, Segment 32, screenplay Unit 79, Panel Turn 16, Text Placement 25, 1,500,000ms와 UNIT-045의 849,000–851,000ms J-cut·PCM16 mono 48,000Hz 2초 WAV를 유지한다. 실제 로컬 저장본 4개는 자동 수정 없이 별도 Bundle로 재검증했다. revision 283만 현재 타임라인의 Final 조건을 통과하며 이 저장본의 기존 UNIT-045는 850,000–855,000ms, 5초 within-segment SFX다. 회귀 fixture와 기존 제작 결정의 차이를 숨기거나 원본을 자동 수정하지 않는다. 개별 수치와 실행 로그·CI 확인 위치는 Report에 기록한다.
+PRJ-007 회귀 fixture는 Scene 12, Segment 32, screenplay Unit 79, Panel Turn 16, Text Placement 25, 1,500,000ms와 UNIT-045의 849,000–851,000ms J-cut·PCM16 mono 48,000Hz 2초 WAV를 유지한다. 이전 Final Readiness 검증에서는 실제 로컬 저장본 4개를 자동 수정 없이 별도 Bundle로 검사했다. 이번 적용 정합성 검증은 운영 데이터에 접근하지 않았다. revision 283만 현재 타임라인의 Final 조건을 통과하며 이 저장본의 기존 UNIT-045는 850,000–855,000ms, 5초 within-segment SFX다. 회귀 fixture와 기존 제작 결정의 차이를 숨기거나 원본을 자동 수정하지 않는다. 개별 수치와 실행 로그·CI 확인 위치는 Report에 기록한다.
 
 자동 검사는 구조·문자열·시간·참조·상태 무결성을 판정한다. 그림의 연출, 정보의 시각적 암시, 자막 가독성과 낭독 자연스러움은 사람이 실제 결과를 검토해야 한다. 지원 입력은 `native-v1`과 `production-v1`이며 임의 문서 가져오기, 클라우드 협업, 전체 영상 렌더링은 현재 범위가 아니다.

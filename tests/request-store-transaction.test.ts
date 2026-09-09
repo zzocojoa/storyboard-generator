@@ -10,6 +10,7 @@ import { CodexRequestSchema } from '../src/codex/schema.js';
 import type { CodexRequest } from '../src/codex/schema.js';
 import { httpErrorPolicy } from '../src/server/app.js';
 import { contractError } from '../src/domain/errors.js';
+import { stableJsonStringify } from '../src/io/stable-json.js';
 import { codexRequestMetrics } from '../src/codex/metrics.js';
 import { controlledProcess } from './controlled-process.js';
 import type { ControlledProcess, WorkerMessage } from './controlled-process.js';
@@ -94,6 +95,20 @@ describe('Request Key 직렬화와 Terminal CAS', (): void => {
 });
 
 describe('Request Journal 실제 Process 중단 복구', (): void => {
+  it('legacy_request_journal_one_recovers_without_schema_rewrite', async (): Promise<void> => {
+    const path: string = await root(); const seeded: CodexRequest = await seed(path);
+    const { schemaVersion: _version, ...legacy } = seeded;
+    await writeFile(join(path, `${legacy.id}.json`), JSON.stringify(legacy));
+    const child = await worker(path, 'complete', firstHash, legacy.id, 'after-journal-published', null);
+    child.send('start'); await child.event('paused'); await child.stop();
+    const journalPath: string = join(path, '.transactions', `${codexRequestKey(legacy)}.json`);
+    const journal: { version: number } = JSON.parse(await readFile(journalPath, 'utf8')) as { version: number };
+    await writeFile(journalPath, stableJsonStringify({ ...journal, version: 1 }));
+    const recovered: CodexRequest = await store(path, firstHash).read(legacy.id);
+    expect(recovered).toMatchObject({ status: 'completed', resultRevision: 1 });
+    expect(recovered.schemaVersion).toBeUndefined(); expect(recovered.generatorBuild).toEqual(legacy.generatorBuild);
+    expect(await readdir(join(path, '.transactions'))).toEqual([]);
+  });
   it('request_supersession_is_crash_recoverable', async (): Promise<void> => {
     for (const position of [{ point: 'after-journal-published', index: null }, { point: 'after-request-published', index: 0 }, { point: 'after-request-published', index: 1 }]) {
       const path: string = await root(); const old: CodexRequest = await seed(path);
@@ -173,6 +188,6 @@ describe('Request 복구 경계와 오류 계약', (): void => {
     expect(httpErrorPolicy(contractError('CODEX_REQUEST_STORE_UNAVAILABLE', '일시 파일 오류', []))).toMatchObject({ status: 503, retryable: true, mutationBlocked: false });
   });
   it('request_contract_versions_are_in_current_build_manifest', (): void => {
-    expect(readBuildManifest()).toMatchObject({ requestLockVersion: 1, requestJournalVersion: 1 });
+    expect(readBuildManifest()).toMatchObject({ requestLockVersion: 1, requestJournalVersion: 2 });
   });
 });

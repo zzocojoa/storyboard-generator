@@ -1,180 +1,114 @@
-# 범용 콘티 도구 — G1~G7 저장·출력 Hardening 검증 보고서
+# 생성 결과 적용 정합성 검증 보고서
 
-## 1. 판정
+## 판정과 기준
 
-전체 권장 수정 반영은 완료다. G1 Request 원자성, G2 Legacy 격리, G3 Atomic Lock, G4 Git unknown, G5 Integrity/cache, G6 Bundle Claim, G7 Audio Stress 모두 완료다. 병합 판정은 **조건부 GO**이며 현재는 검증된 로컬 환경의 운영 Pilot을 권장한다. 병합 전에는 대상 HEAD에 연결된 Ubuntu CI와 별도 Audio Stress의 성공을 확인해야 한다. 생성 완료와 Final Ready는 독립이며 미확정 Text는 Draft에서만 허용한다. 실제 Playhead의 Source·Gate·Coverage와 현재 파일을 검사하고 생성 Asset의 실제 Build·감사 연결을 보존한다.
+Request와 Project 결과 적용의 경쟁 및 실제 resultRevision 유실을 수정했다. 결과 적용 일관성과 실제 Revision 보존 구현은 완료이며 로컬 단위·통합·종합·반복·브라우저·Smoke 검증은 모두 성공했다. 사용 판단은 로컬 협력 Worker에 GO, 원격 CI·병합에는 CONDITIONAL GO다. 이번 목표는 로컬 구현·검증·문서·Feature Branch Commit이며 새 원격 작업은 실행하지 않는다. 생성 완료와 Final Ready는 여전히 별개다.
 
-사용자 승인으로 `6d0a47c`까지 Feature Branch에 Push했다. 해당 HEAD의 [Ubuntu CI](https://github.com/zzocojoa/storyboard-generator/actions/runs/34294914198)는 check·e2e 모두 성공했다. 이후 HEAD의 상태는 [PR #5 Checks](https://github.com/zzocojoa/storyboard-generator/pull/5/checks)에서 별도로 확인하며 이전 Commit의 성공으로 대체하지 않는다. Merge는 승인 범위에 포함하지 않는다.
+시작 시 fetch와 GitHub 조회로 확인한 master·실제 Base·작업 시작 HEAD는 `2ecb5038e3444bfeb1beeb29530492e0920f914f`다. 새 Branch는 `codex/storyboard-apply-consistency`다. 이전 PR #5와 #4는 이미 병합됐고 master의 CI Run 34299571463은 성공이었다. 이 과거 결과를 이번 최종 HEAD의 CI로 사용하지 않는다. Project 1.9.0·Build Provenance 3·Project Journal/Lock/Registry 3/3/1을 유지한다. Request Schema 2·Apply Intent 1·Request Journal 2·Request Lock 1을 별도로 관리한다.
 
-## 2. Repository 기준
+## 최초 실패 재현
 
-- Branch: `codex/storyboard-final-readiness-hardening`.
-- 시작 HEAD: `afcc21d8254b5a7f058c4907d85d91190739d02e`.
-- Base·Merge Base: `codex/storyboard-final-readiness`, `10ca4e1a776e56a5d934e5f61fd0cfbe72148463`.
-- 구현 Commit: `637e8cd`까지. 최종 문서 Commit과 추적 파일·미추적 보존 상태는 완료 응답의 정확한 SHA와 로컬 `repository-final.json`으로 확인한다.
-- Project Schema 1.9.0 / Build Provenance 3 / Request Journal 1·Lock 1 / Storage Journal 3·Lock 3·Process Registry 1 / Output Claim 1.
-- 로컬 Node 24.6.0·npm 11.5.1·Chromium 140.0.7339.16. 일반 Vitest Worker 2와 Playwright Worker 1, 기본 Timeout·Retry 0을 유지한다.
+실제 ProjectStore·CodexRequestStore와 Barrier를 사용했다. RED Commit은 `c22f5c3ea0f566503d04e8ecffdc16805219c788`이며 원본 로그는 `/private/tmp/storyboard-apply-red.log`다.
 
-## 3. 구현 사항
-
-세부 필드·fsync·복구 순서는 [Design](../02-design/features/storyboard-generator.design.md)의 Request 전이·Lock 게시·Bundle 출력 소유권 절을 기준으로 한다.
-
-| 목표 | 문제와 설계 | 핵심 코드·보존 계약 | 오류·Migration·회귀 |
+| 결함 | 기존 결과 | 실제 회귀 | 수정 후 |
 |---|---|---|---|
-| G1 | Process 간 Pending 중복·Supersede/Terminal 경쟁을 Build 제외 논리 Key Lock, 원시 SHA-256 CAS, Journal로 직렬화 | requests.ts·request-lock.ts; 동일 Build 동일 ID, Terminal 불변, Request 감사 이력 보존, 복구 재Crash는 자식 Claim 선출 | Lock/Journal 1; CODEX_REQUEST_STORE_BUSY·CODEX_REQUEST_SETTLED·CODEX_REQUEST_STATE_CONFLICT 409, CODEX_REQUEST_RECOVERY_REQUIRED 423/operator, CODEX_REQUEST_STORE_UNAVAILABLE 503; Legacy read bytes 불변; 19개 새 회귀 |
-| G2 | 다른 Legacy Shot 오류가 수리를 막던 문제를 변경 전후 6필드 Issue 비교로 격리 | edit.ts·mapping.ts·App.tsx; Preview/Save 공통, Local·새/악화 Segment 오류 차단, 기존·축소 오류 표시, Approval·Final 차단 유지 | 새 Schema 없음; 기존 정책 코드 유지; 11개 새 회귀 |
-| G3 | 최종 Lock의 빈/부분 JSON 노출을 temp fsync·no-replace hard link·parent fsync로 제거 | safe-filesystem.ts·store.ts; 기존 identity·Registry 검증, Project/Create/Request 공통 Primitive, 본인 임시 파일만 정리 | Store Lock/Journal 3 유지; PROJECT_BUSY, Recovery Required; 11개 새 회귀 |
-| G4 | Git 조회 실패를 clean으로 기록하던 문제를 availability와 nullable dirty로 표현 | build-inputs.ts·build-schema.ts·build-provenance.ts·io/project.ts; 확인된 HEAD만 보존, audit 필드는 생성 동일성과 분리 | Project 1.8→1.9, Provenance 2→3; 과거 availability=null·dirty 원값 유지; 12개 새 회귀 |
-| G5 | 검사 중 파일 변경 뒤 verified 반환과 revision별 전체 cache 무효화를 수정 | store.ts; 최대 2회 stable snapshot, 불변 Asset·identity 기반 LRU 1,024, Final/Safe는 실제 파일 강제 검사 | STORED_ASSET_CHANGED_DURING_CHECK, Asset 423 정책; 18개 새 회귀 |
-| G6 | 같은 출력의 Bundle Writer 경쟁을 Output Parent의 원자 Claim으로 제어 | review-output.ts·review-bundle.ts; 한 Writer만 게시, source 불변·Quiescence·External redaction·placeholder 유지 | Claim 1; REVIEW_BUNDLE_EXISTS 409, REVIEW_BUNDLE_CLAIM_RECOVERY_REQUIRED 423/operator, REVIEW_BUNDLE_WRITE_FAILED 503; 13개 새 회귀 |
-| G7 | 이전 Linux 실제 Audio 실패의 장기 관측과 종료 증거 보강 | audio-stress.yml·reporter·native E2E 관찰자; PR 3회 유지, 독립 50/75/100회, 첫 실패 보존, 실제 HTMLAudioElement·200/206 | 제품 Schema 변경 없음; 11개 새 회귀/검증, 실패 Trace·console·lifecycle·summary Artifact |
+| Pending 확인 뒤 Fail/Supersede 종결 | Terminal은 failed/superseded인데 Project Record·Asset 각 1개 저장 | superseded_request_cannot_commit_generated_asset / failed_request_cannot_commit_generated_asset | 적용 거부, Project revision 0·Record 0·Asset 0 |
+| Project Commit 뒤 완료 기록 중단, 후속 편집 | 최초 적용 1·현재 2에서 resultRevision을 2로 오기록 | recovered_request_keeps_original_result_revision | 현재 2 유지, resultRevision 1, 중복 없음 |
 
-브라우저 Status가 새 Request 버전 필드를 거부한 통합 실패도 재현했다. Web API가 서버의 BuildManifestSchema를 공유하도록 수정한 뒤 동일 Audio 18건과 전체 E2E 15건이 통과했다. 이 오류는 이전 Linux Audio 간헐 실패의 원인으로 해석하지 않는다.
+## 구현 경계
 
-## 4. 변경 파일
+`CodexRequestStore.applyResult`와 `apply-evidence.ts`가 세 생성 종류의 소유권·Intent·Commit·정산·재시도를 공유한다. Request Key → Project Lock 순서이며 외부 생성은 등록 전에 수행한다. 영속 Applying Intent를 먼저 게시하고 기존 ProjectStore의 Current 게시를 Commit 지점으로 사용한다. 별도 Receipt 파일 대신 Current/전체 Version과 기존 Historical Generation Audit으로 유일한 최초 도입 Revision·Record·Request·Asset·Build·Basis·Hash를 검증한다. 검증한 Revision으로 Request만 완료하며 후속 Project를 되돌리지 않는다.
 
-### 신규 파일
+Legacy Pending+Record는 명시적인 reconcile로 실제 도입 Revision을 정산한다. Failed/Superseded+Record, Completed의 다른 Revision, 불명·다른 Host·상충 Intent는 자동 덮어쓰지 않는다. Commit이 입증되면 입력 파일이 없어도 정산한다. Legacy Proposal/Speech의 입력 동일성 Hash가 없으면 파일 재등록으로 추정하지 않고 입력 없는 reconcile을 요구한다. 완료 Intent는 재등록 동일성 감사용으로 보존한다.
 
-| 파일 | 목적 |
-|---|---|
-| `.github/workflows/audio-stress.yml` | Ubuntu 50~100회 실제 Audio와 실패 Artifact |
-| `scripts/audio-stress-reporter.ts` | 완료/실패/미완 반복 JSON Summary |
-| `src/codex/request-lock.ts` | 논리 Key Lock·복구자 선출·원자 게시 |
-| `src/codex/storage-contract.ts` | Request Journal/Lock 버전 단일 정의 |
-| `src/exporters/review-output.ts` | 본인 staging·Claim 소유권과 내구 게시 |
-| `tests/atomic-lock-publication.test.ts` | 최종 Lock 가시성·충돌·fsync·소유권 회귀 |
-| `tests/audio-diagnostics.ts` | 실제 HTTP 수명·소유 Listener/Socket 관찰 |
-| `tests/audio-stress-contract.test.ts` | Stress·개인정보 제외·정리·Summary 검증 |
-| `tests/build-git-availability.test.ts` | Git unknown·Migration·과거 값 보존 회귀 |
-| `tests/controlled-process.ts` | IPC Barrier·SIGKILL Child Process 조율 |
-| `tests/e2e/audio-observers.ts` | 실제 Store/Worker 종료 관찰 |
-| `tests/integrity-snapshot-race.test.ts` | 검사 중 파일 변경·cache 유지 회귀 |
-| `tests/request-store-transaction.test.ts` | Request 경쟁·CAS·Crash/재Crash 회귀 |
-| `tests/request-store-worker.ts` | 독립 Request Process fault injection |
-| `tests/review-output-claim.test.ts` | 두 Writer 경쟁·Claim·staging·기존 출력 보존 |
-| `tests/review-output-worker.ts` | 독립 Bundle Writer와 IPC 게시 Barrier |
-| `tests/visual-plan-legacy-isolation.test.ts` | 순차 수리·비차단 표시·승인/Final 차단 |
+CLI·HTTP·상태·오류·스키마·복구 세부 계약은 [Design](../02-design/features/storyboard-generator.design.md)의 Request·Project 결과 적용 절, 사용 절차는 [README](../../README.md)의 결과 적용 상태와 복구 절을 기준으로 한다. 읽기 전용 Review는 Apply 정산을 실행하지 않는다. Applying은 일반 생성 Pending/실패 지표에서 제외한다.
 
-### 수정 파일
+## 실제 결속 증거
 
-| 파일 | 목적 |
-|---|---|
-| `.agents/skills/storyboard-workbench/SKILL.md` | 생성·복구·Final 운영 절차의 현재 계약 |
-| `AGENTS.md` | Schema·복구·검증 지침 현재 상태 |
-| `README.md` | 버전·Request·출력 Claim 사용 계약 |
-| `docs/01-plan/features/storyboard-generator.plan.md` | 계획·설계·분석·실행 증거의 현재 상태 |
-| `docs/02-design/features/storyboard-generator.design.md` | 계획·설계·분석·실행 증거의 현재 상태 |
-| `docs/03-analysis/storyboard-generator.analysis.md` | 계획·설계·분석·실행 증거의 현재 상태 |
-| `docs/04-report/storyboard-generator.report.md` | 계획·설계·분석·실행 증거의 현재 상태 |
-| `schemas/storyboard_project.schema.json` | 1.9.0과 Git availability JSON Schema |
-| `scripts/check-required-tests.ts` | 신규 핵심 검증 이름 등록 |
-| `scripts/runtime-smoke.ts` | 최신 Project Schema 기대값 |
-| `scripts/write-build-manifest.ts` | Provenance 3·Request 버전 기록 |
-| `src/build-inputs.ts` | Git 확인 실패와 clean 분리 |
-| `src/build-schema.ts` | 현재 Build availability·버전 계약 |
-| `src/build.ts` | 영속 Build에 availability 전달 |
-| `src/codex/requests.ts` | 전이 SHA CAS·다중 파일 Journal·멱등 복구 |
-| `src/domain/audio-normalizer.ts` | Worker·Queue·Timer 정리 진단 |
-| `src/domain/build-provenance.ts` | 과거 availability=null 메모리 이관 |
-| `src/domain/edit.ts` | Visual Plan 변경 전후 오류 격리 |
-| `src/domain/mapping.ts` | 승인 Segment 정책·Issue 식별 공유 |
-| `src/domain/schema.ts` | Project 1.9.0·영속 Git availability |
-| `src/exporters/review-bundle.ts` | 출력 Claim 게시기로 연결 |
-| `src/importers/import-package.ts` | 새 Project 1.9.0 생성 |
-| `src/io/project.ts` | 18→19 Migration 체인 |
-| `src/server/app.ts` | Request/Claim/Asset 오류 정책·전체 종료 대기 |
-| `src/server/safe-filesystem.ts` | 완성 파일의 no-replace 원자 공개 Primitive |
-| `src/server/store.ts` | 원자 Lock·임시 증거 복구·stable Integrity LRU |
-| `tests/build-hardening.test.ts` | 새 스키마·Request 파일/sidecar 검증 |
-| `tests/e2e/real-audio.spec.ts` | Native media·200/206·실패/종료 증거 |
-| `tests/helpers.ts` | 기존 회귀 fixture의 최신 Schema 기대값 |
-| `tests/information-interlock.test.ts` | 기존 회귀 fixture의 최신 Schema 기대값 |
-| `tests/mapping.test.ts` | 기존 회귀 fixture의 최신 Schema 기대값 |
-| `tests/migration.test.ts` | 기존 회귀 fixture의 최신 Schema 기대값 |
-| `tests/output-boundary-regression.test.ts` | 기존 회귀 fixture의 최신 Schema 기대값 |
-| `tests/readiness-audit.test.ts` | 기존 회귀 fixture의 최신 Schema 기대값 |
-| `tests/v15-visual-regression.test.ts` | 기존 회귀 fixture의 최신 Schema 기대값 |
-| `web/src/App.tsx` | 무관한 기존 Segment 검토 항목 표시 |
-| `web/src/api.ts` | 서버와 현재 Build Status 스키마 공유 |
+HTTP Smoke의 Project ID는 `plant-care-demo`다. 다음 값은 `/private/tmp/storyboard-apply-smoke-final.log`의 applyEvidence에서 얻었다.
 
-운영 데이터·생성 미디어·로그·Review Bundle·사용자 미추적 파일은 Commit에 포함하지 않는다. 삭제 파일은 없다. 작업 중 새로 나타난 미추적 `test-results 2/`는 원인을 추정하거나 정리하지 않고 그대로 보존한다. 최종 Worktree의 미추적 항목과 구현의 추적 변경 상태를 구분한다.
+| 종류·상황 | Request ID | Request 상태 | resultRevision / 현재 Revision / 검증된 Commit | 결과 Asset |
+|---|---|---|---|---|
+| Proposal | c4df4faa-a263-4e9c-9375-c1d0f4d0cc0d | completed | 1 / 3 / 1 | 없음 |
+| Image | f0ccc3bb-d67b-47e6-b435-f3053a0a3cb5 | completed | 2 / 3 / 2 | codex:f0ccc3bb-d67b-47e6-b435-f3053a0a3cb5:image |
+| Speech | f9ada385-68fb-40f7-acd2-9e9c96e09cd3 | completed | 3 / 3 / 3 | codex:f9ada385-68fb-40f7-acd2-9e9c96e09cd3:audio |
+| Apply 소유 후 Fail·Supersede 거부 | 1b1212eb-588d-4d67-b25b-d13d7e9bedd0 | completed | 4 / 4 / 4 | codex:1b1212eb-588d-4d67-b25b-d13d7e9bedd0:image |
+| Commit 후 SIGKILL·후속 편집·입력 삭제·복구 | c24b88ee-8fa1-4e7e-9714-8089422d671c | completed | 5 / 6 / 5 | codex:c24b88ee-8fa1-4e7e-9714-8089422d671c:image |
 
-## 5. Test 결과
+전용 1회차의 Supersede 우선 Request `550cdc91-e9f2-426e-a420-917d4f99c5c2`와 Fail 우선 `d355e460-a58e-47a3-a2ef-a2300ba84140`는 각각 Terminal을 유지하고 Record·Asset이 0개였다. Apply 우선 `015d851d-4a28-47ee-9f8c-b9eb54f1ccb1`은 Supersede를, `e523724e-14bb-49fa-9a98-b1d3d6c9a167`은 Fail을 거부하고 Completed·revision 1·Record 1·Asset 1로 끝났다.
 
-이번 원본 로그는 `.local/reviews/residual-hardening/`에 보존한다. 아래 `npm test` 등 개별 단계는 `npm run check`가 실제 실행한 명령이며 별도의 두 번 성공으로 세지 않는다.
+각 Record.id는 `codex:<해당 Request ID>`, Record.requestId는 해당 Request ID와 같다. 마지막 복구는 후속 제목 편집을 보존했고 추가 Record·Asset·Project Revision은 각각 0이었다. 적용이 먼저인 경쟁에서는 동일 Request의 Record·Asset이 각 1개다. Fail·Supersede가 먼저인 시험은 Terminal을 보존하고 결과가 각 0개임을 확인했다. 반복 실행의 개별 ID와 강제 종료 PID는 별도 반복 로그에 기록한다.
 
-| 명령·시험 | 결과 | 파일 수 | 검사 수 | 근거·특이사항 |
-|---|---|---:|---:|---|
-| npm ci | 성공 | — | — | npm-ci.log, lockfile 재설치 |
-| npm run schemas:write | 성공 | — | — | schemas-write.log, Project 1.9.0 |
-| npm run typecheck | 성공 | — | — | check.log |
-| npm run typecheck:web | 성공 | — | — | check.log |
-| npm test | 성공 | 55 | 1,149 | check.log, 198.95초, Worker 2 |
-| npm run test:names | 성공 | — | 351 | missing/duplicates/skip/only 모두 0 |
-| npm run schemas:check | 성공 | — | — | 소스·JSON Schema 일치 |
-| npm run build:web | 성공 | — | — | check.log·audio-stress-build.log |
-| npm run check | 성공 | 55 | 1,149 | 타입·필수 이름·Schema·빌드 포함 |
-| npm run check:e2e | 성공 | 2 | 15 | check-e2e.log, 28.6초 |
-| 실제 Audio 3회 반복 | 성공 | 1 | 18 | g7-audio-three-green.log, 37.4초 |
-| 실제 Audio Stress 50회 | 성공 | 1 | 300 | audio-stress-50.log, 10.3분, retry 0 |
-| npm run smoke | 성공 | — | 54 | smoke.log, cleaned=true·동적 포트 6개 종료 |
-| 최종 Build·Legacy 회귀 | 성공 | 2 | 31 | build-final-tests.log, 5.17초·Git 실패 주입 경고는 예상 결과 |
-| git diff --check | 성공 | — | — | 공백 오류 0 |
+## 경쟁·중단 경계
 
-Audio Stress Summary는 성공 반복 50, 실패·미완·재시도 0, 첫 실패 번호 null이다. 300개 고유 Case의 진단 파일 모두 Native metadata/playing·실제 HTTP 200/206·서버 request/send/finish/close를 담는다. body 통과·Context 종료·Root 정리는 모두 true이고 남은 소유 Resource는 합계 0이다. 근거는 `audio-stress-evidence.json`과 `audio-stress-50-artifacts/`다. 전체 check·E2E·Stress·Smoke 로그의 예상 밖 Heartbeat 오류는 각각 0이다. Smoke의 6개 포트는 연결 검사를 통해 모두 닫혔음을 확인했다. 일반 Audio 검증 3회와 Stress 50회는 별도 실행이며 전체 E2E에도 Audio 6개가 포함된다.
-
-Resource 수치는 이 시험이 소유한 Browser Context·HTTP Socket/Request·Listener·Heartbeat Timer·Worker/Queue/Timer다. 런타임 전체의 내부 handle 수를 0으로 주장하지 않는다. 실패 Artifact는 지정한 test-results와 .local/audio-stress만 포함하고 숨김 Console Log 포함 옵션을 명시한다. 기본 제외 동작은 [upload-artifact v4 공식 문서](https://github.com/actions/upload-artifact/blob/v4/README.md#uploading-hidden-files)로 확인했다. Media bytes와 사설 Header는 진단 로그에 기록하지 않는다. Audio Trace는 합성 fixture를 사용하고 실패 때만 보존한다.
-
-실패 선작성 증거: G1 `g1-red.log` 2건, G2 `g2-red.log` 3건·`g2-approval-red.log` 1건, G4 `g4-red.log` 10건, G5 `g5-red-canonical.log` 8건, G6 `g6-red.log` 2건, G7 `g7-red.log` 7건, Artifact 숨김 로그 옵션 `g7-artifact-red.log` 1건이다. 후자는 `g7-artifact-green.log` 11건 통과로 확인했다. G3 `g3-red.log` 6건 중 잘못된 fixture 1건은 근거에서 제외하고 수정 fixture를 이전 코드에 적용한 `g3-root-red-valid.log`로 다시 실패를 확인했다. G5의 초기 비canonical 경로 주입 로그도 근거에서 제외했다. 신설 Primitive·Workflow 부재 실패와 기존 동작 결함을 구분한다.
-
-## 6. 동시성·Crash Recovery 증거
-
-| 상황 | 실제 검증·결과 |
-|---|---|
-| 동일 Build 동시 Request | 독립 Child Process 2개·동일 root·IPC Lock Barrier; pending 1개·동일 ID |
-| 다른 Build Supersede | Build가 다른 동일 Key를 직렬화; 새 ID·기존 요청 한 번 superseded·파일 보존 |
-| Complete vs Fail | 대기 Barrier로 순서를 고정; 하나만 성공·Terminal 재덮기 거부 |
-| Complete vs Supersede | 동일 Key 경쟁; 확정 Terminal을 Supersede가 덮지 않음 |
-| Request Journal Crash | Journal 직후·신규 게시·일부 Supersede·Terminal 게시 등에서 SIGKILL; before/after·staging inode 증명 후 복구 |
-| Recovery 재실행·재Crash | 복구 중 SIGKILL·두 복구 Process 경쟁; 자식 Claim 선출·멱등 복구·외부 Terminal CAS 불일치 보존 |
-| Lock Metadata 부분 노출 | Project/Create fault injection·동시 reader; 최종 경로는 완전 JSON, live 준비 중 파일로 불필요한 block 없음 |
-| Bundle 동일 Output 경쟁 | A staging 완료·Claim 소유 Barrier 뒤 B 실행; 정확히 하나 성공·B는 409·Winner 내용/파일 보존 |
-| 검사 중 Asset 변경 | path/inode 교체·in-place metadata 변경; 최대 2회 재검사·계속 변하면 비검증·Final/safe counts 제외 |
-
-G1 인접 검증 4파일/55건, G2 3파일/42건, G3 4파일/175건, G4 4파일/42건, G5 2파일/28건, G6 4파일/54건, G7 초기 단위 2파일/22건이 각각 통과했다. 최종 전체 검사에는 새 회귀와 기존 안전 계약을 함께 포함한다. Lock 대기만 제한적으로 수행하며 사용자 전이 callback, CAS 실패와 테스트를 재시도해 성공으로 가리지 않는다.
-
-## 7. Schema·Migration과 운영 원본
-
-이전 Project 1.8.0은 `migrateProjectInput`의 `migrate18To19`와 `migrateGeneratorBuildInput`을 거쳐 1.9.0으로 메모리 이관한다. 이전 1.0~1.8 체인을 유지하며 최신 입력 재이관은 멱등이다. Source·ID·Time·Anchor·Asset·Version·Prompt와 기존 dirty 값은 보존한다. 과거 Build availability는 null이고 현재 Build 정보로 채우지 않는다. Legacy Request도 Schema preprocess로 읽으며 원시 JSON을 자동 재작성하지 않는다.
-
-운영 저장본은 쓰기 가능한 Store로 열지 않고 SHA-256만 다시 계산했다. Current 4·Version 307·Asset 112 = 423개와 고유 Request 104개, **총 527개 변경 0**이다. 근거는 이번 `data-preservation.json`이며 기준은 보관된 `verified-a0b907e/existing-projects.json`이다. 또한 Current 4·Version 307·Request 104개를 실제 현재 Schema로 메모리 이관해 멱등성·Schema 검사 오류 0을 확인했다(`legacy-operating-validation.json`). 이는 저장 Schema 호환 검사이며 과거 영상 전체의 Final 품질 승인으로 해석하지 않는다. 자동 Confirm·Accept·Asset 교체·운영 복구를 실행하지 않았다. 기존 제작 자료의 타임라인과 회귀 fixture 차이를 보정하지 않는다.
-
-## 8. Commit 목록
-
-| SHA | 제목 | 범위 |
+| 실제 Barrier·Fault Point | Project 상태 | Request 상태와 정산 |
 |---|---|---|
-| f23f861 | fix: fail closed on changing integrity snapshots and preserve asset cache | G5 |
-| 8391313 | fix: isolate legacy segment issues while preserving approval gates | G2 |
-| c22b512 | fix: preserve unknown Git state in versioned build provenance | G4 |
-| 6312973 | fix: publish complete lock metadata atomically and recover owned staging | G3 |
-| 1b85c5d | fix: serialize Codex request transitions with recoverable journals and CAS | G1 |
-| df086fc | fix: claim review bundle outputs before durable publication | G6 |
-| 9184ae7 | fix: share the current build status contract with the web client | G1 Web 통합 |
-| 28bba83 | ci: add native audio stress diagnostics and cleanup evidence | G7 |
-| 637e8cd | fix: retain hidden audio stress console logs in failure artifacts | G7 Artifact 누락 방지 |
+| Fail/Supersede 먼저 | 새 결과 없음 | 기존 Terminal 보존·Apply 거부 |
+| Applying 먼저, Fail/Supersede/저수준 complete 경쟁 | 하나의 결과만 Commit | 경쟁 409, Completed와 원래 Commit 일치 |
+| 동일 Request 동시 Apply | revision 1·Record 1·Asset 1 | 두 호출이 같은 결과 재사용 |
+| before-project-commit에서 후속 편집 | 편집 revision 보존, 생성 결과 없음 | REVISION_CONFLICT, Pending으로 해제 |
+| after-apply-ownership-acquired | Commit 없음 | Pending 재시도 |
+| after-apply-intent-persisted, before-project-commit | Commit 없음 | Applying 확인 후 Pending 해제·재시도 |
+| after-project-journal-prepared | 기존 ProjectStore가 rollback | 결과 없음 확인 후 Pending·재시도 |
+| after-project-current-published, before-request-completion | 최초 Commit 유지 | Version 증거로 Completed |
+| after-request-completion-journal | Commit 유지 | Request Journal 복구 후 원래 Revision 유지 |
+| after-request-completed, before-apply-intent-cleanup | Commit 유지 | Completed와 Intent 보존·멱등 재등록 |
+| during-apply-reconciliation, 복구 정산 Journal 재중단 | Commit 유지 | 복구자 선출 뒤 같은 Completed로 수렴 |
+| 불명·상충·다른 Host Intent, Legacy Terminal 모순 | 저장된 증거 보존 | request scope 423, 무관 Project 접근·편집 가능 |
+| 읽기 전용 Review | Current·Version·Asset 불변 확인 | Applying Request 원본 bytes 불변, 정산 미실행 |
 
-현재 문서 Commit은 위 구현과 이번 실제 실행 근거를 기록한다. 구현·문서 Commit `6d0a47c`까지 승인된 Feature Branch에 Push했다. Audio Stress는 기본 Branch에 아직 등록되지 않아 수동 실행이 404로 거부됐으며, Workflow 파일 변경 PR에서 50회를 검증하는 실행 조건을 추가했다. master 변경과 Merge는 수행하지 않는다.
+## 검증 실행
 
-## 9. 미반영·잔여 위험
+로그는 운영 데이터 밖의 `/private/tmp/storyboard-apply-*`에 보존한다. `npm run check` 내부 실행과 별도 실행을 구분한다. 임의 sleep으로 경쟁을 기대하지 않고 실제 Child Process·IPC Barrier·SIGKILL을 사용했다. 기본 Vitest 5초, Worker 2, Playwright Worker 1·Retry 0과 Audio Stress Workflow는 유지했다.
 
-PR #4 병합 후보 `ba5dfc1`의 [Linux Stress 34297322182](https://github.com/zzocojoa/storyboard-generator/actions/runs/34297322182)는 36번째 반복의 `loadedmetadata`에서 실패했다. 211건 성공·1건 실패·88건 미실행, retry·예상 밖 Heartbeat 오류 0이며 첫 실패 Trace와 모든 소유 Resource 정리 증거를 보존했다. 이 결과가 나온 상태에서는 master 병합을 진행하지 않는다.
+| 명령 | 결과 | 파일 / 시험 | 실행 근거 |
+|---|---|---|---|
+| npm ci | 성공 | — | npm-ci.log |
+| npm run schemas:write | 성공 | — | Request·Intent JSON Schema 생성 |
+| npm run typecheck | 성공 | — | 별도 실행 |
+| npm run typecheck:web | 성공 | — | 별도 실행 |
+| npm test | 성공 | 56 / 1,187 | npm-test-final.log, 204.61초, 별도 실행 |
+| npm run test:names | 성공 | 382 필수 이름 | 별도 실행, missing/duplicates/skip/only 0 |
+| npm run schemas:check | 성공 | — | 별도 실행 |
+| npm run build:web | 성공 | — | build-web-final.log, 별도 실행 |
+| npm run check | 성공 | 56 / 1,187 | check-final.log, 내부 시험 198.87초·타입/이름/Schema/빌드 포함 |
+| 적용 정합성 시험 3회 | 성공 | 1 / 36 × 3 | repeat-1/2/3.log, 48.84/48.11/46.02초 |
+| npm run check:e2e | 성공 | 2 / 16 | check-e2e-final.log, 26.1초·별도 output 지정 |
+| 실제 Audio·RAF 3회 | 성공 | 1 / 7 × 3 | audio-final.log, 42.0초·Retry 0 |
+| npm run smoke | 성공 | 69 검사 | smoke-final.log, 동적 포트 7개 |
+| git diff --check | 성공 | — | 공백 오류 없음 |
 
-재생 시작 시각보다 이른 첫 RAF 시각을 넣으면 Playhead가 Cue 시작점 이전으로 이동하면서 새 Audio를 정지하고 요청을 취소하는 결함을 실제 HTMLAudioElement로 재현했다. 경과 시간을 0 이상으로 제한한 뒤 같은 회귀가 통과했다. RAF timestamp와 `performance.now()`의 차이는 [MDN](https://developer.mozilla.org/en-US/docs/Web/API/Window/requestAnimationFrame)에 설명돼 있다. 수정 후 로컬 전체 check는 55파일/1,150건, 필수 이름 353건(missing/duplicates/skip/only 0), 전체 E2E는 16건 통과했다. 별도 Stress는 기존 6개 실제 Audio와 RAF 경계 회귀 1개를 각각 50회 실행하므로 총 350건이며, 그중 300건은 clock 주입 없는 기존 시나리오다. 이 경계 결함의 수정 증거와 과거 모든 간헐 실패의 원인 규명은 구분한다. 새 HEAD의 병합 여부는 최신 PR Checks에서 확인한다.
+별도 반복은 매회 36개, 총 108개가 성공했다. 각 회차의 10개 장애 지점에서 실제 SIGKILL 21회씩, 합계 63회를 기록했고 Smoke의 1회는 별도다. 반복 로그의 exit 관찰과 IPC point를 집계한 증거는 `/private/tmp/storyboard-apply-repetition-evidence.json`이다. 이 64회는 전용 반복과 Smoke에 한정한 수치이며 전체 단위시험에 포함된 다른 강제 종료를 중복 합산하지 않는다. Required는 기존 353개와 신규 핵심 29개를 합한 382개, missing/duplicates/skip/only는 모두 0이다. 실제 Audio/RAF는 전체 E2E에 포함된 7개와 별도 21개를 구분해 집계했다. 두 실행의 Audio 진단 총 28개에서 bodyPassed/contextClosed/rootRemoved=true, 소유 Worker·queue·타이머·Listener·Socket·Request 잔여 0, serverListening=false 및 실제 HTTP 200/206을 확인했다(`/private/tmp/storyboard-apply-audio-evidence.json`). Chromium은 140.0.7339.16이다.
 
-Ubuntu CI 실행 결과와 이전 Linux 실패의 근본 원인 규명은 구분한다. 반복 성공만으로 간헐 실패가 해결됐다고 표현하지 않는다. Request·Bundle은 로컬 협력 Process 기준이며 SMB/NFS 다중 Host, 비협력 Writer의 임의 디스크 변경을 지원한다고 주장하지 않는다. 알 수 없는 Lock·Claim·Transaction은 자동 삭제하지 않고 운영자 확인을 요구한다. Project 적용과 Request 완료 기록을 하나의 분산 Transaction으로 묶지는 않는다.
+초기 전체 시험의 한 실패는 샌드박스의 `listen EPERM`이었다. 포트 권한을 적용한 전체 1,187건은 성공했다. 최초 Smoke는 종료한 Child의 보존 Registry를 live 자원으로 잘못 계산했고, PID 종료와 Registry 소유 증거를 별도로 검증하도록 시험을 바로잡았다. Legacy Journal 시험의 비Canonical JSON 입력은 실제 구버전 저장 형식으로 수정했다. 저장소의 Hash/identity 검증을 완화하지 않았다. 최초 4개 중단 시점을 단일 시험에 넣은 5초 timeout은 각각 독립 시험으로 분리했으며 timeout을 늘리지 않았다.
 
-기존 제품 범위의 한계도 유지한다. 이미지의 간접 정보 노출·연출·낭독 자연스러움은 사람이 검토한다. External은 명시된 규칙의 치환과 이미지 Placeholder이며 OCR·문맥적 개인정보 완전 제거를 보장하지 않는다. Bundle 결정성은 동일 Snapshot·Build·생성 시각·Font/Renderer 조건이다.
+Smoke는 소유 App/Store/Audio Worker를 닫고 SIGKILL Child의 exit를 기다렸다. 정상 Registry는 비어 있고 종료 Child Registry 1개는 실제 PID·host·instance를 확인해 임시 Root 정리 전까지 보존했다. Root 정리는 cleaned=true다. 종료 후 51425·51428·51433·51437·51439·51442·51445 포트 모두 ECONNREFUSED를 확인했다(`/private/tmp/storyboard-apply-smoke-ports.json`). 프로세스 전체의 내부 handle 수가 0이라고 주장하지 않는다.
 
-## 10. 최종 권장 조치
+## Schema와 데이터 보존
 
-**운영 Pilot을 권장한다.** 로컬 전체 check·E2E·50회 실제 Audio·Runtime Smoke와 원본 불변 검증은 통과했다. 병합 후보 HEAD의 Ubuntu check·e2e와 별도 Linux Stress 결과를 PR Checks에서 확인한다. 초기 Playhead 역행 결함은 실패 재현과 회귀로 검증하며, 다른 원인의 간헐 실패가 재발하면 첫 실패 Artifact로 분석해야 한다. Push·CI 실행은 승인됐으며 Merge에는 별도 승인이 필요하다.
+Project Shape와 별도 Receipt 저장 파일을 추가하지 않았다. 새 Request JSON은 schemaVersion 2와 Applying/Intent를 사용하고 Journal 2는 Claim/정산/해제 전이를 검증한다. 과거 unversioned Request와 Journal 1은 실제 복구·반복 읽기에서 호환된다. 읽기만으로 과거 Request·Version 파일을 다시 쓰거나 과거 Build를 현재 값으로 채우지 않는다.
+
+운영 `.local` 데이터와 사용자 미추적 `test-results 2/`는 미접근·미수정·미Stage다. 따라서 운영 파일 Hash 변경 수를 이번 검증 결과로 주장하지 않는다. 기존 서버 PID 89219가 실행 중인지만 읽기 전용 ps로 확인했고 종료·재시작하지 않았다. 합성 임시 저장소에서 후속 Project·Record·Asset metadata의 동등성과 Review 원본 불변을 검사했다. 자동 Text Confirm·Frame Accept·Shot Approval을 추가하지 않았다.
+
+기준 master와 현재의 CI/Audio Stress Workflow, package/lockfile, domain media/schema/generation-records, 실제 Audio E2E, Vitest/Playwright 설정 총 10개 파일의 bytes와 SHA-256은 같았다(`/private/tmp/storyboard-apply-preserved-code.json`). App.tsx의 RAF 계산은 변경하지 않았으며 기존 실제 Audio 회귀로 검증한다. 일반 CI Retry/Timeout·Audio Stress 반복 정책을 바꾸지 않았다.
+
+## 파일과 로컬 Commit
+
+신규 파일은 `src/codex/apply-evidence.ts`, `src/codex/apply-schema.ts`, `src/codex/request-schema.ts`, Request/Intent JSON Schema 2개, `tests/apply-consistency.test.ts`, `tests/apply-store-worker.ts`, `scripts/apply-smoke.ts`다. 수정 경계는 기존 Request/Apply/Work/CLI/Metrics, Project 감사 Snapshot 공개, HTTP/Web 상태, Build/Schema 생성, 필수 이름 Registry·기존 Request/Metrics 시험·Runtime Smoke 및 요구된 문서 6개다. 삭제 파일은 없다. 생성 미디어·운영 데이터·임시 로그·사용자 파일은 Commit하지 않는다.
+
+| Commit | 목적 |
+|---|---|
+| c22f5c3ea0f566503d04e8ecffdc16805219c788 | 실제 두 Store에서 최초 경쟁·Revision 결함 실패 선작성 |
+| 74d797f2b29d449fb51e7d21a856595a3b632649 | 공통 적용 소유권·Version 증거·원래 Revision 복구·Schema·CLI/HTTP/Web |
+| d50667f08e4706dfd211d4747c76551ee4212889 | 실제 IPC 경쟁·중단/재중단·Legacy·HTTP Smoke·필수 이름 |
+
+문서 Commit은 위 검증과 현재 운영 계약을 기록한다. 문서 자체의 최종 SHA는 완료 응답과 `git log`로 확인한다. 변경은 신규 8개·수정 24개·삭제 0개, 총 32개 파일이며 추적 변경을 모두 로컬 Commit에 포함한다. 사용자 미추적 디렉터리는 그대로 남긴다.
+
+## 원격 검증과 한계
+
+이번 Branch의 Push·신규 PR·최종 HEAD GitHub CI·Merge는 미실행이다. 기존 PR #4/#5를 재사용하거나 master/기존 Feature Branch를 자동 병합하지 않았다. 최신 로컬 검증을 Ubuntu CI의 대체 증거로 사용하지 않는다.
+
+보장은 로컬 macOS·Ubuntu 파일 시스템의 협력 Writer가 같은 Request의 저장 결과를 최대 한 번 적용하는 범위다. 이번 실제 실행 환경은 로컬 macOS이고, 변경 HEAD의 Ubuntu 실행은 아직 없다. 외부 모델 호출 자체의 최대 1회, SMB/NFS 분산 Writer, 비협력 파일 조작은 보장하지 않는다. Legacy의 불명 입력 동일성·모순 이력은 검토가 필요하며 추측으로 복구하지 않는다. Final Ready와 연출·시각·낭독 승인도 별개다.
+
+
+이번 목표의 미반영 사항: 없다. 단일 Worker와 여러 협력 Worker의 결과 등록을 사용할 수 있고, 중단 뒤 검증된 Commit으로 정산할 수 있다. 감사의 resultRevision은 최초 도입 Version과 결속된다. 변경 HEAD의 Ubuntu CI와 코드 병합 검토는 별도 원격 작업 범위다.
