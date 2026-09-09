@@ -6,6 +6,7 @@ const REQUIRED_TEST_NAMES: readonly string[] = [
   'audio_stress_workflow_has_no_test_retry',
   'audio_stress_workflow_keeps_default_timeouts',
   'audio_stress_workflow_uses_real_audio_spec',
+  'audio_stress_pull_request_trigger_is_scoped_to_workflow_changes',
   'audio_stress_workflow_supports_50_to_100_repetitions',
   'audio_stress_failure_uploads_trace_and_logs',
   'audio_diagnostics_record_request_send_finish_close',

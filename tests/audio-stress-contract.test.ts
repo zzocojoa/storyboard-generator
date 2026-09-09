@@ -24,6 +24,11 @@ it('audio_stress_workflow_uses_real_audio_spec', async (): Promise<void> => {
   const value: string = await workflow(); expect(value).toContain('tests/e2e/real-audio.spec.ts'); expect(value).toContain('ubuntu-latest'); expect(value).toContain('node-version: 24');
   expect(await readFile('.github/workflows/ci.yml', 'utf8')).toContain('real-audio.spec.ts --repeat-each=3');
 });
+it('audio_stress_pull_request_trigger_is_scoped_to_workflow_changes', async (): Promise<void> => {
+  const value: string = await workflow();
+  expect(value.match(/^  pull_request:\n(?: {4,}.*\n)+/mu)?.[0]).toBe("  pull_request:\n    paths:\n      - '.github/workflows/audio-stress.yml'\n");
+  expect(value).not.toContain('pull_request_target:');
+});
 it('audio_stress_workflow_supports_50_to_100_repetitions', async (): Promise<void> => {
   const value: string = await workflow(); for (const part of ['workflow_dispatch:', 'schedule:', "default: '50'", "- '100'", '--repeat-each=']) expect(value).toContain(part);
 });

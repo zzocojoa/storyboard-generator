@@ -2,9 +2,9 @@
 
 ## 1. 판정
 
-전체 권장 수정 반영은 완료다. G1 Request 원자성, G2 Legacy 격리, G3 Atomic Lock, G4 Git unknown, G5 Integrity/cache, G6 Bundle Claim, G7 Audio Stress 모두 완료다. 병합 판정은 **조건부 GO**이며 현재는 검증된 로컬 환경의 운영 Pilot을 권장한다. Ubuntu의 현재 HEAD 검증은 아직 없다. 생성 완료와 Final Ready는 독립이며 미확정 Text는 Draft에서만 허용한다. 실제 Playhead의 Source·Gate·Coverage와 현재 파일을 검사하고 생성 Asset의 실제 Build·감사 연결을 보존한다.
+전체 권장 수정 반영은 완료다. G1 Request 원자성, G2 Legacy 격리, G3 Atomic Lock, G4 Git unknown, G5 Integrity/cache, G6 Bundle Claim, G7 Audio Stress 모두 완료다. 병합 판정은 **조건부 GO**이며 현재는 검증된 로컬 환경의 운영 Pilot을 권장한다. 병합 전에는 대상 HEAD에 연결된 Ubuntu CI와 별도 Audio Stress의 성공을 확인해야 한다. 생성 완료와 Final Ready는 독립이며 미확정 Text는 Draft에서만 허용한다. 실제 Playhead의 Source·Gate·Coverage와 현재 파일을 검사하고 생성 Asset의 실제 Build·감사 연결을 보존한다.
 
-Push·Merge를 하지 않는 작업이다. 이번 변경의 GitHub Actions Run은 없다. **로컬 검증만 완료**했으며 이전 Commit의 CI 성공을 근거로 재사용하지 않는다.
+사용자 승인으로 `6d0a47c`까지 Feature Branch에 Push했다. 해당 HEAD의 [Ubuntu CI](https://github.com/zzocojoa/storyboard-generator/actions/runs/34294914198)는 check·e2e 모두 성공했다. 이후 HEAD의 상태는 [PR #5 Checks](https://github.com/zzocojoa/storyboard-generator/pull/5/checks)에서 별도로 확인하며 이전 Commit의 성공으로 대체하지 않는다. Merge는 승인 범위에 포함하지 않는다.
 
 ## 2. Repository 기준
 
@@ -163,16 +163,16 @@ G1 인접 검증 4파일/55건, G2 3파일/42건, G3 4파일/175건, G4 4파일/
 | 28bba83 | ci: add native audio stress diagnostics and cleanup evidence | G7 |
 | 637e8cd | fix: retain hidden audio stress console logs in failure artifacts | G7 Artifact 누락 방지 |
 
-현재 문서 Commit은 위 구현과 이번 실제 실행 근거를 기록한다. 모든 Commit은 작업 Branch의 로컬 이력이며 Push·Merge하지 않는다.
+현재 문서 Commit은 위 구현과 이번 실제 실행 근거를 기록한다. 구현·문서 Commit `6d0a47c`까지 승인된 Feature Branch에 Push했다. Audio Stress는 기본 Branch에 아직 등록되지 않아 수동 실행이 404로 거부됐으며, Workflow 파일 변경 PR에서 50회를 검증하는 실행 조건을 추가했다. master 변경과 Merge는 수행하지 않는다.
 
 ## 9. 미반영·잔여 위험
 
 근본 원인 확정 안 됨. Stress Workflow와 실패 Artifact 수집 경로만 구축함.
 
-이번 변경의 Ubuntu GitHub Actions는 실행하지 않았다. 로컬 반복 성공을 이전 Linux 실패 해결로 표현하지 않는다. Request·Bundle은 로컬 협력 Process 기준이며 SMB/NFS 다중 Host, 비협력 Writer의 임의 디스크 변경을 지원한다고 주장하지 않는다. 알 수 없는 Lock·Claim·Transaction은 자동 삭제하지 않고 운영자 확인을 요구한다. Project 적용과 Request 완료 기록을 하나의 분산 Transaction으로 묶지는 않는다.
+Ubuntu CI 실행 결과와 이전 Linux 실패의 근본 원인 규명은 구분한다. 반복 성공만으로 간헐 실패가 해결됐다고 표현하지 않는다. Request·Bundle은 로컬 협력 Process 기준이며 SMB/NFS 다중 Host, 비협력 Writer의 임의 디스크 변경을 지원한다고 주장하지 않는다. 알 수 없는 Lock·Claim·Transaction은 자동 삭제하지 않고 운영자 확인을 요구한다. Project 적용과 Request 완료 기록을 하나의 분산 Transaction으로 묶지는 않는다.
 
 기존 제품 범위의 한계도 유지한다. 이미지의 간접 정보 노출·연출·낭독 자연스러움은 사람이 검토한다. External은 명시된 규칙의 치환과 이미지 Placeholder이며 OCR·문맥적 개인정보 완전 제거를 보장하지 않는다. Bundle 결정성은 동일 Snapshot·Build·생성 시각·Font/Renderer 조건이다.
 
 ## 10. 최종 권장 조치
 
-**운영 Pilot만 가능.** 로컬 전체 check·E2E·50회 실제 Audio·Runtime Smoke와 원본 불변 검증은 통과했다. Push가 허용되는 다음 단계에서 현재 HEAD의 Ubuntu check·e2e와 별도 Linux Stress 결과를 확인한 뒤 병합 판정을 확정한다. 이전 Linux Audio 실패는 근본 원인을 확정하지 않았으며 실패 Artifact로 후속 관측해야 한다. 이번 작업에서는 Push·Merge하지 않았다.
+**운영 Pilot을 권장한다.** 로컬 전체 check·E2E·50회 실제 Audio·Runtime Smoke와 원본 불변 검증은 통과했다. 병합 후보 HEAD의 Ubuntu check·e2e와 별도 Linux Stress 결과를 PR Checks에서 확인한다. 이전 Linux Audio 실패는 근본 원인을 확정하지 않았으며 재발하면 첫 실패 Artifact로 분석해야 한다. Push·CI 실행은 승인됐으며 Merge에는 별도 승인이 필요하다.

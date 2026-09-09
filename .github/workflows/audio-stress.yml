@@ -1,6 +1,9 @@
 name: Native Audio Stress
 
 on:
+  pull_request:
+    paths:
+      - '.github/workflows/audio-stress.yml'
   workflow_dispatch:
     inputs:
       repetitions:
