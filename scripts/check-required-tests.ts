@@ -10,6 +10,8 @@ const REQUIRED_TEST_NAMES: readonly string[] = [
   'cleanup_failure_preserves_primary_error_and_closes_independent_resources',
   'controlled_process_stop_waits_for_stdio_close',
   'guard_preserves_sync_methods_and_drains_unawaited_async_operation',
+  'nested_writer_is_drained_after_its_parent_operation_returns',
+  'settled_operation_context_cannot_start_a_writer_after_cleanup',
   'superseded_request_cannot_commit_generated_asset',
   'failed_request_cannot_commit_generated_asset',
   'apply_and_supersede_have_one_consistent_outcome',

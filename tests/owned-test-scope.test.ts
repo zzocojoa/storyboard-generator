@@ -1,4 +1,4 @@
-import { access, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { createOwnedTestScope } from './owned-test-scope.js';
@@ -95,4 +95,41 @@ it('guard_preserves_sync_methods_and_drains_unawaited_async_operation', async ()
   const writing: Promise<void> = target.write(); const rejected = expect(writing).rejects.toMatchObject({ code: 'OWNED_TEST_STOPPED' });
   controller.abort(); await scope.close(); await rejected;
   await expect(readFile(join(root, 'result'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+it('nested_writer_is_drained_after_its_parent_operation_returns', async (): Promise<void> => {
+  const { scope } = fixture(1000); const root: string = await scope.root('owned-nested-');
+  const release = Promise.withResolvers<void>(); const phases: string[] = [];
+  scope.releaseOnFinish(release.resolve);
+  scope.own('store', 'nested-writer-store', async (): Promise<void> => { phases.push('store-close'); });
+  const target = scope.guard({ async write(): Promise<void> {
+    await release.promise; await writeFile(join(root, 'result'), 'complete'); phases.push('writer-settled');
+  } }, 'nested-writer');
+  let writing: Promise<void> | null = null;
+  try {
+    await scope.run('parent', (): void => { writing = target.write(); });
+    await scope.close();
+    await writing;
+    expect(phases).toEqual(['writer-settled', 'store-close']);
+    await expect(access(root)).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally { release.resolve(); await writing; await rm(root, { recursive: true, force: true }); }
+});
+
+it('settled_operation_context_cannot_start_a_writer_after_cleanup', async (): Promise<void> => {
+  const { scope } = fixture(1000); const root: string = await scope.root('owned-stale-context-');
+  const release = Promise.withResolvers<void>();
+  const target = scope.guard({ async write(): Promise<void> {
+    await mkdir(root, { recursive: true }); await writeFile(join(root, 'late'), 'unexpected');
+  } }, 'late-writer');
+  let writing: Promise<void> | null = null;
+  try {
+    await scope.run('schedule', (): void => { writing = release.promise.then((): Promise<void> => target.write()); });
+    await scope.close(); release.resolve();
+    await expect(writing).rejects.toMatchObject({ code: 'OWNED_TEST_STOPPED' });
+    await expect(access(root)).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    release.resolve();
+    await Promise.allSettled(writing === null ? [] : [writing]);
+    await rm(root, { recursive: true, force: true });
+  }
 });

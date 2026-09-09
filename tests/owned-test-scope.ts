@@ -24,7 +24,8 @@ export type OwnedTestScope = {
   close(): Promise<void>;
   settled(): boolean;
 };
-const operations = new AsyncLocalStorage<OwnedTestScope>();
+type OperationContext = { scope: OwnedTestScope; active: boolean };
+const operations = new AsyncLocalStorage<OperationContext>();
 
 function code(error: unknown): string {
   return error instanceof Error && 'code' in error && typeof error.code === 'string' ? error.code : error instanceof Error ? error.name : 'UNKNOWN';
@@ -56,25 +57,31 @@ export function createOwnedTestScope(options: ScopeOptions): OwnedTestScope {
         apps: resources.filter(r => r.kind === 'app').length, workers: resources.filter(r => r.kind === 'worker').length,
         stores: resources.filter(r => r.kind === 'store').length, roots: roots.length, timers: null } });
   };
-  const assertOpen = (): void => { if ((closing || options.signal.aborted) && operations.getStore() !== scope) throw stopped(); };
+  const insideActiveOperation = (): boolean => {
+    const context: OperationContext | undefined = operations.getStore();
+    return context?.scope === scope && context.active;
+  };
+  const assertOpen = (): void => { if ((closing || options.signal.aborted) && !insideActiveOperation()) throw stopped(); };
   const invoke = (label: string, operation: () => unknown): unknown => {
     assertOpen();
-    if (operations.getStore() === scope) return operation();
+    const nested: boolean = insideActiveOperation();
+    const context: OperationContext = { scope, active: true };
     const id: string = `${label}:${randomUUID()}`; emit('operation-start', id, null);
     let result: unknown;
-    try { result = operations.run(scope, operation); }
-    catch (error: unknown) { emit('operation-settled', id, error); throw error; }
+    try { result = operations.run(context, operation); }
+    catch (error: unknown) { context.active = false; emit('operation-settled', id, error); throw error; }
     if (typeof result !== 'object' || result === null || !('then' in result) || typeof result.then !== 'function') {
-      emit('operation-settled', id, null); return result;
+      context.active = false; emit('operation-settled', id, null); return result;
     }
     const promise: Promise<unknown> = Promise.resolve(result as PromiseLike<unknown>);
     const observed: Promise<Outcome> = outcome(promise).then((settled: Outcome): Outcome => {
-      pending.delete(id); emit('operation-settled', id, settled.ok ? null : settled.error);
+      context.active = false; pending.delete(id); emit('operation-settled', id, settled.ok ? null : settled.error);
       if (!settled.ok && closing && code(settled.error) !== 'OWNED_TEST_STOPPED') lateErrors.push(settled.error);
       return settled;
     });
     pending.set(id, observed);
-    return promise.then((value: unknown): unknown => { assertOpen(); return value; });
+    // 중첩 작업도 개별 추적하되 이미 시작된 Transaction의 반환은 취소로 가로막지 않는다.
+    return nested ? promise : promise.then((value: unknown): unknown => { assertOpen(); return value; });
   };
   const abort = (): void => { emit('test-aborted', null, options.signal.reason); };
   options.signal.addEventListener('abort', abort, { once: true });
@@ -83,7 +90,11 @@ export function createOwnedTestScope(options: ScopeOptions): OwnedTestScope {
     return (await Promise.all(selected.map(async (resource: Resource): Promise<Outcome> => {
       emit(`${kind}-close-start`, resource.id, null);
       try {
-        await beforeDeadline(operations.run(scope, resource.close), deadline); resources.splice(resources.indexOf(resource), 1);
+        const context: OperationContext = { scope, active: true };
+        const closingResource: Promise<void> = operations.run(context, async (): Promise<void> => {
+          try { await resource.close(); } finally { context.active = false; }
+        });
+        await beforeDeadline(closingResource, deadline); resources.splice(resources.indexOf(resource), 1);
         emit(`${kind}-close-end`, resource.id, null); return { ok: true };
       } catch (error: unknown) { emit('cleanup-failed', resource.id, error); return { ok: false, error }; }
     }))).flatMap(result => result.ok ? [] : [result.error]);
@@ -100,7 +111,7 @@ export function createOwnedTestScope(options: ScopeOptions): OwnedTestScope {
         const result: Outcome = await beforeDeadline(bodyResult, deadline);
         if (!result.ok && options.signal.aborted && code(result.error) !== 'OWNED_TEST_STOPPED') errors.push(result.error);
       }
-      await beforeDeadline(Promise.all([...pending.values()]), deadline);
+      while (pending.size > 0) await beforeDeadline(Promise.all([...pending.values()]), deadline);
     } catch (error: unknown) { errors.push(error); }
     if (bodySettled && pending.size === 0) {
       for (const kind of ['app', 'worker', 'store'] as const) errors.push(...await closeResources(kind, deadline));

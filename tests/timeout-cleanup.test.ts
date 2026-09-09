@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -22,6 +22,17 @@ it('vitest_timeout_drains_writer_before_store_close_and_root_removal', async ():
         '--reporter=default', '--reporter=json', '--outputFile', report],
         { env: { ...process.env, CI_TIMEOUT_PROBE_LOG: output, TMPDIR: root }, timeout: 4000, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024 });
     } catch (error: unknown) { failure = error; }
+    const diagnostics: string | undefined = process.env['STORYBOARD_TEST_DIAGNOSTICS_DIR'];
+    if (diagnostics !== undefined) {
+      // Assertion 실패나 손상된 JSON도 원본 Child 증거를 지우지 않게 먼저 보존한다.
+      const destination: string = join(diagnostics, `timeout-probe-${process.pid}`);
+      await mkdir(destination, { recursive: true });
+      await writeFile(join(destination, 'process-result.json'), JSON.stringify(failure, Object.getOwnPropertyNames(failure ?? {}), 2));
+      const files: string[] = await readdir(root);
+      for (const name of ['events.jsonl', 'result.json']) {
+        if (files.includes(name)) await copyFile(join(root, name), join(destination, name));
+      }
+    }
     expect(failure).toMatchObject({ code: 1 });
     expect(String((failure as { stderr: string }).stderr)).toContain('Test timed out in 250ms');
     const events = (await readFile(output, 'utf8')).trim().split('\n').map((line: string) => ProbeEventSchema.parse(JSON.parse(line)));
@@ -30,9 +41,7 @@ it('vitest_timeout_drains_writer_before_store_close_and_root_removal', async ():
     expect(errors).toHaveLength(1); expect(errors[0]).toContain('Test timed out in 250ms');
     expect(String((failure as { stderr: string }).stderr)).not.toMatch(/Unhandled|Uncaught/);
     const phases: string[] = events.map((entry): string => entry.phase);
-    const diagnostics: string | undefined = process.env['STORYBOARD_TEST_DIAGNOSTICS_DIR'];
     if (diagnostics !== undefined) {
-      await mkdir(diagnostics, { recursive: true });
       await writeFile(join(diagnostics, `timeout-probe-${process.pid}.json`), JSON.stringify({ events, errors }, null, 2));
     }
     console.info(JSON.stringify({ event: 'timeout-cleanup-evidence', events }));
