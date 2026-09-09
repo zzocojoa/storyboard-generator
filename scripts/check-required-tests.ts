@@ -3,6 +3,13 @@ import { extname, join } from 'node:path';
 import { contractError } from '../src/domain/errors.js';
 
 const REQUIRED_TEST_NAMES: readonly string[] = [
+  'vitest_timeout_drains_writer_before_store_close_and_root_removal',
+  'cancelled_scope_finishes_started_writer_and_rejects_new_work',
+  'unsettled_scope_preserves_root_and_reports_bounded_drain_failure',
+  'fixture_initialization_failure_closes_registered_store_and_root',
+  'cleanup_failure_preserves_primary_error_and_closes_independent_resources',
+  'controlled_process_stop_waits_for_stdio_close',
+  'guard_preserves_sync_methods_and_drains_unawaited_async_operation',
   'superseded_request_cannot_commit_generated_asset',
   'failed_request_cannot_commit_generated_asset',
   'apply_and_supersede_have_one_consistent_outcome',

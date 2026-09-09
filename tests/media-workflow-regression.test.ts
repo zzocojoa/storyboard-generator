@@ -1,10 +1,10 @@
 import { readBuildManifest } from '../src/build.js';
 import { testGeneratorBuild } from './helpers.js';
-import { mkdir, mkdtemp, readFile, readdir, rm, unlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { FastifyInstance } from 'fastify';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect } from 'vitest';
+import { it, currentScope, ownedStore, fixtureFs } from './owned-test.js';
+import type { WorkerAudioNormalizer } from '../src/domain/audio-normalizer.js';
 import { attachAudioAsset } from '../src/domain/audio-asset.js';
 import type { AttachedAudioAsset } from '../src/domain/audio-asset.js';
 import { textCueInformationIds } from '../src/domain/emission.js';
@@ -28,17 +28,15 @@ import { CodexRequestStore } from '../src/codex/requests.js';
 import { createApp } from '../src/server/app.js';
 import type { AppConfig } from '../src/server/config.js';
 import { ProjectStore } from '../src/server/store.js';
-import { nativeData, nativePackage, pcmWav, png, productionPackage, testAudioNormalizer, TEST_AUDIO_NORMALIZATION_OPTIONS, withNativeData } from './helpers.js';
+import { nativeData, nativePackage, pcmWav, png, productionPackage, testAudioNormalizer as createTestAudioNormalizer, TEST_AUDIO_NORMALIZATION_OPTIONS, withNativeData } from './helpers.js';
 
-const roots: string[] = [];
-const stores: ProjectStore[] = [];
-const apps: FastifyInstance[] = [];
-function trackedStore(dataRoot: string): ProjectStore {
-  const store: ProjectStore = new ProjectStore(dataRoot);
-  stores.push(store);
-  return store;
+const { mkdir, readFile, readdir, unlink, writeFile } = fixtureFs;
+function trackedStore(dataRoot: string): ProjectStore { return ownedStore(new ProjectStore(dataRoot)); }
+function testAudioNormalizer(): WorkerAudioNormalizer {
+  const normalizer: WorkerAudioNormalizer = createTestAudioNormalizer();
+  currentScope().own('worker', 'audio-normalizer', (): Promise<void> => normalizer.close());
+  return normalizer;
 }
-
 
 async function nativeOutline(): Promise<Project> {
   return createSourceOutline(importPackage(await nativePackage()), { proposedTextHoldMs: 2000 });
@@ -49,8 +47,7 @@ async function productionOutline(): Promise<Project> {
 }
 
 async function temporaryStore(project: Project): Promise<{ root: string; store: ProjectStore }> {
-  const root: string = await mkdtemp(join(tmpdir(), 'storyboard-media-workflow-'));
-  roots.push(root);
+  const root: string = await currentScope().root('storyboard-media-workflow-');
   const store: ProjectStore = trackedStore(join(root, 'data'));
   await store.create(project);
   return { root, store };
@@ -64,8 +61,11 @@ async function temporaryApp(project: Project): Promise<{ app: FastifyInstance; r
   const config: AppConfig = { host: '127.0.0.1', port: 4317, dataRoot: join(root, 'data'), webRoot,
     pdfFontPath: resolve('assets/fonts/NanumGothic-Regular.ttf'), audioNormalization: TEST_AUDIO_NORMALIZATION_OPTIONS,
     codex: { requestRoot: join(root, 'requests'), speechVoice: 'Yuna' } };
-  const app: FastifyInstance = await createApp(config, store, new CodexRequestStore(config.codex.requestRoot, readBuildManifest()));
-  apps.push(app);
+  const app: FastifyInstance = await currentScope().run('app-create', async (): Promise<FastifyInstance> => {
+    const created: FastifyInstance = await createApp(config, store, new CodexRequestStore(config.codex.requestRoot, readBuildManifest()));
+    currentScope().own('app', 'http-fixture', (): Promise<void> => created.close());
+    return currentScope().guard(created, 'http-app');
+  });
   return { app, root, store };
 }
 
@@ -179,12 +179,6 @@ async function unit045Mutation(): Promise<{ base: Project; prepared: Project; cu
   return { base, prepared, cue, bytes, mutation: await attachAudioAsset(prepared, cue.id, 'unit045-audio', {
     originalFileName: 'unit045-intercom-48000.wav', declaredMimeType: 'audio/wav', bytes }, testAudioNormalizer()) };
 }
-
-afterEach(async (): Promise<void> => {
-  for (const app of apps.splice(0)) await app.close();
-  for (const store of stores.splice(0)) await store.close();
-  await Promise.all(roots.splice(0).map(async (root: string): Promise<void> => { await rm(root, { recursive: true, force: true }); }));
-});
 
 describe('A. AUDIO INSPECTION', (): void => {
   it('valid_pcm_wav_reports_actual_duration', async (): Promise<void> => {

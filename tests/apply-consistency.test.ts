@@ -1,7 +1,7 @@
-import { mkdtemp, readFile, readdir, rm, unlink, writeFile } from 'node:fs/promises';
-import { hostname, tmpdir } from 'node:os';
+import { hostname } from 'node:os';
 import { join, resolve } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, vi } from 'vitest';
+import { it, currentScope, ownedStore, ownedChild, barrier, fixtureFs } from './owned-test.js';
 import { readBuildManifest } from '../src/build.js';
 import { applyCodexImage, applyCodexProposal, applyCodexSpeech } from '../src/codex/apply.js';
 import { CodexRequestStore } from '../src/codex/requests.js';
@@ -22,30 +22,21 @@ import { sha256Text } from '../src/importers/integrity.js';
 import { readReviewArchive, writeReviewBundle } from '../src/exporters/review-bundle.js';
 import { codexRequestMetrics } from '../src/codex/metrics.js';
 
-const roots: string[] = [];
-const children: ControlledProcess[] = [];
-const stores: ProjectStore[] = [];
+const { readFile, readdir, unlink, writeFile } = fixtureFs;
 const now: string = '2026-09-09T02:00:00.000Z';
 type Fixture = { root: string; project: Project; store: ProjectStore; requests: CodexRequestStore; request: CodexRequest; input: string };
 async function fixture(): Promise<Fixture> {
-  const root: string = await mkdtemp(join(tmpdir(), 'apply-consistency-')); roots.push(root);
-  const store: ProjectStore = new ProjectStore(join(root, 'data')); stores.push(store);
+  const root: string = await currentScope().root('apply-consistency-');
+  const store: ProjectStore = ownedStore(new ProjectStore(join(root, 'data')));
   const project: Project = await store.create(createSourceOutline(importPackage(await nativePackage()), { proposedTextHoldMs: 2000 }));
-  const requests: CodexRequestStore = new CodexRequestStore(join(root, 'requests'), readBuildManifest());
+  const requests: CodexRequestStore = currentScope().guard(new CodexRequestStore(join(root, 'requests'), readBuildManifest()), 'request-store');
   const request: CodexRequest = await requests.create('image', project.projectId, 'frame-1', codexRequestBasis(project, 'image', 'frame-1'), now);
   const input: string = join(root, 'result.png'); await writeFile(input, await png(2, 2));
   return { root, project, store, requests, request, input };
 }
-afterEach(async (): Promise<void> => {
-  vi.restoreAllMocks();
-  for (const child of children.splice(0)) await child.stop();
-  for (const store of stores.splice(0)) await store.close();
-  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
-});
-
 async function terminalBeforeApply(kind: 'failed' | 'superseded'): Promise<void> {
   const f: Fixture = await fixture();
-  const reached = Promise.withResolvers<void>(); const release = Promise.withResolvers<void>();
+  const reached = barrier(); const release = barrier();
   const read: (id: string) => Promise<CodexRequest> = f.requests.read.bind(f.requests);
   vi.spyOn(f.requests, 'read').mockImplementationOnce(async (id: string): Promise<CodexRequest> => {
     const snapshot: CodexRequest = await read(id); reached.resolve(); await release.promise; return snapshot;
@@ -54,7 +45,7 @@ async function terminalBeforeApply(kind: 'failed' | 'superseded'): Promise<void>
   const outcome: Promise<string | null> = applying.then((): null => null, (error: unknown): string => (error as { code: string }).code);
   await reached.promise;
   if (kind === 'failed') await f.requests.fail(f.request.id, 'TEST_FAILURE', '적용보다 먼저 실패 확정', now);
-  else await new CodexRequestStore(join(f.root, 'requests'), { ...readBuildManifest(), generationContractSha256: 'e'.repeat(64) })
+  else await currentScope().guard(new CodexRequestStore(join(f.root, 'requests'), { ...readBuildManifest(), generationContractSha256: 'e'.repeat(64) }), 'request-store')
     .create(f.request.kind, f.request.projectId, f.request.targetId, f.request.basisHash, now);
   release.resolve();
   expect(await outcome).toBe('CODEX_REQUEST_SETTLED');
@@ -75,11 +66,11 @@ describe('실제 Request·Project 저장소 결과 적용', (): void => {
     vi.spyOn(f.store, 'update').mockImplementationOnce(async (...args: Parameters<ProjectStore['update']>): Promise<Project> => {
       const project: Project = await update(...args); committed = true; return project;
     });
-    const interrupted: CodexRequestStore = new CodexRequestStore(join(f.root, 'requests'), readBuildManifest(), {
+    const interrupted: CodexRequestStore = currentScope().guard(new CodexRequestStore(join(f.root, 'requests'), readBuildManifest(), {
       trigger(context: RequestFaultContext): void {
         if (committed && context.point === 'before-request-completion') throw contractError('TEST_SETTLEMENT_INTERRUPTED', 'Project Commit 이후 완료 기록 중단', []);
       },
-    });
+    }), 'request-store');
     await expect(applyCodexImage(f.request.id, f.input, f.store, interrupted, now)).rejects.toMatchObject({ code: 'CODEX_APPLY_RECOVERY_REQUIRED', committedRevision: 1, cause: { code: 'TEST_SETTLEMENT_INTERRUPTED' } });
     const applied: Project = await f.store.read(f.project.projectId); expect(applied.revision).toBe(1);
     const later: Project = await f.store.update(applied.projectId, applied.revision, (current: Project): Project => ({ ...current, title: '후속 사용자 편집' }), []);
@@ -91,11 +82,11 @@ describe('실제 Request·Project 저장소 결과 적용', (): void => {
 });
 
 async function worker(f: Fixture, action: ApplyWorkerInput['action'], point: string | null): Promise<ControlledProcess> {
-  const child: ControlledProcess = controlledProcess('tests/apply-store-worker.ts', JSON.stringify({ root: f.root, requestId: f.request.id, action, point } satisfies ApplyWorkerInput));
+  const child: ControlledProcess = ownedChild(() => controlledProcess('tests/apply-store-worker.ts', JSON.stringify({ root: f.root, requestId: f.request.id, action, point } satisfies ApplyWorkerInput)));
   child.child.once('exit', (_code: number | null, signal: NodeJS.Signals | null): void => {
     if (signal === 'SIGKILL') console.info(JSON.stringify({ event: 'apply-process-killed', pid: child.child.pid, requestId: f.request.id, action, point }));
   });
-  children.push(child); await child.event('ready'); return child;
+  await child.event('ready'); return child;
 }
 async function result(child: ControlledProcess): Promise<WorkerMessage> {
   const response: WorkerMessage = await child.event('result'); await child.exited; return response;
@@ -117,8 +108,8 @@ async function applyingWins(action: 'fail' | 'supersede'): Promise<void> {
 async function committedCrash(point: string): Promise<Fixture> {
   const f: Fixture = await fixture(); await f.store.close();
   const child: ControlledProcess = await worker(f, 'apply', point); child.send('start'); await child.event('paused'); await child.stop();
-  const store: ProjectStore = new ProjectStore(join(f.root, 'data')); stores.push(store); await store.initialize();
-  return { ...f, store, requests: new CodexRequestStore(join(f.root, 'requests'), readBuildManifest()) };
+  const store: ProjectStore = ownedStore(new ProjectStore(join(f.root, 'data'))); await store.initialize();
+  return { ...f, store, requests: currentScope().guard(new CodexRequestStore(join(f.root, 'requests'), readBuildManifest()), 'request-store') };
 }
 async function revisionRecovery(point: string): Promise<void> {
   const f: Fixture = await committedCrash(point);
