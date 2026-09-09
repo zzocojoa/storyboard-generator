@@ -83,7 +83,7 @@ async function fail(args: string[], requests: CodexRequestStore): Promise<void> 
   output({ request: await requests.fail(required(values.request, '--request'), required(values.code, '--code'), required(values.message, '--message'), new Date().toISOString()) });
 }
 
-const help: string = `Codex App 콘티 생성 브리지\n\npending\ncontext --request <UUID>\nprepare-speech --request <UUID> --output <새 TXT 경로>\napply-proposal --request <UUID> --input <JSON 경로>\napply-image --request <UUID> --input <PNG 경로>\napply-speech --request <UUID> --input <WAV 경로>\nfail --request <UUID> --code <오류 코드> --message <설명>\n`;
+const help: string = `Codex App 콘티 생성 브리지\n\npending\napply-status --request <UUID>\nreconcile --request <UUID>\ncontext --request <UUID>\nprepare-speech --request <UUID> --output <새 TXT 경로>\napply-proposal --request <UUID> --input <JSON 경로>\napply-image --request <UUID> --input <PNG 경로>\napply-speech --request <UUID> --input <WAV 경로>\nfail --request <UUID> --code <오류 코드> --message <설명>\n`;
 
 async function main(configPath: string, args: string[]): Promise<void> {
   const config: AppConfig = await loadConfig(configPath);
@@ -91,6 +91,12 @@ async function main(configPath: string, args: string[]): Promise<void> {
   const requests: CodexRequestStore = new CodexRequestStore(config.codex.requestRoot, buildForSpeechVoice(config.codex.speechVoice));
   try {
     const [command, ...rest] = args;
+    if (command !== '--help') {
+      await store.initialize();
+      if (command !== 'apply-status' && command !== 'reconcile') await requests.reconcilePendingApplies(store, new Date().toISOString());
+    }
+    if (command === 'apply-status') { output({ apply: await requests.applyStatus(requestArgument(rest), store) }); return; }
+    if (command === 'reconcile') { output({ request: await requests.reconcileApply(requestArgument(rest), store, new Date().toISOString()) }); return; }
     if (command === 'pending') return await pending(requests);
     if (command === 'context') return await context(rest, store, requests);
     if (command === 'prepare-speech') return await prepareSpeech(rest, store, requests);

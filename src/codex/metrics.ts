@@ -6,6 +6,7 @@ export type CodexRequestMetrics = {
   completedRequests: number;
   failedRequests: number;
   pendingRequests: number;
+  applyingRequests: number;
   supersededRequests: number;
   repeatedRequests: number;
   averageLatencyMs: number | null;
@@ -35,6 +36,7 @@ export function codexRequestMetrics(requests: readonly CodexRequest[]): CodexReq
     completedRequests: requests.filter((request: CodexRequest): boolean => request.status === 'completed').length,
     failedRequests: requests.filter((request: CodexRequest): boolean => request.status === 'failed').length,
     pendingRequests: requests.filter((request: CodexRequest): boolean => request.status === 'pending').length,
+    applyingRequests: requests.filter((request: CodexRequest): boolean => request.status === 'applying').length,
     supersededRequests: requests.filter((request: CodexRequest): boolean => request.status === 'superseded').length,
     repeatedRequests,
     averageLatencyMs: latencies.length === 0 ? null : Math.round(latencies.reduce((total: number, value: number): number => total + value, 0) / latencies.length),

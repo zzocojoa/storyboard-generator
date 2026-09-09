@@ -1,7 +1,8 @@
-import { migrateGeneratorBuildInput } from '../../src/domain/build-provenance.js';
+import { CodexRequestSchema } from '../../src/codex/request-schema.js';
+import { ApplyStatusSchema } from '../../src/codex/apply-schema.js';
 import { BuildManifestSchema } from '../../src/build-schema.js';
 import { z } from 'zod';
-import { GeneratorBuildProvenanceSchema, IssueSchema, ProjectSchema } from '../../src/domain/schema.js';
+import { IssueSchema, ProjectSchema } from '../../src/domain/schema.js';
 import type { FinalReadinessReport } from '../../src/domain/final-readiness.js';
 import type { Project } from '../../src/domain/schema.js';
 
@@ -18,7 +19,7 @@ const InvalidRecoveryMarkerSchema = z.strictObject({ fileName: z.string(), quara
 const ProcessHeartbeatSchema = z.strictObject({ processInstanceId: z.string(), healthy: z.boolean(), lastSuccessAt: z.string().nullable(),
   lastError: z.strictObject({ code: z.string(), message: z.string() }).nullable() });
 const StatusSchema = z.strictObject({ build: BuildManifestSchema, provider: z.literal('codex-app'), totalRequests: z.number().int().nonnegative(), completedRequests: z.number().int().nonnegative(),
-  pendingRequests: z.number().int().nonnegative(), supersededRequests: z.number().int().nonnegative(), failedRequests: z.number().int().nonnegative(), repeatedRequests: z.number().int().nonnegative(),
+  pendingRequests: z.number().int().nonnegative(), applyingRequests: z.number().int().nonnegative(), applyRecovery: z.array(ApplyStatusSchema), supersededRequests: z.number().int().nonnegative(), failedRequests: z.number().int().nonnegative(), repeatedRequests: z.number().int().nonnegative(),
   averageLatencyMs: z.number().int().nonnegative().nullable(), maximumLatencyMs: z.number().int().nonnegative().nullable(), apiCostUsd: z.null(), costNote: z.string(),
   recentFailures: z.array(RequestFailureSchema), generationInstruction: z.string(), aiVoiceDisclosure: z.string(),
   storageRecovery: z.array(StorageRecoverySchema), storageRecoveryBlocks: z.array(StorageRecoveryBlockSchema),
@@ -33,9 +34,6 @@ const SummarySchema = z.strictObject({ projectId: z.string(), title: z.string(),
   visualTimelineSafe: z.boolean(), visualCoverageGapCount: z.number(), shotsOutputSafe: z.number(), shotsTotal: z.number(),
   textConfirmed: z.number(), textProposed: z.number(), finalOutputReady: z.boolean(),
   textPlayable: z.number(), textTotal: z.number(), blockedOutputCount: z.number(), issues: z.number(), updatedAt: z.string() });
-const CodexRequestSchema = z.strictObject({ id: z.uuid(), kind: z.enum(['proposal', 'image', 'speech']), projectId: z.string(), targetId: z.string(),
-  generatorBuild: z.preprocess(migrateGeneratorBuildInput, GeneratorBuildProvenanceSchema.nullable().optional()), basisHash: z.string(), status: z.enum(['pending', 'completed', 'failed', 'superseded']), createdAt: z.string(), updatedAt: z.string(), resultRevision: z.number().nullable(),
-  error: z.strictObject({ code: z.string(), message: z.string() }).nullable() });
 const SourceImpactSchema = z.strictObject({ changedSourceFileIds: z.array(z.string()), changedEntityIds: z.array(z.string()), impactedSegmentIds: z.array(z.string()),
   impactedShotIds: z.array(z.string()), lockedShotIds: z.array(z.string()), canApply: z.boolean() });
 
@@ -89,6 +87,7 @@ export function apiErrorMessage(error: unknown): string {
   if (error.code === 'FINAL_OUTPUT_NOT_READY') return `FINAL OUTPUT NOT READY\n${error.message}`;
   if (error.code === 'PROJECT_BUSY') return '프로젝트 생성 또는 다른 작업이 진행 중입니다. 완료 후 다시 불러오거나 재시도하세요.';
   if (error.code === 'PROJECT_ALREADY_EXISTS') return '같은 Project가 이미 저장돼 있습니다.';
+  if (error.category === 'locked' && error.scope === 'request') return `REQUEST RECOVERY REQUIRED\n생성 결과의 적용 상태를 확인하세요.\n${error.message}`;
   if (error.category === 'locked' && error.scope === 'asset') return `ASSET REPAIR REQUIRED\n해당 자산의 안전 출력이 차단됐습니다.\n${error.message}`;
   if (error.category === 'locked') return `STORAGE RECOVERY REQUIRED\n해당 Project는 저장소 복구 전 변경할 수 없습니다.\n${error.message}`;
   if (error.category === 'unavailable') return `STORAGE TEMPORARILY UNAVAILABLE\n잠시 후 다시 시도하세요.\n${error.message}`;

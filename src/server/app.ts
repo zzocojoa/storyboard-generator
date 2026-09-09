@@ -91,6 +91,7 @@ export type HttpErrorBody = { error: {
 
 const conflictPolicies: ReadonlyMap<string, boolean> = new Map<string, boolean>([
   ['CODEX_REQUEST_SETTLED', false], ['CODEX_REQUEST_STATE_CONFLICT', false], ['CODEX_REQUEST_STORE_BUSY', true], ['REVIEW_BUNDLE_EXISTS', false],
+  ['CODEX_REQUEST_APPLY_IN_PROGRESS', true], ['CODEX_APPLY_RESULT_CONFLICT', false],
   ['CODEX_REQUEST_BUILD_UNVERIFIED', false], ['CODEX_REQUEST_BUILD_CHANGED', false], ['PROJECT_BUSY', true], ['REVISION_CONFLICT', true], ['AUDIT_SNAPSHOT_CHANGED', true],
   ['PROJECT_ALREADY_EXISTS', false], ['PROJECT_VERSION_EXISTS', false],
 ]);
@@ -118,6 +119,7 @@ function isValidationError(error: Error, code: string): boolean {
 /** 서버 오류 코드를 사용자 입력, 충돌, 복구 잠금과 일시 장애로 명시적으로 분류한다. */
 export function httpErrorPolicy(error: Error): HttpErrorPolicy {
   const code: string = 'code' in error && typeof error.code === 'string' ? error.code : error.name;
+  if (['CODEX_APPLY_EVIDENCE_CONFLICT', 'CODEX_APPLY_RECEIPT_UNRESOLVED', 'CODEX_APPLY_RECOVERY_REQUIRED'].includes(code)) return { status: 423, category: 'locked', scope: 'request', retryable: code === 'CODEX_APPLY_RECOVERY_REQUIRED', operatorActionRequired: code !== 'CODEX_APPLY_RECOVERY_REQUIRED', mutationBlocked: false };
   if (code === 'CODEX_REQUEST_RECOVERY_REQUIRED' || code === 'REVIEW_BUNDLE_CLAIM_RECOVERY_REQUIRED') return { status: 423, category: 'locked', scope: 'request', retryable: false, operatorActionRequired: true, mutationBlocked: false };
   if (code === 'CODEX_REQUEST_STORE_UNAVAILABLE' || code === 'REVIEW_BUNDLE_WRITE_FAILED') return { status: 503, category: 'unavailable', scope: 'service', retryable: true, operatorActionRequired: false, mutationBlocked: false };
   if (storedAssetCodes.has(code)) {
@@ -208,6 +210,7 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
   await ensureWebRoot(config.webRoot);
   await store.initialize();
   await requests.initialize();
+  await requests.reconcilePendingApplies(store, new Date().toISOString());
   const audioNormalizer: WorkerAudioNormalizer = audioNormalizerOverride ?? new WorkerAudioNormalizer(config.audioNormalization);
   const app: FastifyInstance = Fastify({ logger: { level: 'info' }, bodyLimit: MAX_AUDIO_BYTES + 1024 * 1024 });
   app.addHook('onClose', async (): Promise<void> => {
@@ -222,10 +225,11 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
   });
 
   app.get('/api/status', async (): Promise<object> => {
-    const [allRequests, storageStatus] = await Promise.all([requests.list(null), store.statusSnapshot()]);
+    const [allRequests, storageStatus] = await Promise.all([requests.statusRequests(), store.statusSnapshot()]);
     const metrics = codexRequestMetrics(allRequests);
     const failed: CodexRequest[] = allRequests.filter((item: CodexRequest): boolean => item.status === 'failed');
     return { provider: 'codex-app', build: requests.buildManifest(), ...metrics,
+      applyRecovery: await Promise.all(allRequests.filter((item: CodexRequest): boolean => item.status === 'applying').map((item: CodexRequest) => requests.applyStatus(item.id, store))),
       recentFailures: failed.slice(-5).reverse().map((item: CodexRequest): object => ({ id: item.id, kind: item.kind, projectId: item.projectId, targetId: item.targetId, error: item.error })),
       storageRecovery: store.recoveryEvents(), storageRecoveryBlocks: storageStatus.recoveryBlocks,
       invalidRecoveryMarkers: storageStatus.invalidRecoveryMarkers,
@@ -435,6 +439,14 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
   app.get('/api/codex/requests/:requestId', async (request: FastifyRequest): Promise<object> => {
     const { requestId } = CodexRequestParamsSchema.parse(request.params);
     return requestResponse(await requests.read(requestId));
+  });
+  app.get('/api/codex/requests/:requestId/apply-status', async (request: FastifyRequest): Promise<object> => {
+    const { requestId } = CodexRequestParamsSchema.parse(request.params);
+    return { apply: await requests.applyStatus(requestId, store) };
+  });
+  app.post('/api/codex/requests/:requestId/reconcile', async (request: FastifyRequest): Promise<object> => {
+    const { requestId } = CodexRequestParamsSchema.parse(request.params);
+    return requestResponse(await requests.reconcileApply(requestId, store, new Date().toISOString()));
   });
   app.get('/api/projects/:projectId/assets/:assetId', async (request: FastifyRequest, reply: FastifyReply): Promise<Buffer> => {
     const params = z.strictObject({ projectId: IdSchema, assetId: IdSchema }).parse(request.params);
