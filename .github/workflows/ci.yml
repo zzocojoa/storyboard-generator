@@ -38,6 +38,7 @@ jobs:
             ${{ runner.temp }}/storyboard-ci-diagnostics
             .build/build-manifest.json
           if-no-files-found: error
+          include-hidden-files: true
           retention-days: 14
   e2e:
     runs-on: ubuntu-latest

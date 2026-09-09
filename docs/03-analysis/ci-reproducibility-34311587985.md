@@ -2,7 +2,7 @@
 
 ## 판정과 조사 경계
 
-조사 기준 사건은 `781d9f1478f5fbb830d7f84f3df403505520f1a2`의 CI Run `34311587985`다. 최초 timeout 원인과 원본 ENOTEMPTY의 Writer는 미확정이다. 실제 Vitest timeout 뒤 진행 중인 Project update와 Fixture 정리가 겹치는 결함, Child `stop()`이 stdio `close` 전에 반환하는 결함은 별도 통제 시험으로 확인하고 Test 코드에서 수정했다. 제품 Runtime·Schema·Apply Coordinator는 변경하지 않았다. 허용된 로컬 조사·확인된 결함 수정·종합 검증·문서화·자원 정리는 완료했다. 전체 Hosted CI 재현성은 추가 확인이 필요하며, 검증 범위에서 제품 기능 회귀는 발견하지 않았다.
+조사 기준 사건은 `781d9f1478f5fbb830d7f84f3df403505520f1a2`의 CI Run `34311587985`다. 최초 timeout 원인과 원본 ENOTEMPTY의 Writer는 미확정이다. 실제 Vitest timeout 뒤 진행 중인 Project update와 Fixture 정리가 겹치는 결함, Child `stop()`이 stdio `close` 전에 반환하는 결함은 별도 통제 시험으로 확인하고 Test 코드에서 수정했다. 제품 Runtime·Schema·Apply Coordinator는 변경하지 않았다. 로컬 조사와 후속 코드 검토의 근거는 아래에 구분한다. Hosted 검증 결과는 이 변경 PR의 실제 checkout·Run·check/e2e 결과로 확인하며, 성공만으로 원본 사건의 원인이 해결됐다고 판정하지 않는다.
 
 이번 조사에서 확인된 추가 제품 로직 결함: 없다.
 
@@ -14,11 +14,11 @@
 
 - 사건 Commit·수정 Base·시작 HEAD: `781d9f1478f5fbb830d7f84f3df403505520f1a2`.
 - 작업 Branch: `codex/storyboard-ci-reproducibility`. 시작 시 fetch 후 origin/master와 같은 Commit에서 생성했다.
-- 최종 실행 코드 검증 HEAD: `6684b308778baa9fc826a45279d2c4baade7c2b4`. 이후 Commit은 조사 문서와 기존 보고서의 링크만 갱신한다. RED `41c8e5f` → 정리 수정 `b5e19f7` → CI 진단 `4c2296e` → 의도적 timeout 시작 고정 `6684b30`을 로컬 Commit으로 보존했다.
+- 초기 조사 실행 코드 검증 HEAD: `6684b308778baa9fc826a45279d2c4baade7c2b4`. 조사 문서 Commit `fc4637d` 이후 후속 검토의 코드 수정은 `8ab2942`다. RED `41c8e5f` → 정리 수정 `b5e19f7` → CI 진단 `4c2296e` → 의도적 timeout 시작 고정 `6684b30`을 Commit으로 보존했다.
 - Feature HEAD: `0008a8db1f64bad77606c159d476c8cb7d933d74`. 이전 Base: `2ecb5038e3444bfeb1beeb29530492e0920f914f`.
 - PR CI 실제 Checkout: `a83935eee31fb7d0dbaf47a14549849043d7090c`. 병합본과 Tree `e68f61dd766cce41410830b284d7d1acc5009922`가 같고 부모도 같다.
 - 사용자 미추적 `test-results 2/`는 열거나 변경·Stage하지 않았다. 운영 데이터·Request·서버는 변경하지 않았다.
-- 이번 조사에서는 GitHub 조회와 fetch만 수행했다. Push·PR 생성/수정·Workflow 실행/재실행·Merge·보호 규칙 변경은 수행하지 않았다. PR #6 병합과 Attempt 2 재실행은 이번 조사 이전에 완료된 별도 승인 작업이다.
+- 초기 로컬 조사에서는 GitHub 조회와 fetch만 수행했다. 이후 후속 검토·Push·PR·CI 검증을 별도로 승인받았다. PR #6 병합과 Attempt 2 재실행은 초기 조사 이전에 완료된 별도 승인 작업이다. 이번 후속 PR의 실제 병합은 포함하지 않는다.
 
 직접 조회한 [PR #6](https://github.com/zzocojoa/storyboard-generator/pull/6)은 2026-09-09 04:35:52 UTC에 병합됐다. 원본은 Git에서 제외되는 `.local/ci-investigation/34311587985/`에 보관했다. `pr-6.json`, `merge-commit.json`, `pr-checkout.json`, Attempt별 metadata·check 로그, Attempt 2 e2e 로그, `pr-ci.log`를 각각 수집했다. 최신 Run 요약으로 첫 Attempt를 대체하지 않았다.
 
@@ -121,12 +121,12 @@ RED `41c8e5f`의 부모 회귀는 별도 Vitest Child에서 의도적 250ms time
 
 ## 실제 수정
 
-- `tests/owned-test-scope.ts`, `tests/owned-test.ts`: Test별 Root·본문·상위 비동기 작업·Child·App·Worker owner·Store를 추적한다. 새 Test 호출은 종료 뒤 거부한다. 이미 시작한 Apply/HTTP/Transaction 내부 호출은 완료하도록 두고 상위 작업의 실제 settle를 기다린다.
+- `tests/owned-test-scope.ts`, `tests/owned-test.ts`: Test별 Root·본문·상위 및 중첩 비동기 작업·Child·App·Worker owner·Store를 추적한다. 새 Test 호출은 종료 뒤 거부한다. 이미 시작한 Apply/HTTP/Transaction 내부 호출은 완료하도록 두고 각 작업의 실제 settle를 기다린다. 종료된 Operation의 비동기 문맥은 새 호출 권한을 유지하지 않는다.
 - `apply-consistency`, `request-store-transaction`, `media-workflow-regression`: 공유 배열과 조기 afterEach 삭제를 소유 Scope로 교체했다. 기존 Test 본문 판단·Assertion·장애 지점은 유지했다. 직접 Fixture 파일 작업도 Scope를 사용한다. 설정된 로컬 Audio Normalizer는 소유 자원으로 닫는다.
 - 정리는 Barrier 해제 → 소유 Child close → 본문·진행 작업 정산 → App/Worker/Store 종료 → Root 삭제 순서다. App 종료 Hook의 Store 종료 같은 소유 의존 호출은 허용한다. Mock은 정산 뒤 복원한다.
 - 정산 제한은 일반 Scope 4초다. 미종료 Writer가 있으면 Store·Root를 보존하고 오류를 보고한다. 같은 Worker Process의 다음 Fixture는 시작하지 않는다. 각 독립 종료 실패를 모으며 최초 Vitest 오류를 성공으로 바꾸지 않는다. 삭제 retry·timeout 상향·Worker 감소·자동 Test retry를 넣지 않았다.
 - `tests/controlled-process.ts`: exit 이후 stdio close까지 기다린다. Child close 제한은 2초이며 소유 Child에만 SIGKILL을 사용한다.
-- 7개 핵심 회귀를 Required에 등록했다. 성공 횟수를 고유 검증 수로 과장하지 않는다. 152개 기존 Test를 분할하거나 Assertion을 줄이지 않았다.
+- 초기 7개와 후속 검토 2개, 총 9개 핵심 회귀를 Required에 등록했다. 성공 횟수를 고유 검증 수로 과장하지 않는다. 152개 기존 Test를 분할하거나 Assertion을 줄이지 않았다.
 - 제품 `src/`, package.json, lockfile, Schema, 제작 Skill, AGENTS와 Audio Stress Workflow는 변경하지 않았다.
 
 ## 재현 횟수와 검증 기록
@@ -160,6 +160,36 @@ RED `41c8e5f`의 부모 회귀는 별도 Vitest Child에서 의도적 250ms time
 
 ## 재발 시 진단 경로
 
+### 후속 코드 검토의 확인 사항
+
+`fc4637d`에서 16개 변경 파일과 실제 호출 경계를 검토했다. 다음 두 경계는 실제 파일 쓰기 회귀를 먼저 실패시킨 뒤 `8ab2942`에서 수정했다.
+
+| 경계 | 수정 전 실패 | 수정 후 계약 |
+|---|---|---|
+| 부모보다 오래 실행되는 중첩 Writer | `store-close`가 `writer-settled`보다 먼저 발생 | 중첩 Promise도 개별 추적하고 모두 정산한 뒤 Store 종료 |
+| 이미 끝난 Operation의 비동기 문맥 | Root 정리 뒤 새 쓰기가 성공하고 디렉터리를 다시 생성 | Operation의 실행 상태를 확인해 `OWNED_TEST_STOPPED`로 거부 |
+
+timeout Probe의 Assertion·JSON 검사가 실패하기 전에 Child의 `process-result.json`(stderr 포함), `events.jsonl`, `result.json`을 삭제 Root 밖에 복사한다. 별도 복제 Probe에서 오류 개수 Assertion을 의도적으로 실패시켰으며 원본 Child Exit 1·250ms timeout·9개 이벤트·JSON 보고서가 남는 것을 확인했다. 이 실패는 제품 회귀나 원본 사건 재현으로 세지 않는다.
+
+`actions/upload-artifact@v4`는 기본적으로 숨김 경로를 제외하므로 지정된 `.build/build-manifest.json`을 포함하도록 `include-hidden-files: true`를 명시한다. 업로드 경로는 전용 진단 디렉터리와 이 manifest 파일로 한정한다. [Action의 숨김 파일 계약](https://github.com/actions/upload-artifact/tree/v4#uploading-hidden-files)을 대조하고 YAML 파싱·옵션·check → e2e 의존성을 확인했다. 실제 실패 업로드는 실패한 Hosted Run의 Artifact가 있어야 검증 완료로 판단한다.
+
+후속 로컬 증거는 Git에서 제외된 조사 디렉터리의 `review/`에 보관한다.
+
+| 검증 | 결과 |
+|---|---|
+| 두 신규 회귀의 수정 전 실행 | 2개 예상 실패 (`nested-red.log`) |
+| Scope·timeout 회귀 | 9개 성공, 1.76초 |
+| 세 기존 Suite와 회귀, 진단 ON | 5개 파일·161개 성공, 59.82초 |
+| `npm run check`, 코드 `8ab2942`, 진단 ON | 58개 파일 중 57개 성공·1개 실패, Test 1,195개 성공·1개 실패, 209.78초 |
+| 위 단일 실패 원인 | `audio_diagnostics_do_not_log_media_bytes`의 로컬 listen EPERM; 샌드박스 포트 권한 제한 |
+| 허용된 실행 환경에서 해당 파일 재검증 | 12개 모두 성공, 0.717초; 코드 변경 없음 |
+| TypeScript·Web TypeScript | 성공; 위 check가 npm test 전에 실행 |
+| 중단된 후속 검사 | Required 391·missing/duplicates/skip/only 0, Schema 일치, Web Build 성공 |
+
+전체 check 명령이 로컬에서 성공했다고 합쳐 보고하지 않는다. 같은 코드의 GitHub check는 별도 결과다. 후속 대상 152개 Scope의 진단은 3,520개 이벤트이며 Root 82개가 진행 작업·등록 자원 0에서 삭제됐다. 해당 Scope의 취소·정리 실패·Root 보존 이벤트는 없다. 원본 사건의 timeout 원인과 ENOTEMPTY Writer는 여전히 미확정이다.
+
+### 실행 및 수집 계약
+
 일반 로컬 실행의 계측은 꺼져 있다. 선택한 실행에만 `STORYBOARD_TEST_RUN_ID`, 삭제 Root 밖 절대경로인 `STORYBOARD_TEST_DIAGNOSTICS_DIR`을 지정한다. Vitest JSON에는 빠른 성공을 포함한 시험별 duration과 실패 메시지가 남는다. 세 대상 파일의 lifecycle JSONL은 Test·Fixture·Operation·PID·Worker ID·단계·monotonic 시간·오류 코드를 기록한다. `resourceCount`는 등록된 소유 핸들 수이며 살아 있는 OS Process/Thread 수를 뜻하지 않는다. 측정하지 않은 Timer 수는 null이다. 실제 제작 원문·Prompt·미디어 bytes·전체 환경변수는 추가하지 않았다.
 
 ```sh
@@ -170,7 +200,7 @@ npm test -- tests/apply-consistency.test.ts tests/request-store-transaction.test
 
 새 실행마다 별도 진단 디렉터리를 지정하고 Git에서 제외되는지 확인한다. TMPDIR을 바꾼다면 저장소 밖에 별도로 만든 전용 Root를 사용한다. 같은 출력 디렉터리의 JSON 보고서를 덮어쓰며 성공 횟수를 누적하지 않는다. 계측 ON의 파일 I/O 비용과 관찰 영향을 OFF 결과와 구분한다.
 
-CI는 기존 check 명령·실패 Exit·check → e2e 의존성을 유지한다. 선택적 계측을 check에 켜고 실패 시 Run ID·Attempt·SHA가 포함된 Artifact에 JSON·lifecycle·Checkout·설정 Hash·Node/npm·Runner 이미지·Build 지문을 수집한다. 업로드는 별도 Step이며 수집 실패가 Test 성공으로 바뀌지 않는다. continue-on-error, 자동 rerun, schedule, Audio Stress 변경은 없다. 새 CI 실행과 실제 Artifact 업로드의 Hosted 검증은 아직 하지 않았다.
+CI는 기존 check 명령·실패 Exit·check → e2e 의존성을 유지한다. 선택적 계측을 check에 켜고 실패 시 Run ID·Attempt·SHA가 포함된 Artifact에 JSON·lifecycle·Checkout·설정 Hash·Node/npm·Runner 이미지·Build 지문을 수집한다. 업로드는 별도 Step이며 수집 실패가 Test 성공으로 바뀌지 않는다. continue-on-error, 자동 rerun, schedule, Audio Stress 변경은 없다. Hosted 성공 경로와 실패 Artifact 업로드의 검증 여부는 구분한다.
 
 ## 자원 및 잔여 사항
 
