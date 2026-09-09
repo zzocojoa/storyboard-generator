@@ -1,9 +1,10 @@
+import { intrinsicIncomingExposure } from '../domain/transition.js';
 import { z } from 'zod';
 import { contractError } from '../domain/errors.js';
-import { effectiveInformationGate } from '../domain/mapping.js';
-import type { Project, Segment, Shot, ShotSourceLink, SourceUnit, StoryboardFrame } from '../domain/schema.js';
+import { effectiveInformationGate, reviewTransitionInformationIssues } from '../domain/mapping.js';
+import type { Issue, Project, Segment, Shot, ShotSourceLink, SourceUnit, StoryboardFrame } from '../domain/schema.js';
 import { PresenceSchema, ProjectSchema, ShotSourceLinkSchema, ShotVisualModeSchema, TransitionSchema } from '../domain/schema.js';
-import { shotVisualCoverageIssues, sourcePolicyIssues } from '../domain/source-policy.js';
+import { firstVisualRevealOrderIssues, shotVisualCoverageIssues, sourcePolicyIssues } from '../domain/source-policy.js';
 import { validateProject } from '../domain/validation.js';
 import { assertNoErrors } from '../domain/errors.js';
 
@@ -67,8 +68,7 @@ function validateProposalSources(project: Project, segmentId: string, proposal: 
   const policyIssues = sourcePolicyIssues(sourceUnits, policyShots);
   if (policyIssues.length > 0) {
     const visualMissing: boolean = policyIssues.some((value): boolean => value.code === 'SHOT_VISUAL_SOURCE_REQUIRED');
-    const reversed: boolean = policyIssues.some((value): boolean => value.code === 'SOURCE_UNIT_ORDER_REVERSED');
-    const code: string = visualMissing ? 'PROPOSAL_VISUAL_SOURCE_REQUIRED' : reversed ? 'PROPOSAL_SOURCE_ORDER_REVERSED' : 'PROPOSAL_SOURCE_POLICY';
+    const code: string = visualMissing ? 'PROPOSAL_VISUAL_SOURCE_REQUIRED' : 'PROPOSAL_SOURCE_POLICY';
     throw contractError(code, policyIssues.map((value): string => `${value.code}: ${value.message}`).join('\n'), policyIssues);
   }
 }
@@ -119,6 +119,10 @@ function proposalFrames(project: Project, shot: Shot, proposal: SegmentProposal[
   const explicit: ProposalFramePoint[] = (proposal.frames ?? []).map((frame): ProposalFramePoint => ({
     offsetMs: frameOffset(durationMs, frame.atPermille), role: frame.role, description: frame.description, explicit: true,
   }));
+  const offsets: number[] = explicit.map((point: ProposalFramePoint): number => point.offsetMs);
+  const collisions: number[] = [...new Set(offsets.filter((offset: number, index: number): boolean => offsets.indexOf(offset) !== index))];
+  if (collisions.length > 0) throw contractError('PROPOSAL_FRAME_OFFSET_COLLISION',
+    `${shot.id}: 서로 다른 명시 Frame이 같은 밀리초에 도착합니다. durationMs=${durationMs}, offsets=${collisions.join(',')}. 프레임 시점이나 컷 길이를 검토하세요.`, []);
   const anchorPoints: ProposalFramePoint[] = shot.visualMode === 'sourced' ? shot.sourceLinks.flatMap((link: ShotSourceLink): ProposalFramePoint[] => {
     const offsetMs: number = anchorStart(link);
     if (!['primary-visual', 'continued-visual'].includes(link.usage) || offsetMs <= 0 || offsetMs >= durationMs) return [];
@@ -144,17 +148,10 @@ function proposalFrames(project: Project, shot: Shot, proposal: SegmentProposal[
 }
 
 function validateProposalSourceOrder(project: Project, shots: readonly Shot[]): void {
-  const events = shots.flatMap((shot: Shot) => shot.sourceLinks
-    .filter((link: ShotSourceLink): boolean => ['primary-visual', 'continued-visual'].includes(link.usage))
-    .map((link: ShotSourceLink, index: number) => ({
-      unit: project.dataset.units.find((unit: SourceUnit): boolean => unit.id === link.unitId),
-      atMs: shot.startMs + anchorStart(link), index,
-    }))).filter((event): event is { unit: SourceUnit; atMs: number; index: number } => event.unit !== undefined);
-  for (const earlier of events) for (const later of events) {
-    if (earlier.unit.order < later.unit.order && earlier.atMs > later.atMs) {
-      throw contractError('PROPOSAL_SOURCE_ORDER_REVERSED', `${later.unit.id}(${later.unit.order})가 ${earlier.unit.id}(${earlier.unit.order})보다 이른 ${later.atMs}ms에 공개됩니다.`, []);
-    }
-  }
+  const next: Project = { ...project, shots: [...shots] };
+  const issues: Issue[] = [...new Set(shots.map((shot: Shot): string => shot.segmentId))]
+    .flatMap((segmentId: string): Issue[] => firstVisualRevealOrderIssues(next, segmentId));
+  if (issues.length > 0) throw contractError('PROPOSAL_SOURCE_ORDER_REVERSED', issues.map((value: Issue): string => value.message).join('\n'), issues);
 }
 
 function allocateDurations(duration: number, weights: readonly number[]): number[] {
@@ -185,7 +182,7 @@ export function applySegmentProposal(project: Project, segmentId: string, input:
     return { id: `${proposalId}:shot:${index + 1}`, segmentId, startMs, endMs: startMs + (durations[index] as number), visualMode: shot.visualMode ?? 'sourced',
       sourceLinks: shot.sourceLinks.map((link): ShotSourceLink => ({ unitId: link.unitId, usage: link.usage, status: 'confirmed', temporalAnchor: proposalAnchor(durations[index] as number, link.anchor) })), visualLocationId: shot.visualLocationId, action: shot.action, camera: shot.camera,
       presence: shot.presence, propIds: shot.propIds, continuityBefore: [], continuityAfter: [], cameraAxis: shot.cameraAxis,
-      screenDirection: shot.screenDirection, informationIds: shot.informationIds, transitionOut: shot.transitionOut,
+      screenDirection: shot.screenDirection, informationIds: shot.informationIds, transitionOut: { ...shot.transitionOut, incomingExposure: shot.transitionOut.incomingExposure ?? intrinsicIncomingExposure(shot.transitionOut.kind) },
       proposalOrigin: 'model', approvalStatus: 'proposed', lockedFields: [] };
   });
   validateProposalInformation(project, shots);
@@ -198,6 +195,8 @@ export function applySegmentProposal(project: Project, segmentId: string, input:
   const allShots: Shot[] = [...retained.slice(0, firstIndex), ...shots, ...retained.slice(firstIndex)];
   const next: Project = ProjectSchema.parse({ ...project, shots: allShots,
     frames: [...project.frames.filter((frame: StoryboardFrame): boolean => !oldShots.some((shot: Shot): boolean => shot.id === frame.shotId)), ...frames] });
+  const transitionIssues: Issue[] = shots.flatMap((shot: Shot): Issue[] => reviewTransitionInformationIssues(next, shot));
+  if (transitionIssues.length > 0) throw contractError('PROPOSAL_TRANSITION_VISUAL_POLICY_BLOCKED', transitionIssues.map((value: Issue): string => value.message).join('\n'), transitionIssues);
   assertNoErrors(validateProject(next, project.dataset), 'INVALID_MODEL_PROPOSAL');
   return next;
 }

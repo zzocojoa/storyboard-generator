@@ -1,3 +1,4 @@
+import { readBuildManifest } from '../src/build.js';
 import { EventEmitter } from 'node:events';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -63,7 +64,7 @@ async function appFixture(normalizer?: WorkerAudioNormalizer): Promise<{ app: Fa
     codex: { requestRoot: join(root, 'requests'), speechVoice: 'Yuna' } };
   const store = new ProjectStore(config.dataRoot);
   const project: Project = await store.create(createSourceOutline(importPackage(await nativePackage()), { proposedTextHoldMs: 2000 }));
-  return { app: await createApp(config, store, new CodexRequestStore(config.codex.requestRoot), normalizer), root, project };
+  return { app: await createApp(config, store, new CodexRequestStore(config.codex.requestRoot, readBuildManifest()), normalizer), root, project };
 }
 
 function multipart(bytes: Buffer): { payload: Buffer; headers: { 'content-type': string } } {

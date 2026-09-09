@@ -11,7 +11,7 @@ const requests: CodexRequest[] = [
 describe('Codex 요청 파일럿 지표', (): void => {
   it('완료 지연과 같은 대상의 반복 생성을 프로젝트 범위에서 집계한다', (): void => {
     expect(codexRequestMetrics(requests)).toEqual({
-      totalRequests: 3, completedRequests: 1, failedRequests: 1, pendingRequests: 1, repeatedRequests: 1,
+      totalRequests: 3, completedRequests: 1, failedRequests: 1, pendingRequests: 1, supersededRequests: 0, repeatedRequests: 1,
       averageLatencyMs: 3000, maximumLatencyMs: 4000, apiCostUsd: null,
       costNote: 'Codex App 실행은 요청별 API 비용을 제공하지 않습니다.',
     });

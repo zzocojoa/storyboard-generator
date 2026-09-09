@@ -1,6 +1,6 @@
 # 범용 콘티 도구 — 구현 일치 분석
 
-분석 기준은 [Plan](../01-plan/features/storyboard-generator.plan.md)의 FR-01~FR-10, [Design](../02-design/features/storyboard-generator.design.md), 1.5.0의 Text Mapping·Placement Information·Source Temporal Anchor·Information Gate·실제 미디어 안전 출력 계약이다. 완료 판단은 현재 코드, 생성 Schema, fixture와 자동 검사 결과를 따른다.
+분석 기준은 [Plan](../01-plan/features/storyboard-generator.plan.md)의 FR-01~FR-10, [Design](../02-design/features/storyboard-generator.design.md), 1.9.0의 Final Readiness·Playhead 출력·Build 감사와 Text Mapping·Placement Information·Source Temporal Anchor·Information Gate·실제 미디어 안전 출력 계약이다. 완료 판단은 현재 코드, 생성 Schema, fixture와 자동 검사 결과를 따른다.
 
 ## 요구사항 일치
 
@@ -23,11 +23,11 @@
 
 Unit 순서만으로 계산한 시각은 확인 근거가 생길 때까지 review-required다. 확정 Source Anchor나 같은 Segment의 유효한 `within-segment` 측정 Audio Cue가 유도 시각 이후에 있어야 검토가 해소된다. 더 앞선 Source·Audio 근거는 Gate를 앞당기지 않으며 `EVIDENCE_PRECEDES_UNIT_ORDER` 충돌을 만든다. 오디오 자산은 cue ID, 종류, 길이와 Segment 범위를 모두 만족해야 시간 근거가 된다. J/L-cut은 경계 재생에는 유효하지만 Gate 증거에서는 제외한다. 오디오 이동·길이·관계 변경은 관련 Anchor, Gate 관련 컷 승인과 프레임 검토를 무효화한다.
 
-직접 시각 Source Link는 `shot-offset` 또는 `frame` Anchor가 확정돼야 한다. 프레임 생성은 반열린 Anchor 구간 안에서 해당 프레임 시각에 활성화된 직접 Link와 그 시점의 Text Mapping만 문맥에 넣고, Text Mapping·Source 정책·정보 Gate 충돌을 모두 검사한다. Anchor가 가리키는 프레임의 offset을 바꾸면 Link는 `unresolved/frame-change`가 된다. `SOUND`와 `MUSIC`은 직접 시각 Link가 될 수 없고, 모든 Link를 `audio-only`나 `context-only`로 돌려 검사를 우회하는 제안은 거부한다.
+직접 시각 Source Link는 `shot-offset` 또는 `frame-range`의 표시 구간이 확정돼야 한다. `frame`은 공개 시점만 증명하며 표시 구간은 검토 필요로 남긴다. 프레임 생성은 반열린 Anchor 구간 안에서 해당 프레임 시각에 활성화된 직접 Link와 그 시점의 Text Mapping만 문맥에 넣고, Text Mapping·Source 정책·정보 Gate 충돌을 모두 검사한다. Anchor가 가리키는 프레임의 offset을 바꾸면 Link는 `unresolved/frame-change`가 된다. `SOUND`와 `MUSIC`은 직접 시각 Link가 될 수 없고, 모든 Link를 `audio-only`나 `context-only`로 돌려 검사를 우회하는 제안은 거부한다.
 
 ## 최종 출력 경계
 
-Text Cue는 `placement`, `mapping-decision`, `source-unit`, `review-required` 권한과 필요한 연결 ID를 가진다. Placement Cue는 Mapping Decision이 없거나 중복되거나 미해결이면 정보 ID가 비어 있어도 출력되지 않는다. exact·abbreviation·replacement만 Canonical 정보 ID를 상속하며 separate-element와 standalone Placement는 상속하지 않는다. 별도 Canonical Cue는 Mapping Decision ID로 구별한다. 검토 필요 Cue는 API와 Inspector에서 권한 Source로 재구성하거나 커버리지를 확인해 삭제한다. Program Monitor는 `playableTextCuesAt`만 사용한다.
+Text Cue는 `placement`, `mapping-decision`, `source-unit`, `review-required` 권한과 필요한 연결 ID를 가진다. Placement Cue는 Mapping Decision이 없거나 중복되거나 미해결이면 정보 ID가 비어 있어도 출력되지 않는다. exact·abbreviation·replacement만 Canonical 정보 ID를 상속하며 separate-element와 standalone Placement는 상속하지 않는다. 별도 Canonical Cue는 Mapping Decision ID로 구별한다. 검토 필요 Cue는 API와 Inspector에서 권한 Source로 재구성하거나 커버리지를 확인해 삭제한다. Program Monitor는 성숙도가 명시된 `reviewTextPlaybackWithPolicy`를 사용한다. proposed Text는 표시된 Draft에서만 허용하며 Final은 차단한다. Confirm 후에도 권한·Mapping·Gate를 검사한다.
 
 `separate-element`와 `standalone-placement`는 정보 ID가 없다는 이유만으로 비정보성으로 간주하지 않는다. 별도 `TextPlacementInformationDecision`이 `unresolved`이면 Placement 본문을 차단한다. 사용자가 `non-informational`로 확인했거나 `informational`과 유효한 Information ID를 지정한 경우에만 각 Gate를 검사해 출력한다. Mapping 관계 변경, Source Update, JSON 재열기에서도 판정의 생성·제거·보존 규칙을 적용한다.
 
@@ -55,7 +55,29 @@ Proposal Source Link의 선택적 permille anchor는 `0 ≤ start < end ≤ 1000
 
 End Frame은 `endMs`에 표시하고 `endMs - 1`에서 평가한다. `reviewFrameOutput`은 이미지 자산의 종류와 대상, accepted 상태, 활성 Source·Text Mapping과 Gate를 Program Monitor·전환·PDF·CSV에 공통 적용한다. 변경으로 pending 또는 rejected가 된 bitmap은 JSON과 검토 화면에 남고 안전 출력에서는 placeholder와 Issue code로 대체된다.
 
-PNG·JPEG·WebP는 `sharp`로 전체 디코딩하고 픽셀 상한을 적용한다. 저장 파일 해시나 구조가 달라진 경우 Raw Asset fetch도 거부한다. 안전 Frame URL은 현재 출력 판정과 실제 파일 검사를 모두 통과해야 bytes를 반환하며, PDF는 손상 자산 하나 때문에 전체 내보내기를 중단하지 않고 식별자와 오류 코드가 있는 placeholder를 만든다. Ready 지표는 Asset 존재, 검토 완료, 안전 출력 가능을 별도로 계산한다.
+PNG·JPEG·WebP는 `sharp`로 전체 디코딩하고 픽셀 상한을 적용한다. 저장 파일 해시나 구조가 달라진 경우 Raw Asset fetch도 거부한다. 안전 Frame URL은 현재 출력 판정과 실제 파일 검사를 모두 통과해야 bytes를 반환하며, Draft PDF는 손상 자산을 ID·오류 코드가 있는 placeholder로 만들고 Final PDF는 전체 Readiness를 충족하지 못하면 파일 생성을 거부한다. Ready 지표는 Asset 존재, 검토 완료, 안전 출력 가능을 별도로 계산한다.
+
+## Final 출력과 Build 감사의 일치
+
+생성 완료와 Final Ready는 독립이다. 실제 Playhead·전환의 활성 Source, 전체 Coverage와 인접 predecessor 종료 직전 Hold, 승인 상태, Text confirmed, measured Audio와 현재 자산 무결성을 공통 정책으로 재계산한다. 수동 Source 수정·이동은 신규·확대 Gap을 거부하고 기존 Gap 축소는 허용한다. 공개 시점만 있는 Frame Anchor는 표시 구간을 추측하지 않는다.
+
+Generation Audit는 Current를 중복 Snapshot으로 추가하지 않으며 안정적인 Current-Version 불일치를 423으로 차단한다. 재등장은 absent→present만 기록하고 Target History는 도입 revision부터 시작한다. 신규 Generation Record는 실제 요청 Build를 기록하고 기존 Record는 generatorBuild=null로 보존한다. Asset Manifest에서 생성 Record·Build·감사 산출물을 따라갈 수 있다. 원본을 읽기 전용으로 열어 전후 해시를 검사하고 Final 불가 Bundle은 생성하지 않는다. Active Update 오류는 Status와 Project 복구 상태에 남으며 다른 프로젝트는 계속 사용할 수 있다.
+
+## Hardening 계약 일치
+
+| 정책 | 공통 구현 경계 | 검증 근거 |
+|---|---|---|
+| Atomic Visual Plan·Temporal First Reveal | edit.ts, source-policy.ts, VisualPlanEditor | Mode 4회 HTTP 왕복·실패 불변·수동/Proposal 공개 순서 |
+| Build Fingerprint·HEAD/dirty·Supersede | build-inputs.ts, build-fingerprint.ts, CodexRequestStore | Skill·AGENTS·음성 변경, Legacy 이관, 이전 요청 보존 |
+| Review Storage Health | review-storage-health.ts | Lock·Journal·Future·Canonical·검토 도중 증거 변경 차단 |
+| 결정적 Bundle·Build 의미 | stable-json.ts, generation-build-summary.ts | 3개 shuffled Version 순서 × 3회, 실제 생성 Build·불명 상태 보존 |
+| Transition·외부 Lock Status | transition.ts, ProjectStore | 종류별 Incoming 시각·초기화 뒤 Create/Update·손상 Entry 분리 |
+| Internal/External Redaction | review-redaction.ts, CSV/PDF Projection, Review CLI | JSON·CSV·PDF 실제 text 추출·이미지 operator 검사·원본 불변 |
+| 목록 Integrity Cache·Range 416 | ProjectStore, Safe Audio HTTP | cache hit·identity 변경 miss·안전 출력 강제 검사·전체 크기 Header |
+
+세부 설계는 Design, 사용법과 11개 Bundle 파일은 README, 실행 횟수·원본 해시·CI는 Report를 기준으로 한다. External은 출력용 Projection이며 원본 Domain의 재저장·재검증을 하지 않는다. OCR을 수행하지 않으므로 이미지 Placeholder와 include-media 거부를 유지한다. Stable JSON은 의미 있는 배열을 재정렬하지 않으며 PDF의 출력용 RGB 정규화는 원본 Asset bytes를 바꾸지 않는다.
+
+Review Reader는 Current/Version 불일치나 미완 Transaction을 고치지 않는다. Final은 저장 Quiescence를 요구하고 Draft는 auditAvailable=false와 증거를 남길 수 있다. 상태 조회는 외부 Lock을 능동 탐색하지만 안전 검증을 대신하지 않는다. Summary Cache는 Final·Safe Output·Generation Reference에서 사용하지 않는다.
 
 ## Mapping과 편집 의미
 
@@ -67,7 +89,7 @@ Source Update의 Text 기반 Anchor는 현재 Shot 범위 안에 같은 Source U
 
 ## Migration과 출력
 
-저장본은 `1.0.0 → 1.1.0 → 1.2.0 → 1.3.0 → 1.4.0 → 1.5.0` 순서로 변환한다. 1.2 Source Link에는 `unresolved/migration` Anchor를 부여하고 기존 승인 상태를 재검토한다. 정보 규칙은 보관된 handoff와 source snapshot에서 다시 정규화해 권한 `baseNotBeforeMs`를 복원한다. 1.3 Audio Cue에는 `within-segment`를 부여하고 Text Cue 권한은 Placement, exact Mapping, Source Unit 순서로 복원한다. 1.4의 독립 Placement에는 `unresolved` 정보 판정을 만들고 Canonical 관계에는 만들지 않는다. 원문, 컷, 시간, Source Snapshot, 자산, 생성 기록은 보존한다.
+저장본은 `1.0.0 → 1.1.0 → 1.2.0 → 1.3.0 → 1.4.0 → 1.5.0 → 1.6.0 → 1.7.0 → 1.8.0 → 1.9.0` 순서로 변환한다. 1.2 Source Link에는 `unresolved/migration` Anchor를 부여하고 기존 승인 상태를 재검토한다. 정보 규칙은 보관된 handoff와 source snapshot에서 다시 정규화해 권한 `baseNotBeforeMs`를 복원한다. 1.3 Audio Cue에는 `within-segment`를 부여하고 Text Cue 권한은 Placement, exact Mapping, Source Unit 순서로 복원한다. 1.4의 독립 Placement에는 `unresolved` 정보 판정을 만들고 Canonical 관계에는 만들지 않는다. 1.7→1.8은 Legacy generatorBuild의 알 수 없는 신규 hash·dirty 값을 null로 유지하고 fade/custom의 기존 노출 의미를 결정적으로 옮긴다. 1.8→1.9는 Legacy Build availability를 null로 추가하고 기존 dirty 값은 보존한다. 원문, 컷, 시간, Source Snapshot, 자산, 생성 기록은 보존한다.
 
 JSON은 기준 규칙과 모든 재계산 입력을 보존한다. CSV는 `source_temporal_anchors`, `information_gates`, 출력 안전 상태와 차단 코드를 제공하고 차단된 Text Cue·Source Unit 본문을 생략한다. PDF는 Source Anchor 종류·근거, 기준/유효 Gate, End Frame 표시·평가 시각을 표시하고 차단된 원문을 가린다.
 
@@ -75,6 +97,8 @@ JSON은 기준 규칙과 모든 재계산 입력을 보존한다. CSV는 `source
 
 기존 정보 공개 회귀를 유지하면서 Placement Mapping, Text 권한 복구·삭제, Canonical Cue identity, Frame 자산 무효화와 네 안전 출력 채널, PRJ-007 Source fidelity 검사를 추가했다.
 
-현재 로컬 자동 검사는 29개 파일의 792개 테스트를 통과한다. 요구된 정확한 계약 이름 144개는 Historical Generation target과 audit, Shot topology, Generation 정규성, HTTP·UI scope, unrelated journal 격리, Active Create·Update, Process Instance, Project timecode, Proposal anchor, 기존 storage와 PRJ-007 회귀를 포함하며 각각 한 번 실행된다. 동시성 검사는 Promise barrier와 두 `ProjectStore` instance를 사용해 실제 lock 보유 상태를 만든다. PRJ-007 결합 검사는 Import, 생성 기록 추가, Merge, 같은 Segment Re-proposal, 영향 Source Update, Version Audit, 실제 `UNIT-045` 48,000Hz mono PCM16 2,000ms WAV의 849,000–851,000ms J-cut과 Safe Audio, JSON·CSV·PDF를 한 저장 이력에서 실행한다. 기존 12 Scene, 32 Segment, screenplay Unit 79개, Panel Turn 16개와 1,500,000ms는 유지하고 의도한 `UNIT-007` Source 변경만 반영되는지 확인한다.
+현재 단위·통합·Chromium 및 반복 시험의 실제 수치와 실패 재현·운영 해시 보존 증거는 Report를 따른다. G1~G7 회귀는 독립 Child Process·IPC Barrier·SIGKILL·inode/CAS 검증으로 Request와 Bundle 경쟁, 중단·복구 재중단, Lock 부분 게시, Integrity 중간 변경을 검사한다. Legacy 오류는 편집에서 격리하지만 Approval·Final에서 차단하며 Project 1.8→1.9와 Legacy Request는 읽기 전용 메모리 이관을 검사한다. 추가 CLI Profile·오류 계약도 임시 저장소에서 검사한다. 처음 재현한 수동 Coverage 우회, Gap 승인, Frame 1ms 해석과 Hold의 이전 초반 Frame 재사용을 차단했다. 추가 회귀는 Text Draft/Final, 실제 Playhead·전환 Gate, 명시 Frame 충돌, 최초 Unit 공개 순서, Canonical 감사, Active Update 오류, Build와 원본 불변 Bundle을 검증한다.
+
+PRJ-007 회귀 fixture는 Scene 12, Segment 32, screenplay Unit 79, Panel Turn 16, Text Placement 25, 1,500,000ms와 UNIT-045의 849,000–851,000ms J-cut·PCM16 mono 48,000Hz 2초 WAV를 유지한다. 실제 로컬 저장본 4개는 자동 수정 없이 별도 Bundle로 재검증했다. revision 283만 현재 타임라인의 Final 조건을 통과하며 이 저장본의 기존 UNIT-045는 850,000–855,000ms, 5초 within-segment SFX다. 회귀 fixture와 기존 제작 결정의 차이를 숨기거나 원본을 자동 수정하지 않는다. 개별 수치와 실행 로그·CI 확인 위치는 Report에 기록한다.
 
 자동 검사는 구조·문자열·시간·참조·상태 무결성을 판정한다. 그림의 연출, 정보의 시각적 암시, 자막 가독성과 낭독 자연스러움은 사람이 실제 결과를 검토해야 한다. 지원 입력은 `native-v1`과 `production-v1`이며 임의 문서 가져오기, 클라우드 협업, 전체 영상 렌더링은 현재 범위가 아니다.

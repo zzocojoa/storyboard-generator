@@ -3,7 +3,8 @@ import { assetReferenceIssues } from './asset-references.js';
 import { issue } from './errors.js';
 import { generationRecordIssues } from './generation-records.js';
 import type { Dataset, InformationRule, Issue, Project, Segment, Shot, ShotSourceLink, Snapshot, SourceRef, SourceUnit, TextMappingDecision, TextPlacement, TextPlacementInformationDecision } from './schema.js';
-import { shotVisualCoverageIssues, sourcePolicyIssues } from './source-policy.js';
+import { firstVisualRevealOrderIssues, shotVisualCoverageIssues, sourcePolicyIssues } from './source-policy.js';
+import { transitionVisualPolicy } from './transition.js';
 
 function duplicateIssues(ids: readonly string[], entity: string): Issue[] {
   return [...new Set(ids.filter((id: string, index: number): boolean => ids.indexOf(id) !== index))]
@@ -94,10 +95,10 @@ export function validateDataset(dataset: Dataset, snapshots: readonly Snapshot[]
 }
 
 function sourceOrderIssues(project: Project): Issue[] {
-  return project.dataset.segments.flatMap((segment: Segment): Issue[] => sourcePolicyIssues(
+  return project.dataset.segments.flatMap((segment: Segment): Issue[] => [...sourcePolicyIssues(
     project.dataset.units.filter((unit: SourceUnit): boolean => unit.segmentId === segment.id),
     project.shots.filter((shot: Shot): boolean => shot.segmentId === segment.id),
-  ));
+  ), ...firstVisualRevealOrderIssues(project, segment.id)]);
 }
 
 export function validateProject(project: Project, expectedDataset: Dataset): Issue[] {
@@ -127,7 +128,7 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
       ...(segment === undefined ? [] : intervalIssues(shot.id, shot.startMs, shot.endMs, segment.startMs, segment.endMs)),
       ...shot.sourceLinks.flatMap((link: ShotSourceLink): Issue[] => referenceIssue(dataset.units.some((unit): boolean => unit.id === link.unitId && unit.segmentId === shot.segmentId), shot.id, 'sourceLinks', link.unitId, [])),
       ...shot.sourceLinks.flatMap((link: ShotSourceLink): Issue[] => {
-        if (link.temporalAnchor.kind !== 'frame') return [];
+        if (link.temporalAnchor.kind !== 'frame' && link.temporalAnchor.kind !== 'frame-range') return [];
         const frameId: string = link.temporalAnchor.frameId;
         return referenceIssue(project.frames.some((frame): boolean => frame.id === frameId && frame.shotId === shot.id), shot.id, 'sourceLinks.temporalAnchor.frameId', frameId, []);
       }),
@@ -136,6 +137,7 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
       ...(project.frames.some((frame): boolean => frame.shotId === shot.id) ? [] : [issue('SHOT_WITHOUT_FRAME', 'error', shot.id, 'frames', '컷에는 검토용 프레임이 하나 이상 필요합니다.', null, null, [])]),
       ...((shot.transitionOut.kind === 'cut' && shot.transitionOut.durationMs !== 0) || (shot.transitionOut.kind !== 'cut' && (shot.transitionOut.durationMs <= 0 || shot.transitionOut.durationMs > shot.endMs - shot.startMs)) ? [issue('INVALID_TRANSITION_DURATION', 'error', shot.id, 'transitionOut', 'CUT은 0ms, 그 밖의 전환은 컷 길이 안의 양수 밀리초여야 합니다.', `0..${shot.endMs - shot.startMs}`, String(shot.transitionOut.durationMs), [])] : []),
       ...(shot.transitionOut.kind === 'custom' && shot.transitionOut.note.trim() === '' ? [issue('MISSING_CUSTOM_TRANSITION_NOTE', 'error', shot.id, 'transitionOut.note', '사용자 정의 전환에는 구현 메모가 필요합니다.', '설명', '', [])] : []),
+      ...transitionVisualPolicy(shot.transitionOut, shot, project.shots[project.shots.indexOf(shot) + 1] ?? null).issues,
       ...shot.informationIds.flatMap((id: string): Issue[] => {
         const rule = dataset.informationRules.find((value): boolean => value.id === id);
         if (rule === undefined) return [issue('UNKNOWN_SHOT_INFORMATION', 'error', shot.id, 'informationIds', '정의되지 않은 정보를 컷에 추가할 수 없습니다.', null, id, [])];

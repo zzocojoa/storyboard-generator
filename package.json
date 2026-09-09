@@ -21,7 +21,15 @@
     "schemas:check": "node --import tsx scripts/check-schemas.ts",
     "cli": "node --import tsx src/cli.ts",
     "codex-workbench": "node --import tsx src/codex/cli.ts storyboard.config.json",
-    "check": "npm run typecheck && npm run typecheck:web && npm test && npm run test:names && npm run schemas:check && npm run build:web"
+    "check": "npm run typecheck && npm run typecheck:web && npm test && npm run test:names && npm run schemas:check && npm run build:web",
+    "build:manifest": "node --import tsx scripts/write-build-manifest.ts",
+    "pretest": "npm run build:manifest",
+    "prebuild:web": "npm run build:manifest",
+    "prestart": "npm run build:manifest",
+    "presmoke": "npm run build:manifest",
+    "precodex-workbench": "npm run build:manifest",
+    "review-bundle": "node --import tsx src/review-cli.ts",
+    "prereview-bundle": "npm run build:manifest"
   },
   "dependencies": {
     "@fastify/multipart": "10.1.1",
@@ -42,6 +50,7 @@
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.7",
     "@vitejs/plugin-react": "6.1.1",
+    "pdfjs-dist": "6.3.289",
     "tsx": "4.23.13",
     "typescript": "7.0.2",
     "vite": "8.2.2",

@@ -1,8 +1,9 @@
 import { readFile } from 'node:fs/promises';
+import { runtimeGenerationConfigHash } from '../build-fingerprint.js';
 import type { AudioNormalizer } from '../domain/audio-normalizer.js';
 import { contractError } from '../domain/errors.js';
 import { applyGeneratedImage, applyGeneratedProposal, applyGeneratedSpeech } from '../domain/media.js';
-import type { GenerationRecord, Project } from '../domain/schema.js';
+import type { GenerationRecord, GeneratorBuildProvenance, Project } from '../domain/schema.js';
 import { parseJson } from '../importers/integrity.js';
 import { readUtf8 } from '../io/package.js';
 import { SegmentProposalSchema } from '../proposal/model.js';
@@ -46,10 +47,10 @@ export async function applyCodexProposal(
   const project: Project = await store.read(request.projectId);
   const prior: Project | null = await alreadyApplied(request, project, requests, now);
   if (prior !== null) return prior;
-  const work: CodexWork = await buildCodexWork(request, project, store);
+  const work: CodexWork = await buildCodexWork(request, project, store, requests.buildManifest());
   if (work.kind !== 'proposal') throw contractError('CODEX_REQUEST_KIND_MISMATCH', `${request.id}: 컷 제안 작업이 아닙니다.`, []);
   const proposalWork: ProposalWork = work;
-  const result: ProposedSegment = { proposal: SegmentProposalSchema.parse(parseJson(await readUtf8(inputPath), inputPath)), provider: 'codex-app',
+  const result: ProposedSegment = { generatorBuild: request.generatorBuild as GeneratorBuildProvenance, proposal: SegmentProposalSchema.parse(parseJson(await readUtf8(inputPath), inputPath)), provider: 'codex-app',
     prompt: proposalWork.prompt, model: 'codex-app-current-model', requestId: request.id };
   const mutation: GeneratedMutation = applyGeneratedProposal(project, request.targetId, generationId(request.id), request.createdAt, result);
   return applyMutation(request, mutation, store, requests, project.revision, now);
@@ -63,10 +64,10 @@ export async function applyCodexImage(
   const project: Project = await store.read(request.projectId);
   const prior: Project | null = await alreadyApplied(request, project, requests, now);
   if (prior !== null) return prior;
-  const work: CodexWork = await buildCodexWork(request, project, store);
+  const work: CodexWork = await buildCodexWork(request, project, store, requests.buildManifest());
   if (work.kind !== 'image') throw contractError('CODEX_REQUEST_KIND_MISMATCH', `${request.id}: 이미지 작업이 아닙니다.`, []);
   const imageWork: ImageWork = work;
-  const result: GeneratedImage = { bytes: await readFile(inputPath), provider: 'codex-app', prompt: imageWork.prompt,
+  const result: GeneratedImage = { generatorBuild: request.generatorBuild as GeneratorBuildProvenance, bytes: await readFile(inputPath), provider: 'codex-app', prompt: imageWork.prompt,
     model: 'codex-imagegen', requestId: request.id, mimeType: 'image/png',
     referenceHashes: [...new Set(imageWork.references.map((reference): string => reference.sha256))] };
   const mutation: GeneratedMutation = await applyGeneratedImage(project, request.targetId, generationId(request.id), request.createdAt, result);
@@ -77,15 +78,16 @@ export async function applyCodexSpeech(
   requestId: string, inputPath: string, voice: string, store: ProjectStore, requests: CodexRequestStore, now: string,
   normalizer: AudioNormalizer,
 ): Promise<Project> {
+  if (requests.buildManifest().runtimeGenerationConfigSha256 !== runtimeGenerationConfigHash(voice)) throw contractError('CODEX_REQUEST_BUILD_CHANGED', '음성 등록 Voice와 요청 실행 Build의 음성 설정이 다릅니다.', []);
   const request: CodexRequest = await requests.read(requestId);
   requirePendingKind(request, 'speech');
   const project: Project = await store.read(request.projectId);
   const prior: Project | null = await alreadyApplied(request, project, requests, now);
   if (prior !== null) return prior;
-  const work: CodexWork = await buildCodexWork(request, project, store);
+  const work: CodexWork = await buildCodexWork(request, project, store, requests.buildManifest());
   if (work.kind !== 'speech') throw contractError('CODEX_REQUEST_KIND_MISMATCH', `${request.id}: 음성 작업이 아닙니다.`, []);
   const speechWork: SpeechWork = work;
-  const result: GeneratedSpeech = { bytes: await readFile(inputPath), provider: 'codex-app', prompt: speechWork.prompt,
+  const result: GeneratedSpeech = { generatorBuild: request.generatorBuild as GeneratorBuildProvenance, bytes: await readFile(inputPath), provider: 'codex-app', prompt: speechWork.prompt,
     model: `macos-say:${voice}`, requestId: request.id, mimeType: 'audio/wav' };
   const mutation: GeneratedMutation = await applyGeneratedSpeech(project, request.targetId, generationId(request.id), request.createdAt, result, normalizer);
   return applyMutation(request, mutation, store, requests, project.revision, now);

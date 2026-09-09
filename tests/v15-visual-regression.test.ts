@@ -95,7 +95,7 @@ describe('15차 Proposal Frame과 Visual Mode', (): void => {
     const project: Project = await outline();
     const legacy = { ...project, schemaVersion: '1.5.0', shots: project.shots.map(({ visualMode: _visualMode, ...shot }) => shot) };
     const migrated: Project = parseProject(legacy);
-    expect(migrated.schemaVersion).toBe('1.6.0');
+    expect(migrated.schemaVersion).toBe('1.9.0');
     expect(migrated.shots.every((shot) => shot.visualMode === 'sourced')).toBe(true);
   });
 
@@ -239,7 +239,7 @@ describe('15차 Proposal Frame과 Visual Mode', (): void => {
     const project: Project = await outline();
     const held: Shot = project.shots[1] as Shot;
     const changed: Project = { ...project, shots: project.shots.map((shot) => shot.id === held.id ? { ...shot, visualMode: 'hold-previous', sourceLinks: [] } : shot) };
-    expect(reviewFrameOutput(changed, project.frames.find((frame) => frame.shotId === held.id)!.id, 'program-monitor')).toEqual(expect.objectContaining({ renderMode: 'blocked', issues: expect.arrayContaining([expect.objectContaining({ code: 'HOLD_PREVIOUS_SOURCE_UNAVAILABLE' })]) }));
+    expect(reviewFrameOutput(changed, project.frames.find((frame) => frame.shotId === held.id)!.id, 'program-monitor')).toEqual(expect.objectContaining({ renderMode: 'blocked', issues: expect.arrayContaining([expect.objectContaining({ code: 'HOLD_PREVIOUS_PREDECESSOR_NOT_SAFE' })]) }));
   });
 
   it('non_sourced_mode_rejects_direct_visual_links', async (): Promise<void> => {

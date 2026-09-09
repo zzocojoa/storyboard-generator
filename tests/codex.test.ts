@@ -1,3 +1,4 @@
+import { readBuildManifest } from '../src/build.js';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,6 +15,13 @@ import { ProjectStore } from '../src/server/store.js';
 import { nativePackage, png, testAudioNormalizer } from './helpers.js';
 
 const roots: string[] = [];
+const stores: ProjectStore[] = [];
+function trackedStore(dataRoot: string): ProjectStore {
+  const store: ProjectStore = new ProjectStore(dataRoot);
+  stores.push(store);
+  return store;
+}
+
 
 function wav(durationMs: number): Buffer {
   const sampleRate: number = 8000;
@@ -29,13 +37,14 @@ async function fixture(): Promise<{ root: string; project: Project; store: Proje
   const root: string = await mkdtemp(join(tmpdir(), 'storyboard-codex-'));
   roots.push(root);
   const project: Project = createSourceOutline(importPackage(await nativePackage()), { proposedTextHoldMs: 2000 });
-  const store: ProjectStore = new ProjectStore(join(root, 'data'));
-  const requests: CodexRequestStore = new CodexRequestStore(join(root, 'requests'));
+  const store: ProjectStore = trackedStore(join(root, 'data'));
+  const requests: CodexRequestStore = new CodexRequestStore(join(root, 'requests'), readBuildManifest());
   await store.create(project);
   return { root, project, store, requests };
 }
 
 afterEach(async (): Promise<void> => {
+  for (const store of stores.splice(0)) await store.close();
   await Promise.all(roots.splice(0).map(async (root: string): Promise<void> => { await rm(root, { recursive: true, force: true }); }));
 });
 

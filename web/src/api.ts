@@ -1,5 +1,8 @@
+import { migrateGeneratorBuildInput } from '../../src/domain/build-provenance.js';
+import { BuildManifestSchema } from '../../src/build-schema.js';
 import { z } from 'zod';
-import { ProjectSchema } from '../../src/domain/schema.js';
+import { GeneratorBuildProvenanceSchema, IssueSchema, ProjectSchema } from '../../src/domain/schema.js';
+import type { FinalReadinessReport } from '../../src/domain/final-readiness.js';
 import type { Project } from '../../src/domain/schema.js';
 
 const RequestFailureSchema = z.strictObject({ id: z.uuid(), kind: z.enum(['proposal', 'image', 'speech']), projectId: z.string(), targetId: z.string(),
@@ -14,21 +17,24 @@ const ActiveStorageSchema = z.strictObject({ projectId: z.string(), transactionI
 const InvalidRecoveryMarkerSchema = z.strictObject({ fileName: z.string(), quarantinedPath: z.string(), code: z.string(), message: z.string(), detectedAt: z.string() });
 const ProcessHeartbeatSchema = z.strictObject({ processInstanceId: z.string(), healthy: z.boolean(), lastSuccessAt: z.string().nullable(),
   lastError: z.strictObject({ code: z.string(), message: z.string() }).nullable() });
-const StatusSchema = z.strictObject({ provider: z.literal('codex-app'), totalRequests: z.number().int().nonnegative(), completedRequests: z.number().int().nonnegative(),
-  pendingRequests: z.number().int().nonnegative(), failedRequests: z.number().int().nonnegative(), repeatedRequests: z.number().int().nonnegative(),
+const StatusSchema = z.strictObject({ build: BuildManifestSchema, provider: z.literal('codex-app'), totalRequests: z.number().int().nonnegative(), completedRequests: z.number().int().nonnegative(),
+  pendingRequests: z.number().int().nonnegative(), supersededRequests: z.number().int().nonnegative(), failedRequests: z.number().int().nonnegative(), repeatedRequests: z.number().int().nonnegative(),
   averageLatencyMs: z.number().int().nonnegative().nullable(), maximumLatencyMs: z.number().int().nonnegative().nullable(), apiCostUsd: z.null(), costNote: z.string(),
   recentFailures: z.array(RequestFailureSchema), generationInstruction: z.string(), aiVoiceDisclosure: z.string(),
   storageRecovery: z.array(StorageRecoverySchema), storageRecoveryBlocks: z.array(StorageRecoveryBlockSchema),
   invalidRecoveryMarkers: z.array(InvalidRecoveryMarkerSchema), processHeartbeat: ProcessHeartbeatSchema,
+  activeUpdateErrors: z.array(z.strictObject({ projectId: z.string(), transactionId: z.string(), code: z.string(), message: z.string(), detectedAt: z.string() })),
   activeCreates: z.array(ActiveStorageSchema), activeUpdates: z.array(ActiveStorageSchema) });
 const SummarySchema = z.strictObject({ projectId: z.string(), title: z.string(), revision: z.number(), durationMs: z.number(), shots: z.number(),
   frameRateNumerator: z.number().int().positive(), frameRateDenominator: z.number().int().positive(), dropFrame: z.boolean(), startTimecode: z.string(),
   sampleRate: z.literal([44100, 48000, 96000]),
   framesWithAsset: z.number(), framesAccepted: z.number(), framesOutputSafe: z.number(), framesTotal: z.number(),
   audioWithAsset: z.number(), audioMeasured: z.number(), audioPlayable: z.number(), audioRepairRequired: z.number(), audioTotal: z.number(),
+  visualTimelineSafe: z.boolean(), visualCoverageGapCount: z.number(), shotsOutputSafe: z.number(), shotsTotal: z.number(),
+  textConfirmed: z.number(), textProposed: z.number(), finalOutputReady: z.boolean(),
   textPlayable: z.number(), textTotal: z.number(), blockedOutputCount: z.number(), issues: z.number(), updatedAt: z.string() });
 const CodexRequestSchema = z.strictObject({ id: z.uuid(), kind: z.enum(['proposal', 'image', 'speech']), projectId: z.string(), targetId: z.string(),
-  basisHash: z.string(), status: z.enum(['pending', 'completed', 'failed']), createdAt: z.string(), updatedAt: z.string(), resultRevision: z.number().nullable(),
+  generatorBuild: z.preprocess(migrateGeneratorBuildInput, GeneratorBuildProvenanceSchema.nullable().optional()), basisHash: z.string(), status: z.enum(['pending', 'completed', 'failed', 'superseded']), createdAt: z.string(), updatedAt: z.string(), resultRevision: z.number().nullable(),
   error: z.strictObject({ code: z.string(), message: z.string() }).nullable() });
 const SourceImpactSchema = z.strictObject({ changedSourceFileIds: z.array(z.string()), changedEntityIds: z.array(z.string()), impactedSegmentIds: z.array(z.string()),
   impactedShotIds: z.array(z.string()), lockedShotIds: z.array(z.string()), canApply: z.boolean() });
@@ -80,6 +86,7 @@ export class ApiError extends Error {
 
 export function apiErrorMessage(error: unknown): string {
   if (!(error instanceof ApiError)) return error instanceof Error ? error.message : String(error);
+  if (error.code === 'FINAL_OUTPUT_NOT_READY') return `FINAL OUTPUT NOT READY\n${error.message}`;
   if (error.code === 'PROJECT_BUSY') return '프로젝트 생성 또는 다른 작업이 진행 중입니다. 완료 후 다시 불러오거나 재시도하세요.';
   if (error.code === 'PROJECT_ALREADY_EXISTS') return '같은 Project가 이미 저장돼 있습니다.';
   if (error.category === 'locked' && error.scope === 'asset') return `ASSET REPAIR REQUIRED\n해당 자산의 안전 출력이 차단됐습니다.\n${error.message}`;
@@ -177,4 +184,13 @@ export async function previewSourceUpdate(projectId: string, handoffPath: string
 export async function updateProjectSource(projectId: string, handoffPath: string, proposedTextHoldMs: number, expectedRevision: number): Promise<Project> {
   const data: unknown = await request(`/api/projects/${encodeURIComponent(projectId)}/source-update`, json('POST', { handoffPath, proposedTextHoldMs, expectedRevision }));
   return z.strictObject({ project: ProjectSchema }).parse(data).project;
+}
+
+export async function fetchFinalReadiness(projectId: string): Promise<FinalReadinessReport> {
+  return z.strictObject({ projectId: z.string(), revision: z.number().int().nonnegative(),
+    stage: z.enum(['generated', 'reviewed', 'text-confirmed', 'visual-timeline-safe', 'final-ready']), finalReady: z.boolean(),
+    counts: z.strictObject({ textTotal: z.number(), textConfirmed: z.number(), textProposed: z.number(), shotsTotal: z.number(), shotsApproved: z.number(),
+      visualTimelineSafe: z.number(), visualCoverageGapCount: z.number(), framesTotal: z.number(), framesAccepted: z.number(), audioTotal: z.number(), audioPlayable: z.number() }),
+    issues: z.array(IssueSchema),
+  }).parse(await request(`/api/projects/${encodeURIComponent(projectId)}/final-readiness`, {}));
 }

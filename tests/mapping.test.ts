@@ -68,8 +68,8 @@ describe('Shot Source Link', (): void => {
   it('proposal_rejects_reversed_source_unit_order', async (): Promise<void> => {
     const project: Project = await nativeOutline();
     expect(() => applySegmentProposal(project, 'demonstration', { shots: [
-      { sourceLinks: [{ unitId: '효과음', usage: 'primary-visual' }], durationWeight: 1, action: '후반', visualLocationId: null, camera: { size: 'CU', angle: 'eye', move: 'static' }, presence: [], propIds: [], cameraAxis: null, screenDirection: null, informationIds: [], transitionOut: { kind: 'cut', durationMs: 0, note: '' }, frameDescription: '후반' },
-      { sourceLinks: [{ unitId: '안내-1', usage: 'primary-visual' }, { unitId: '동작', usage: 'primary-visual' }], durationWeight: 1, action: '전반', visualLocationId: null, camera: { size: 'CU', angle: 'eye', move: 'static' }, presence: [], propIds: [], cameraAxis: null, screenDirection: null, informationIds: [], transitionOut: { kind: 'cut', durationMs: 0, note: '' }, frameDescription: '전반' },
+      { sourceLinks: [{ unitId: '동작', usage: 'primary-visual' }, { unitId: '효과음', usage: 'audio-only' }], durationWeight: 1, action: '후반', visualLocationId: null, camera: { size: 'CU', angle: 'eye', move: 'static' }, presence: [], propIds: [], cameraAxis: null, screenDirection: null, informationIds: [], transitionOut: { kind: 'cut', durationMs: 0, note: '' }, frameDescription: '후반' },
+      { sourceLinks: [{ unitId: '안내-1', usage: 'primary-visual' }], durationWeight: 1, action: '전반', visualLocationId: null, camera: { size: 'CU', angle: 'eye', move: 'static' }, presence: [], propIds: [], cameraAxis: null, screenDirection: null, informationIds: [], transitionOut: { kind: 'cut', durationMs: 0, note: '' }, frameDescription: '전반' },
     ] }, 'reverse')).toThrowError(expect.objectContaining({ code: 'PROPOSAL_SOURCE_ORDER_REVERSED' }));
   });
 
@@ -121,7 +121,7 @@ describe('Migration과 Source Update', (): void => {
     for (const rule of legacy.dataset.informationRules) { delete (rule as { segmentId?: string }).segmentId; }
     for (const shot of legacy.shots) { shot.sourceUnitIds = shot.sourceLinks.map((link: ShotSourceLink): string => link.unitId); delete (shot as { sourceLinks?: ShotSourceLink[] }).sourceLinks; }
     const migrated: Project = parseProject(legacy);
-    expect(migrated.schemaVersion).toBe('1.6.0');
+    expect(migrated.schemaVersion).toBe('1.9.0');
     expect(migrated.shots.every((shot: Shot): boolean => shot.sourceLinks.length > 0)).toBe(true);
   });
 

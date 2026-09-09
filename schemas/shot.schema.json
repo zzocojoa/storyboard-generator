@@ -103,6 +103,40 @@
                 "properties": {
                   "kind": {
                     "type": "string",
+                    "const": "frame-range"
+                  },
+                  "frameId": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "endOffsetMs": {
+                    "$ref": "#/$defs/__schema1"
+                  },
+                  "basis": {
+                    "type": "string",
+                    "enum": [
+                      "manual",
+                      "proposal"
+                    ]
+                  },
+                  "status": {
+                    "type": "string",
+                    "const": "confirmed"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "frameId",
+                  "endOffsetMs",
+                  "basis",
+                  "status"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
                     "const": "unresolved"
                   },
                   "basis": {
@@ -265,6 +299,15 @@
         },
         "note": {
           "type": "string"
+        },
+        "incomingExposure": {
+          "type": "string",
+          "enum": [
+            "none",
+            "from-transition-start",
+            "after-black-midpoint",
+            "review-required"
+          ]
         }
       },
       "required": [

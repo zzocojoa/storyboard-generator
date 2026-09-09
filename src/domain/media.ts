@@ -2,7 +2,7 @@ import { attachAudioAsset } from './audio-asset.js';
 import type { AudioNormalizer } from './audio-normalizer.js';
 import { assertNoErrors, contractError } from './errors.js';
 import { inspectImageBytes, wavDurationMs } from './media-inspection.js';
-import type { Asset, AudioCue, GenerationRecord, Project, StoryboardFrame } from './schema.js';
+import type { Asset, AudioCue, GenerationRecord, GeneratorBuildProvenance, Project, StoryboardFrame } from './schema.js';
 import { ProjectSchema } from './schema.js';
 import { validateProject } from './validation.js';
 import { sha256Text } from '../importers/integrity.js';
@@ -35,7 +35,7 @@ function requireUniqueGenerationId(project: Project, generationId: string): void
 
 function generationRecord(
   id: string,
-  result: { provider: string; prompt: string; model: string; requestId: string | null },
+  result: { provider: string; prompt: string; model: string; requestId: string | null; generatorBuild: GeneratorBuildProvenance },
   resultAssetIds: readonly string[],
   shotIds: readonly string[],
   referenceHashes: readonly string[],
@@ -44,7 +44,7 @@ function generationRecord(
   return {
     id, provider: result.provider, model: result.model, modelVersion: null, requestId: result.requestId,
     prompt: result.prompt, templateVersion: '1.0.0', seed: null, referenceHashes: [...referenceHashes],
-    resultAssetIds: [...resultAssetIds], shotIds: [...shotIds], createdAt,
+    resultAssetIds: [...resultAssetIds], shotIds: [...shotIds], createdAt, generatorBuild: result.generatorBuild,
   };
 }
 

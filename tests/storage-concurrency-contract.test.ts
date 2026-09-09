@@ -1,3 +1,4 @@
+import { readBuildManifest } from '../src/build.js';
 import { tmpdir } from 'node:os';
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -19,14 +20,24 @@ import type { AssetWrite, StorageFaultInjector, StorageFaultPoint } from '../src
 import { nativeData, nativePackage, pcmWav, png, productionPackage, TEST_AUDIO_NORMALIZATION_OPTIONS, withNativeData } from './helpers.js';
 
 const roots: string[] = [];
+const stores: ProjectStore[] = [];
+const apps: FastifyInstance[] = [];
 const DEAD_PROCESS_ID: number = 2_147_483_647;
 
 type StoreFixture = { root: string; dataRoot: string; store: ProjectStore; project: Project };
 type Barrier = { injector: StorageFaultInjector; reached: Promise<void>; release(): void };
 
 afterEach(async (): Promise<void> => {
+  for (const app of apps.splice(0)) await app.close();
+  for (const store of stores.splice(0)) await store.close();
   await Promise.all(roots.splice(0).map((root: string): Promise<void> => rm(root, { recursive: true, force: true })));
 });
+
+function trackedStore(dataRoot: string, injector?: StorageFaultInjector): ProjectStore {
+  const store: ProjectStore = new ProjectStore(dataRoot, injector);
+  stores.push(store);
+  return store;
+}
 
 async function temporaryRoot(prefix: string): Promise<string> {
   const root: string = await mkdtemp(join(tmpdir(), prefix));
@@ -43,7 +54,7 @@ async function outline(projectId: string): Promise<Project> {
 async function storeFixture(injector: StorageFaultInjector | null): Promise<StoreFixture> {
   const root: string = await temporaryRoot('storyboard-concurrency-');
   const dataRoot: string = join(root, 'data');
-  const store: ProjectStore = injector === null ? new ProjectStore(dataRoot) : new ProjectStore(dataRoot, injector);
+  const store: ProjectStore = injector === null ? trackedStore(dataRoot) : trackedStore(dataRoot, injector);
   const project: Project = await store.create(await outline(`contract-${roots.length}`));
   return { root, dataRoot, store, project };
 }
@@ -120,7 +131,9 @@ async function appForStore(root: string, dataRoot: string, store: ProjectStore):
   const config: AppConfig = { host: '127.0.0.1', port: 4317, dataRoot, webRoot,
     pdfFontPath: resolve('assets/fonts/NanumGothic-Regular.ttf'), audioNormalization: TEST_AUDIO_NORMALIZATION_OPTIONS,
     codex: { requestRoot: join(root, 'requests'), speechVoice: 'Yuna' } };
-  return createApp(config, store, new CodexRequestStore(config.codex.requestRoot));
+  const app: FastifyInstance = await createApp(config, store, new CodexRequestStore(config.codex.requestRoot, readBuildManifest()));
+  apps.push(app);
+  return app;
 }
 
 async function errorCode(action: Promise<unknown>): Promise<string> {
@@ -190,14 +203,14 @@ describe('A. lock-before-read 저장 순서', (): void => {
 describe('B. 두 Store 동시 갱신', (): void => {
   it('concurrent_update_is_busy_while_first_holds_lock', async (): Promise<void> => {
     const gate: Barrier = barrier('after-update-current-read'); const fixture: StoreFixture = await storeFixture(gate.injector);
-    const second: ProjectStore = new ProjectStore(fixture.dataRoot); await second.initialize();
+    const second: ProjectStore = trackedStore(fixture.dataRoot); await second.initialize();
     const first: Promise<Project> = fixture.store.update(fixture.project.projectId, 0, (current: Project): Project => ({ ...current, title: 'A' }), []);
     await gate.reached; await expect(second.update(fixture.project.projectId, 0, (current: Project): Project => ({ ...current, title: 'B' }), [])).rejects.toMatchObject({ code: 'PROJECT_BUSY' });
     gate.release(); await first;
   });
 
   it('second_update_rechecks_revision_after_first_commit', async (): Promise<void> => {
-    const fixture: StoreFixture = await storeFixture(null); const second: ProjectStore = new ProjectStore(fixture.dataRoot); await second.initialize();
+    const fixture: StoreFixture = await storeFixture(null); const second: ProjectStore = trackedStore(fixture.dataRoot); await second.initialize();
     await fixture.store.update(fixture.project.projectId, 0, (current: Project): Project => ({ ...current, title: 'A' }), []);
     await expect(second.update(fixture.project.projectId, 0, (current: Project): Project => ({ ...current, title: 'B' }), [])).rejects.toMatchObject({ code: 'REVISION_CONFLICT' });
   });
@@ -210,7 +223,7 @@ describe('B. 두 Store 동시 갱신', (): void => {
 
   it('concurrent_updates_commit_exactly_once', async (): Promise<void> => {
     const gate: Barrier = barrier('after-update-current-read'); const fixture: StoreFixture = await storeFixture(gate.injector);
-    const second: ProjectStore = new ProjectStore(fixture.dataRoot); await second.initialize();
+    const second: ProjectStore = trackedStore(fixture.dataRoot); await second.initialize();
     const first: Promise<Project> = fixture.store.update(fixture.project.projectId, 0, (current: Project): Project => ({ ...current, title: 'A' }), []);
     await gate.reached; expect(await errorCode(second.update(fixture.project.projectId, 0, (current: Project): Project => ({ ...current, title: 'B' }), []))).toBe('PROJECT_BUSY');
     gate.release(); await first;
@@ -220,21 +233,21 @@ describe('B. 두 Store 동시 갱신', (): void => {
 
   it('concurrent_same_change_does_not_restore_previous_revision', async (): Promise<void> => {
     const gate: Barrier = barrier('after-update-current-read'); const fixture: StoreFixture = await storeFixture(gate.injector);
-    const second: ProjectStore = new ProjectStore(fixture.dataRoot); await second.initialize();
+    const second: ProjectStore = trackedStore(fixture.dataRoot); await second.initialize();
     const first: Promise<Project> = fixture.store.update(fixture.project.projectId, 0, (current: Project): Project => ({ ...current, title: '동일' }), []);
     await gate.reached; await expect(second.update(fixture.project.projectId, 0, (current: Project): Project => ({ ...current, title: '동일' }), [])).rejects.toMatchObject({ code: 'PROJECT_BUSY' });
     gate.release(); await first; expect((await second.read(fixture.project.projectId)).title).toBe('동일');
   });
 
   it('concurrent_same_change_does_not_create_recovery_block', async (): Promise<void> => {
-    const gate: Barrier = barrier('after-update-current-read'); const fixture: StoreFixture = await storeFixture(gate.injector); const second: ProjectStore = new ProjectStore(fixture.dataRoot); await second.initialize();
+    const gate: Barrier = barrier('after-update-current-read'); const fixture: StoreFixture = await storeFixture(gate.injector); const second: ProjectStore = trackedStore(fixture.dataRoot); await second.initialize();
     const first: Promise<Project> = fixture.store.update(fixture.project.projectId, 0, (current: Project): Project => ({ ...current, title: '동일' }), []);
     await gate.reached; await errorCode(second.update(fixture.project.projectId, 0, (current: Project): Project => ({ ...current, title: '동일' }), [])); gate.release(); await first;
     expect(await recoveryBlockCount(fixture.dataRoot)).toBe(0);
   });
 
   it('concurrent_same_asset_does_not_delete_committed_asset', async (): Promise<void> => {
-    const gate: Barrier = barrier('after-update-asset-linked'); const fixture: StoreFixture = await storeFixture(gate.injector); const second: ProjectStore = new ProjectStore(fixture.dataRoot); await second.initialize();
+    const gate: Barrier = barrier('after-update-asset-linked'); const fixture: StoreFixture = await storeFixture(gate.injector); const second: ProjectStore = trackedStore(fixture.dataRoot); await second.initialize();
     const bytes: Buffer = await png(2, 2); const asset: Asset = imageAsset('shared', bytes, 'assets/shared.png'); const writes: AssetWrite[] = [{ relativePath: asset.path, content: bytes }];
     const first: Promise<Project> = fixture.store.update(fixture.project.projectId, 0, (current: Project): Project => ({ ...current, assets: [asset] }), writes);
     await gate.reached; await expect(second.update(fixture.project.projectId, 0, (current: Project): Project => ({ ...current, assets: [asset] }), writes)).rejects.toMatchObject({ code: 'PROJECT_BUSY' });
@@ -242,7 +255,7 @@ describe('B. 두 Store 동시 갱신', (): void => {
   });
 
   it('concurrent_asset_update_publishes_only_one_version', async (): Promise<void> => {
-    const gate: Barrier = barrier('after-update-asset-linked'); const fixture: StoreFixture = await storeFixture(gate.injector); const second: ProjectStore = new ProjectStore(fixture.dataRoot); await second.initialize();
+    const gate: Barrier = barrier('after-update-asset-linked'); const fixture: StoreFixture = await storeFixture(gate.injector); const second: ProjectStore = trackedStore(fixture.dataRoot); await second.initialize();
     const bytes: Buffer = await png(2, 2); const asset: Asset = imageAsset('one', bytes, 'assets/one.png'); const writes: AssetWrite[] = [{ relativePath: asset.path, content: bytes }];
     const first: Promise<Project> = fixture.store.update(fixture.project.projectId, 0, (current: Project): Project => ({ ...current, assets: [asset] }), writes);
     await gate.reached; await errorCode(second.update(fixture.project.projectId, 0, (current: Project): Project => ({ ...current, assets: [asset] }), writes)); gate.release(); await first;
@@ -250,7 +263,7 @@ describe('B. 두 Store 동시 갱신', (): void => {
   });
 
   it('slow_asset_preflight_blocks_other_update_before_read', async (): Promise<void> => {
-    const gate: Barrier = barrier('after-update-under-lock-preflight'); const fixture: StoreFixture = await storeFixture(gate.injector); const second: ProjectStore = new ProjectStore(fixture.dataRoot); await second.initialize();
+    const gate: Barrier = barrier('after-update-under-lock-preflight'); const fixture: StoreFixture = await storeFixture(gate.injector); const second: ProjectStore = trackedStore(fixture.dataRoot); await second.initialize();
     let secondTransformCalls: number = 0; const bytes: Buffer = await png(2, 2); const asset: Asset = imageAsset('slow', bytes, 'assets/slow.png');
     const first: Promise<Project> = fixture.store.update(fixture.project.projectId, 0, (current: Project): Project => ({ ...current, assets: [asset] }), [{ relativePath: asset.path, content: bytes }]);
     await gate.reached; await errorCode(second.update(fixture.project.projectId, 0, (current: Project): Project => { secondTransformCalls += 1; return current; }, []));
@@ -258,14 +271,14 @@ describe('B. 두 Store 동시 갱신', (): void => {
   });
 
   it('busy_update_creates_no_transaction', async (): Promise<void> => {
-    const gate: Barrier = barrier('after-update-lock-acquired'); const fixture: StoreFixture = await storeFixture(gate.injector); const second: ProjectStore = new ProjectStore(fixture.dataRoot); await second.initialize();
+    const gate: Barrier = barrier('after-update-lock-acquired'); const fixture: StoreFixture = await storeFixture(gate.injector); const second: ProjectStore = trackedStore(fixture.dataRoot); await second.initialize();
     const first: Promise<Project> = fixture.store.update(fixture.project.projectId, 0, (current: Project): Project => current, []); await gate.reached;
     await errorCode(second.update(fixture.project.projectId, 0, (current: Project): Project => current, [])); expect(await transactions(fixture.dataRoot, fixture.project.projectId)).toEqual([]);
     gate.release(); await first;
   });
 
   it('busy_update_leaves_no_lock_of_its_own', async (): Promise<void> => {
-    const gate: Barrier = barrier('after-update-lock-acquired'); const fixture: StoreFixture = await storeFixture(gate.injector); const second: ProjectStore = new ProjectStore(fixture.dataRoot); await second.initialize();
+    const gate: Barrier = barrier('after-update-lock-acquired'); const fixture: StoreFixture = await storeFixture(gate.injector); const second: ProjectStore = trackedStore(fixture.dataRoot); await second.initialize();
     const first: Promise<Project> = fixture.store.update(fixture.project.projectId, 0, (current: Project): Project => current, []); await gate.reached;
     await errorCode(second.update(fixture.project.projectId, 0, (current: Project): Project => current, [])); gate.release(); await first;
     expect(await exists(join(projectDirectory(fixture.dataRoot, fixture.project.projectId), 'write.lock'))).toBe(false);
@@ -289,14 +302,14 @@ describe('C. 실패 시 잠금 정리', (): void => {
   }
 
   it('transform_failure_releases_lock', async (): Promise<void> => {
-    const fixture: StoreFixture = await storeFixture(null); const second: ProjectStore = new ProjectStore(fixture.dataRoot); await second.initialize();
+    const fixture: StoreFixture = await storeFixture(null); const second: ProjectStore = trackedStore(fixture.dataRoot); await second.initialize();
     await expect(fixture.store.update(fixture.project.projectId, 0, (): Project => { throw new Error('transform 실패'); }, [])).rejects.toThrow('transform 실패');
     const committed: Project = await second.update(fixture.project.projectId, 0, (current: Project): Project => ({ ...current, title: 'B 정상 저장' }), []);
     expect(committed.revision).toBe(1); expect(await recoveryBlockCount(fixture.dataRoot)).toBe(0);
   });
   it('invalid_next_project_releases_lock', async (): Promise<void> => expectReleased((fixture: StoreFixture): Promise<Project> => fixture.store.update(fixture.project.projectId, 0, (current: Project): Project => ({ ...current, title: '' }), [])));
   it('asset_preflight_failure_releases_lock', async (): Promise<void> => {
-    const fixture: StoreFixture = await storeFixture(null); const second: ProjectStore = new ProjectStore(fixture.dataRoot); await second.initialize();
+    const fixture: StoreFixture = await storeFixture(null); const second: ProjectStore = trackedStore(fixture.dataRoot); await second.initialize();
     const bytes: Buffer = Buffer.from('invalid image'); const asset: Asset = imageAsset('invalid', bytes, 'assets/invalid.png');
     await expect(fixture.store.update(fixture.project.projectId, 0, (current: Project): Project => ({ ...current, assets: [asset] }), [{ relativePath: asset.path, content: bytes }])).rejects.toMatchObject({ code: 'ASSET_CONTENT_CORRUPT' });
     const committed: Project = await second.update(fixture.project.projectId, 0, (current: Project): Project => ({ ...current, title: 'B 정상 저장' }), []);
@@ -324,7 +337,7 @@ describe('C. 실패 시 잠금 정리', (): void => {
 
 describe('D. Asset-free Initial Create', (): void => {
   async function rejectedCreate(project: Project): Promise<{ root: string; dataRoot: string; store: ProjectStore; code: string }> {
-    const root: string = await temporaryRoot('storyboard-create-contract-'); const dataRoot: string = join(root, 'data'); const store: ProjectStore = new ProjectStore(dataRoot);
+    const root: string = await temporaryRoot('storyboard-create-contract-'); const dataRoot: string = join(root, 'data'); const store: ProjectStore = trackedStore(dataRoot);
     return { root, dataRoot, store, code: await errorCode(store.create(project)) };
   }
 
@@ -341,7 +354,7 @@ describe('D. Asset-free Initial Create', (): void => {
     expect((await rejectedCreate({ ...base, audioCues: base.audioCues.map((value: AudioCue): AudioCue => value.id === cue.id ? { ...value, assetId: 'audio-ref' } : value) })).code).toBe('UNSUPPORTED_INITIAL_PROJECT_ASSETS');
   });
   it('initial_create_rejects_generation_record_asset_reference', async (): Promise<void> => {
-    const base: Project = await outline('initial-generation'); const record: GenerationRecord = { id: 'generation', provider: 'codex-app', model: 'imagegen', modelVersion: null,
+    const base: Project = await outline('initial-generation'); const record: GenerationRecord = { id: 'generation', provider: 'codex-app', model: 'imagegen', generatorBuild: null, modelVersion: null,
       requestId: null, prompt: '검증', templateVersion: '1', seed: null, referenceHashes: [], resultAssetIds: ['generated-ref'], shotIds: [], createdAt: '2026-09-06T00:00:00.000Z' };
     expect((await rejectedCreate({ ...base, generationRecords: [record] })).code).toBe('UNSUPPORTED_INITIAL_PROJECT_ASSETS');
   });
@@ -374,14 +387,14 @@ describe('D. Asset-free Initial Create', (): void => {
   });
   it('existing_asset_bearing_project_remains_recoverable', async (): Promise<void> => {
     const fixture: StoreFixture = await storeFixture(null); const saved = await addImageAsset(fixture, 'recoverable');
-    const recovered: ProjectStore = new ProjectStore(fixture.dataRoot); await recovered.initialize();
+    const recovered: ProjectStore = trackedStore(fixture.dataRoot); await recovered.initialize();
     expect((await recovered.asset(saved.project.projectId, saved.asset.id)).content.equals(saved.bytes)).toBe(true);
   });
   it('recovery_complete_asset_bearing_final_is_still_verified', async (): Promise<void> => {
     const crash: StorageFaultInjector = { ownerPid: DEAD_PROCESS_ID, trigger(point: StorageFaultPoint): void { if (point === 'before-update-cleanup') throw new SimulatedStorageCrash(point); } };
     const fixture: StoreFixture = await storeFixture(crash); const bytes: Buffer = await png(2, 2); const asset: Asset = imageAsset('complete', bytes, 'assets/complete.png');
     await expect(fixture.store.update(fixture.project.projectId, 0, (current: Project): Project => ({ ...current, assets: [asset] }), [{ relativePath: asset.path, content: bytes }])).rejects.toMatchObject({ code: 'SIMULATED_STORAGE_CRASH' });
-    const recovered: ProjectStore = new ProjectStore(fixture.dataRoot); await recovered.initialize(); expect((await recovered.read(fixture.project.projectId)).assets).toContainEqual(asset); expect(recovered.recoveryBlocks()).toEqual([]);
+    const recovered: ProjectStore = trackedStore(fixture.dataRoot); await recovered.initialize(); expect((await recovered.read(fixture.project.projectId)).assets).toContainEqual(asset); expect(recovered.recoveryBlocks()).toEqual([]);
   });
 });
 
@@ -573,7 +586,7 @@ describe('H. PRJ-007 회귀', (): void => {
     const fixture = await unit045AssetProject(); expect(fixture.project.audioCues.find((cue: AudioCue): boolean => cue.unitId === 'UNIT-045')?.timingRelation).toBe('j-cut');
   });
   it('prj007_safe_audio_still_returns_riff', async (): Promise<void> => {
-    const media = await unit045AssetProject(); const root: string = await temporaryRoot('storyboard-prj007-'); const dataRoot: string = join(root, 'data'); const store: ProjectStore = new ProjectStore(dataRoot);
+    const media = await unit045AssetProject(); const root: string = await temporaryRoot('storyboard-prj007-'); const dataRoot: string = join(root, 'data'); const store: ProjectStore = trackedStore(dataRoot);
     await store.create(media.base); await store.update(media.base.projectId, 0, (): Project => media.project, [{ relativePath: media.asset.path, content: media.bytes }]);
     const app: FastifyInstance = await appForStore(root, dataRoot, store); const response = await app.inject({ method: 'GET', url: `/api/projects/PRJ-007/output/audio/${media.cue.id}` });
     expect(response.statusCode).toBe(200); expect(response.rawPayload.subarray(0, 4).toString('ascii')).toBe('RIFF'); await app.close();
@@ -582,7 +595,7 @@ describe('H. PRJ-007 회귀', (): void => {
     const fixture = await unit045AssetProject(); expect(fixture.project.dataset.informationRules).toEqual(fixture.base.dataset.informationRules);
   });
   it('prj007_asset_catalog_remains_append_only', async (): Promise<void> => {
-    const media = await unit045AssetProject(); const root: string = await temporaryRoot('storyboard-prj007-assets-'); const store: ProjectStore = new ProjectStore(join(root, 'data'));
+    const media = await unit045AssetProject(); const root: string = await temporaryRoot('storyboard-prj007-assets-'); const store: ProjectStore = trackedStore(join(root, 'data'));
     await store.create(media.base); const one: Project = await store.update(media.base.projectId, 0, (): Project => media.project, [{ relativePath: media.asset.path, content: media.bytes }]);
     const two: Project = await store.update(media.base.projectId, one.revision, (current: Project): Project => ({ ...current, title: `${current.title} 검토` }), []);
     expect(two.assets).toEqual(one.assets); expect(two.assets).toContainEqual(media.asset);

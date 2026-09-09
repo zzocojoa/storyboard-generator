@@ -37,7 +37,7 @@ describe('P0 원문과 공개 시점 회귀', (): void => {
       ...project,
       dataset: { ...project.dataset, informationRules: project.dataset.informationRules.map((rule) => rule.id === 'fact:FACT-10' ? { ...rule, baseNotBeforeMs: 1140000 } : rule) },
       textMappingDecisions: project.textMappingDecisions.map((decision) => ({ ...decision, status: 'confirmed' })),
-      shots: project.shots.map((candidate) => candidate.id === shot.id ? { ...candidate, sourceLinks: [{ unitId, usage: 'primary-visual', status: 'confirmed', temporalAnchor: { kind: 'frame', frameId: frame.id, basis: 'manual', status: 'confirmed' } }], informationIds: ['fact:FACT-10'] } : candidate),
+      shots: project.shots.map((candidate) => candidate.id === shot.id ? { ...candidate, sourceLinks: [{ unitId, usage: 'primary-visual', status: 'confirmed', temporalAnchor: { kind: 'frame-range', frameId: frame.id, endOffsetMs: shot.endMs - shot.startMs, basis: 'manual', status: 'confirmed' } }], informationIds: ['fact:FACT-10'] } : candidate),
       frames: [...project.frames, frame],
     };
     expect(buildFrameImageContext(changed, frame.id).allowedInformationIds).toContain('fact:FACT-10');

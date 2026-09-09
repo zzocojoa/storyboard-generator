@@ -1,3 +1,4 @@
+import { readBuildManifest } from '../src/build.js';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -22,7 +23,7 @@ async function fixtureApp(): Promise<{ app: FastifyInstance; root: string; reque
   const config: AppConfig = { host: '127.0.0.1', port: 4317, dataRoot: join(root, 'data'), webRoot,
     pdfFontPath: resolve('assets/fonts/NanumGothic-Regular.ttf'), audioNormalization: TEST_AUDIO_NORMALIZATION_OPTIONS,
     codex: { requestRoot: join(root, 'requests'), speechVoice: 'Yuna' } };
-  const requests: CodexRequestStore = new CodexRequestStore(config.codex.requestRoot);
+  const requests: CodexRequestStore = new CodexRequestStore(config.codex.requestRoot, readBuildManifest());
   return { app: await createApp(config, new ProjectStore(config.dataRoot), requests), root, requests };
 }
 

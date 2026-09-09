@@ -133,7 +133,7 @@ flowchart LR
 4. **컷 초안:** 행동 전환, 화자 변화, 시선, 중요한 소품, 새로 공개되는 정보를 기준으로 컷을 제안한다. 사용자는 컷을 합치거나 나누고 특정 컷만 다시 생성한다.
 5. **그림 콘티:** 인물·장소·소품 기준을 공통으로 참조해 컷 그림을 만든다. 움직임이 중요한 컷은 시작·종료 프레임과 이동 방향을 표시한다.
 6. **검증:** 원문 대조, 시간표, 자막 노출, 연속성, 정보 공개를 확인하고 그림과 음성을 시간순으로 재생한다.
-7. **내보내기:** 검토 상태를 포함한 그림 콘티 PDF, 촬영·자산 목록 CSV, 재편집 가능한 프로젝트 JSON을 제공한다.
+7. **내보내기:** Draft와 Final을 구분해 PDF·CSV·미리보기를 제공한다. 생성 완료만으로 최종 출력을 허용하지 않고 Text 시간 확정, 전체 실제 Playhead 안전성, 컷·Frame 승인과 실제 Audio·Asset 검사를 통과해야 한다. 재편집 JSON과 생성 Build·감사 근거를 묶은 읽기 전용 Review Bundle을 제공한다.
 
 편집 화면은 장면/구간 목록, 중앙의 컷 카드, 선택 컷의 원문·연출·오디오·자막을 중심으로 구성한다. 주요 작업은 “컷 수정”, “합치기/나누기”, “다시 생성”, “확정”, “원문 보기”다.
 
@@ -277,6 +277,17 @@ flowchart LR
 5. 명시된 사실·단서·반전의 공개 시점을 앞당기는 참조가 0건이어야 한다.
 6. 입력 변경 후 해당 컷과 연속성에 영향을 받는 후속 컷을 표시하고, 잠근 사용자 수정은 보존한다.
 7. 저장된 JSON을 다시 열었을 때 컷 순서·텍스트·자산 연결·검토 상태가 유지된다. PDF와 CSV의 컷 수·순서·시간이 프로젝트와 일치한다.
+8. `proposed` Text는 표시된 Draft에서만 허용하며 Final은 차단한다. Confirm 이후에도 권한·Mapping·Gate를 재검사한다.
+9. Source가 활성이지 않은 실제 Playhead는 과거 Frame으로 덮지 않는다. 수동 수정·이동의 신규·확대 Gap과 Gap 컷 승인을 차단한다. Black은 명시적이며 Hold는 인접 이전 컷 종료 직전의 안전 원본을 증명한다.
+10. Frame 공개 시점과 표시 구간을 분리하고 모호한 기존 구간은 추측하지 않는다. 생성 결과는 당시 Build와 감사 자료를 연결하며 기존 Build 불명 상태를 보존한다.
+11. 기존 저장본은 원본·전체 Version·Asset·요청 해시를 바꾸지 않고 별도 검토 디렉터리에 재검증한다. 실제 Chromium의 WAV Decode·Metadata·Seek·Cue 종료·정리를 확인한다. 세부 계약과 결과는 Design·Report를 기준으로 유지한다.
+
+12. Mode와 Source Links는 원자 변경하고 성공은 revision 하나, 실패는 원본 불변으로 확인한다. 최초 시각 공개 순서는 실제 Temporal Anchor의 Unit별 최소 시각으로 검사한다.
+13. 생성 계약은 Skill·AGENTS·Schema·Runtime Voice까지 Fingerprint에 포함하고 HEAD와 dirty 상태를 분리한다. 이전 Build Pending은 감사 이력을 보존한 Superseded로 구분한다.
+14. Review Final은 저장소 Quiescence를 검사하고 Draft는 저장 문제를 표시한다. 열거 순서가 달라도 같은 입력·Build·시각의 Bundle checksum이 일치해야 한다.
+15. Transition 종류별 실제 Incoming 노출 시점에서 Gate를 검사하며 custom 미정 정책은 차단한다. Status는 초기화 뒤 생긴 외부 Lock을 발견한다.
+16. Bundle Builder와 Asset Generation Build를 구별한다. External 출력은 원문·Prompt·경로·지정 PII를 모든 출력 Projection에서 치환하고 미검사 이미지는 Placeholder로 제한한다.
+17. 목록 Cache는 안전 출력의 파일 재검증을 대체하지 않는다. Invalid Range는 전체 크기를 알리는 416이다. 운영 원본·Version·Asset·Request 해시가 검증 전후 같아야 한다.
 
 ### 9.2 사람이 확인할 기준
 
@@ -347,7 +358,7 @@ flowchart LR
 
 다음 PDCA 작업은 [구현 일치 분석](../../03-analysis/storyboard-generator.analysis.md)의 남은 제작 품질 검토를 계획서 9.3절의 대표 예외로 확대하는 것이다.
 
-PDCA 상태: Plan·Design·Do·코드 기준 Check/Act 완료. 기능 요구사항 일치 결과와 검증 근거는 분석 문서, 첫 완성본 결과와 남은 제작 검토는 [완료 보고서](../../04-report/storyboard-generator.report.md)에 기록한다. 적용한 [pdca 스킬][SKILL]의 MCP 상태 도구는 현재 사용 가능한 도구 목록에 없어 외부 상태 등록은 수행하지 않았다.
+문서·코드 상태: Schema 1.9.0의 Final Readiness·Playhead 출력·원자 Visual Plan·시간 기반 최초 공개·Build Fingerprint·Request Supersede·읽기 전용 Storage Health·결정적 Internal/External Review Bundle·외부 Lock Status·목록 Integrity Cache·Range 416이 구현돼 있다. 자동 검사와 실제 브라우저·HTTP·로컬 저장본 결과는 [완료 보고서](../../04-report/storyboard-generator.report.md)에 기록한다. Request Key Lock·CAS·Journal 복구, Legacy Segment 순차 수리, 원자 Lock 게시, Git unknown, 안정 Integrity Snapshot·부분 cache 보존, Output Claim과 실제 Audio Stress를 포함한다. 세부 계약은 Design, 이번 로컬 실행 증거와 Linux 미확인 한계는 Report를 따른다. PDCA 외부 상태 도구 호출이나 상태 등록을 완료 근거로 사용하지 않는다. 다음 범위는 사람의 제작 품질 검토다.
 
 [S01]: </Users/beatlefeed/Documents/ChatGPT/유튜브_V2/PROJECTS/PRJ-007/09_PRODUCTION/broadcast_readable_script.md>
 [S02]: </Users/beatlefeed/Documents/ChatGPT/유튜브_V2/PROJECTS/PRJ-007/09_PRODUCTION/reenactment_character_script.md>

@@ -1,7 +1,9 @@
-import { assertNoErrors, contractError } from './errors.js';
-import { approvalIssuesForShot, effectiveInformationGate, sourceAnchorRange } from './mapping.js';
-import { ProjectSchema, ShotContentSchema } from './schema.js';
+import { z } from 'zod';
+import { assertNoErrors, contractError, issue } from './errors.js';
+import { approvalIssuesForShot, effectiveInformationGate, reviewSourcePlanIssues, sourceAnchorRange, sourcePolicyIssueKey, sourcePolicyReviewIssues } from './mapping.js';
+import { ProjectSchema, ShotContentSchema, ShotSourceLinkSchema, ShotVisualModeSchema } from './schema.js';
 import type { Asset, AudioCue, Issue, LockedField, Project, Shot, ShotContent, ShotSourceLink, SourceUnit, StoryboardFrame, TextCue, TextMappingDecision, TextPlacement } from './schema.js';
+import { shotVisualCoverageIssues, visualModeStructureIssues } from './source-policy.js';
 import { validateProject } from './validation.js';
 
 export function shotContent(shot: Shot): ShotContent {
@@ -44,10 +46,86 @@ export function updateShotContent(project: Project, shotId: string, input: ShotC
   const fields: LockedField[] = changedContentFields(shot, content);
   requireUnlocked(shot, fields);
   if (fields.length === 0) return project;
+  if (shot.visualMode !== content.visualMode) {
+    throw contractError('VISUAL_PLAN_ATOMIC_UPDATE_REQUIRED', `${shotId}: visualMode와 전체 sourceLinks를 PATCH /api/projects/:projectId/shots/:shotId/visual-plan의 visualPlan으로 함께 저장하세요.`, []);
+  }
   return finishEdit(project, { ...project,
     shots: project.shots.map((candidate: Shot): Shot => candidate.id === shotId ? { ...candidate, ...content, proposalOrigin: 'manual', approvalStatus: 'proposed' } : candidate),
     frames: project.frames.map((frame: StoryboardFrame): StoryboardFrame => frame.shotId === shotId ? { ...frame, visualReview: 'pending' } : frame),
   });
+}
+
+export const ShotVisualPlanInputSchema = z.strictObject({ visualMode: ShotVisualModeSchema, sourceLinks: z.array(ShotSourceLinkSchema) });
+export type ShotVisualPlanInput = z.infer<typeof ShotVisualPlanInputSchema>;
+
+function projectWithVisualPlan(project: Project, shotId: string, input: ShotVisualPlanInput): Project {
+  return { ...project,
+    shots: project.shots.map((shot: Shot): Shot => shot.id === shotId ? { ...shot, ...input, approvalStatus: 'proposed', proposalOrigin: 'manual' } : shot),
+    frames: project.frames.map((frame: StoryboardFrame): StoryboardFrame => frame.shotId === shotId ? { ...frame, visualReview: 'pending' } : frame),
+  };
+}
+
+export type VisualPlanChangeReview = { blockingIssues: Issue[]; existingUnrelatedIssues: Issue[] };
+const CrossShotSourceCodes: ReadonlySet<string> = new Set<string>([
+  'DUPLICATE_PRIMARY_SOURCE', 'CONTINUED_SOURCE_WITHOUT_PRIMARY', 'SOURCE_FIRST_REVEAL_ORDER_REVERSED',
+]);
+const FirstRevealEvidenceSchema = z.strictObject({ segmentId: z.string(),
+  earlier: z.strictObject({ unitId: z.string(), order: z.number(), firstRevealMs: z.number() }),
+  later: z.strictObject({ unitId: z.string(), order: z.number(), firstRevealMs: z.number() }),
+});
+
+function firstRevealIssueReduced(before: Issue, after: Issue): boolean {
+  if (before.code !== 'SOURCE_FIRST_REVEAL_ORDER_REVERSED' || after.code !== before.code || before.actual === null || after.actual === null
+    || before.severity !== after.severity || before.entityId !== after.entityId || before.field !== after.field || before.expected !== after.expected) return false;
+  const prior = FirstRevealEvidenceSchema.parse(JSON.parse(before.actual) as unknown);
+  const next = FirstRevealEvidenceSchema.parse(JSON.parse(after.actual) as unknown);
+  return prior.segmentId === next.segmentId && prior.earlier.unitId === next.earlier.unitId && prior.later.unitId === next.later.unitId
+    && prior.earlier.order === next.earlier.order && prior.later.order === next.later.order
+    && next.earlier.firstRevealMs - next.later.firstRevealMs < prior.earlier.firstRevealMs - prior.later.firstRevealMs;
+}
+
+/** 컷 내부 계약은 항상 검사하고 구간 관계의 기존 오류는 새로 생기거나 악화된 경우만 저장을 막는다. */
+export function reviewVisualPlanChangeIssues(current: Project, next: Project, shotId: string): VisualPlanChangeReview {
+  const shot: Shot = requireShot(next, shotId);
+  const before: Issue[] = sourcePolicyReviewIssues(current, shot.segmentId);
+  const after: Issue[] = sourcePolicyReviewIssues(next, shot.segmentId);
+  const previousKeys: Set<string> = new Set<string>(before.map(sourcePolicyIssueKey));
+  const segmentKeys: Set<string> = new Set<string>(after.map(sourcePolicyIssueKey));
+  const isExisting = (value: Issue): boolean => (value.entityId !== shotId || CrossShotSourceCodes.has(value.code))
+    && (previousKeys.has(sourcePolicyIssueKey(value)) || before.some((prior: Issue): boolean => firstRevealIssueReduced(prior, value)));
+  const blocking: Issue[] = [...after.filter((value: Issue): boolean => !isExisting(value)),
+    ...reviewSourcePlanIssues(next, shot).filter((value: Issue): boolean => !segmentKeys.has(sourcePolicyIssueKey(value))),
+    ...visualModeStructureIssues(next, shot), ...shotVisualCoverageIssues(next, shot),
+    ...validateProject(next, current.dataset).filter((value: Issue): boolean => value.severity === 'error')];
+  return { blockingIssues: [...new Map(blocking.map((value: Issue): [string, Issue] => [sourcePolicyIssueKey(value), value])).values()],
+    existingUnrelatedIssues: after.filter(isExisting) };
+}
+
+/** UI의 전체 Draft를 실제 저장과 같은 정책으로 검토하되 저장 상태는 변경하지 않는다. */
+export function reviewShotVisualPlanChange(project: Project, shotId: string, input: ShotVisualPlanInput): VisualPlanChangeReview {
+  const shot: Shot = requireShot(project, shotId);
+  const parsed = ShotVisualPlanInputSchema.safeParse(input);
+  if (!parsed.success) return { existingUnrelatedIssues: [], blockingIssues: parsed.error.issues.map((problem): Issue => issue('INVALID_VISUAL_PLAN', 'conflict', shotId,
+    problem.path.join('.'), problem.message, 'valid visual plan', null, [])) };
+  const locks: Issue[] = shot.lockedFields.filter((field: LockedField): boolean => field === 'frames' || field === 'sources')
+    .map((field: LockedField): Issue => issue('SHOT_FIELD_LOCKED', 'conflict', shotId, field, `${field} 필드를 먼저 잠금 해제하세요.`, 'unlocked', field, []));
+  const review: VisualPlanChangeReview = reviewVisualPlanChangeIssues(project, projectWithVisualPlan(project, shotId, parsed.data), shotId);
+  return { ...review, blockingIssues: [...locks, ...review.blockingIssues] };
+}
+
+export function reviewShotVisualPlan(project: Project, shotId: string, input: ShotVisualPlanInput): Issue[] {
+  return reviewShotVisualPlanChange(project, shotId, input).blockingIssues;
+}
+
+/** 모드와 전체 Source를 동시에 적용하여 중간 상태 없이 검증하고 이전 생성 자산을 보존한다. */
+export function updateShotVisualPlan(project: Project, shotId: string, input: ShotVisualPlanInput): Project {
+  const shot: Shot = requireShot(project, shotId);
+  requireUnlocked(shot, ['frames', 'sources']);
+  const parsed: ShotVisualPlanInput = ShotVisualPlanInputSchema.parse(input);
+  const next: Project = ProjectSchema.parse(projectWithVisualPlan(project, shotId, parsed));
+  const issues: Issue[] = reviewVisualPlanChangeIssues(project, next, shotId).blockingIssues;
+  if (issues.length > 0) throw contractError('INVALID_VISUAL_PLAN', issues.map((value: Issue): string => `${value.code}: ${value.message}`).join('\n'), issues);
+  return next;
 }
 
 export function setShotLocks(project: Project, shotId: string, fields: readonly LockedField[]): Project {
@@ -149,7 +227,7 @@ export function splitShot(project: Project, shotId: string, atMs: number, newSho
   if (project.shots.some((shot: Shot): boolean => shot.id === newShotId) || project.frames.some((frame: StoryboardFrame): boolean => frame.id === newFrameId)) throw contractError('DUPLICATE_EDIT_ID', '새 컷과 프레임 ID가 이미 존재합니다.', []);
   const offset: number = atMs - original.startMs;
   const links = allocateSplitLinks(project, original, atMs);
-  const first: Shot = { ...original, endMs: atMs, sourceLinks: links.first, informationIds: splitInformationIds(project, links.first, original.startMs, original.informationIds), transitionOut: { kind: 'cut', durationMs: 0, note: '' }, proposalOrigin: 'manual', approvalStatus: 'proposed' };
+  const first: Shot = { ...original, endMs: atMs, sourceLinks: links.first, informationIds: splitInformationIds(project, links.first, original.startMs, original.informationIds), transitionOut: { kind: 'cut', durationMs: 0, note: '', incomingExposure: 'none' }, proposalOrigin: 'manual', approvalStatus: 'proposed' };
   const second: Shot = { ...original, id: newShotId, startMs: atMs, sourceLinks: links.second, informationIds: splitInformationIds(project, links.second, atMs, original.informationIds), proposalOrigin: 'manual', approvalStatus: 'proposed' };
   const movedFrames: StoryboardFrame[] = project.frames.map((frame: StoryboardFrame): StoryboardFrame => {
     if (frame.shotId !== shotId) return frame;

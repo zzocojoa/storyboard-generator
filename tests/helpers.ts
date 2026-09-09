@@ -1,5 +1,5 @@
 import { NativeDatasetSchema } from '../src/domain/schema.js';
-import type { NativeDataset, PackagePayload } from '../src/domain/schema.js';
+import type { GeneratorBuildProvenance, NativeDataset, PackagePayload } from '../src/domain/schema.js';
 import { parseJson, sha256Text } from '../src/importers/integrity.js';
 import { readPackage } from '../src/io/package.js';
 import sharp from 'sharp';
@@ -58,4 +58,8 @@ export function pcmWav(durationMs: number, sampleRate: number, channels: 1 | 2, 
   bytes.writeUInt32LE(sampleRate * blockAlign, 28); bytes.writeUInt16LE(blockAlign, 32); bytes.writeUInt16LE(bitsPerSample, 34);
   bytes.write('data', 36); bytes.writeUInt32LE(dataLength, 40);
   return bytes;
+}
+
+export function testGeneratorBuild(): GeneratorBuildProvenance {
+  return { provenanceVersion: 1, gitStateAvailable: null, headCommitSha: null, worktreeDirty: null, generationInputsDirty: null, generationContractSha256: null, runtimeGenerationConfigSha256: null, commitSha: null, appVersion: 'test-fixture', projectSchemaVersion: '1.9.0', builtAt: null, sourceTreeSha256: null };
 }

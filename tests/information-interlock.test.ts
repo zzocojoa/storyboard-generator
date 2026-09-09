@@ -3,7 +3,7 @@ import { mergeShots, reorderShots, splitShot } from '../src/domain/edit.js';
 import { addStoryboardFrame, updateStoryboardFrame } from '../src/domain/frame.js';
 import {
   approvalIssuesForShot, canonicalCandidate, createInitialTextMappingDecisions, effectiveInformationGate,
-  moveShotSourceLink, updateShotSourceLinks, updateTextMappingDecision,
+  moveShotSourceLink, updateTextMappingDecision,
 } from '../src/domain/mapping.js';
 import {
   DatasetSchema, NativeDatasetSchema, TextMappingDecisionSchema,
@@ -322,7 +322,7 @@ describe('정보 공개 시점 안전장치 결함 재현', (): void => {
     }, original);
     const shot: Shot = segmentShot(confirmed, 'SEG-024');
     const frame: StoryboardFrame = { id: 'mapping-boundary-frame', shotId: shot.id, offsetMs: 8000, role: 'key', description: '첫 공개 프레임', imageAssetId: null, visualReview: 'pending' };
-    const link: ShotSourceLink = { unitId: 'UNIT-060', usage: 'primary-visual', status: 'confirmed', temporalAnchor: { kind: 'frame', frameId: frame.id, basis: 'manual', status: 'confirmed' } };
+    const link: ShotSourceLink = { unitId: 'UNIT-060', usage: 'primary-visual', status: 'confirmed', temporalAnchor: { kind: 'frame-range', frameId: frame.id, endOffsetMs: shot.endMs - shot.startMs, basis: 'manual', status: 'confirmed' } };
     const changed: Project = { ...confirmed, shots: confirmed.shots.map((candidate: Shot): Shot => candidate.id === shot.id ? { ...candidate, sourceLinks: [link], informationIds: [] } : candidate), frames: [...confirmed.frames, frame] };
     const context = buildFrameImageContext(changed, frame.id);
     expect(context.textMappings.map((mapping) => mapping.placementId)).toContain('source-11:18');
@@ -345,9 +345,9 @@ describe('정보 공개 시점 안전장치 결함 재현', (): void => {
     const withFrame: Project = addStoryboardFrame(project, 'shot-2', 'linked-key-frame', { offsetMs: 3000, role: 'key', description: '연결 프레임' });
     const shot: Shot = segmentShot(withFrame, 'demonstration');
     const links: ShotSourceLink[] = shot.sourceLinks.map((link: ShotSourceLink): ShotSourceLink => link.unitId === '동작'
-      ? { ...link, status: 'confirmed', temporalAnchor: { kind: 'frame', frameId: 'linked-key-frame', basis: 'manual', status: 'confirmed' } }
+      ? { ...link, status: 'confirmed', temporalAnchor: { kind: 'frame-range', frameId: 'linked-key-frame', endOffsetMs: shot.endMs - shot.startMs, basis: 'manual', status: 'confirmed' } }
       : link);
-    const anchored: Project = updateShotSourceLinks(withFrame, shot.id, { links });
+    const anchored: Project = { ...withFrame, shots: withFrame.shots.map((candidate: Shot): Shot => candidate.id === shot.id ? { ...candidate, sourceLinks: links } : candidate) };
     const moved: Project = updateStoryboardFrame(anchored, 'linked-key-frame', { offsetMs: 4000, role: 'key', description: '연결 프레임' });
     expect(segmentShot(moved, 'demonstration').sourceLinks.find((link: ShotSourceLink): boolean => link.unitId === '동작')).toEqual(expect.objectContaining({
       status: 'mapping-required', temporalAnchor: { kind: 'unresolved', basis: 'frame-change', status: 'review-required' },
@@ -381,7 +381,7 @@ describe('정보 공개 시점 안전장치 결함 재현', (): void => {
     for (const shot of legacy.shots) for (const link of shot.sourceLinks) delete link.temporalAnchor;
     legacy.textMappingDecisions[0] = { ...(legacy.textMappingDecisions[0] as Record<string, unknown>), canonicalUnitId: null, relation: 'separate-element', status: 'confirmed', renderCanonicalSeparately: true, canonicalStartMs: 100, canonicalEndMs: 200 };
     const migrated: Project = parseProject(legacy);
-    expect(migrated.schemaVersion).toBe('1.6.0');
+    expect(migrated.schemaVersion).toBe('1.9.0');
     expect(migrated.shots.every((shot: Shot): boolean => shot.approvalStatus === 'proposed' && shot.sourceLinks.every((link: ShotSourceLink): boolean => link.status === 'mapping-required' && link.temporalAnchor.kind === 'unresolved' && link.temporalAnchor.basis === 'migration'))).toBe(true);
     expect(migrated.textMappingDecisions[0]).toEqual(expect.objectContaining({ canonicalUnitId: null, relation: 'standalone-placement', status: 'unresolved', renderCanonicalSeparately: false, canonicalStartMs: null, canonicalEndMs: null }));
   });
@@ -389,7 +389,7 @@ describe('정보 공개 시점 안전장치 결함 재현', (): void => {
   it('migration_preserves_original_content', async (): Promise<void> => {
     const project: Project = await nativeOutline();
     const asset: Asset = { id: 'preserved-asset', kind: 'prop', subjectId: null, path: 'assets/preserved.png', mimeType: 'image/png', sha256: '4'.repeat(64), description: '보존 자산', durationMs: null, version: 1 };
-    const enriched: Project = { ...project, assets: [asset], generationRecords: [{ id: 'preserved-generation', provider: 'codex-app', model: 'codex-imagegen', modelVersion: null, requestId: null, prompt: '보존', templateVersion: '1.0.0', seed: null, referenceHashes: [], resultAssetIds: [asset.id], shotIds: [], createdAt: '2026-09-06T00:00:00.000Z' }] };
+    const enriched: Project = { ...project, assets: [asset], generationRecords: [{ id: 'preserved-generation', provider: 'codex-app', model: 'codex-imagegen', generatorBuild: null, modelVersion: null, requestId: null, prompt: '보존', templateVersion: '1.0.0', seed: null, referenceHashes: [], resultAssetIds: [asset.id], shotIds: [], createdAt: '2026-09-06T00:00:00.000Z' }] };
     const legacy = JSON.parse(JSON.stringify(enriched)) as { schemaVersion: string; shots: Array<{ sourceLinks: Array<Record<string, unknown>> }> };
     legacy.schemaVersion = '1.2.0';
     for (const shot of legacy.shots) for (const link of shot.sourceLinks) delete link.temporalAnchor;

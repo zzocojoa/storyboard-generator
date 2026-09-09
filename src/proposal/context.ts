@@ -1,4 +1,5 @@
 import { contractError } from '../domain/errors.js';
+import { currentVisualReferenceAssets } from '../domain/asset-references.js';
 import { requireShot } from '../domain/edit.js';
 import { reviewInformationEmission } from '../domain/emission.js';
 import { directVisualLinks, effectiveInformationGate, reviewIssuesForFrame, sourceAnchorRange } from '../domain/mapping.js';
@@ -85,10 +86,6 @@ function promptPeople(project: Project, ids: readonly string[]): ProposalPerson[
   });
 }
 
-function latestAssets(assets: readonly Asset[]): Asset[] {
-  return assets.filter((asset: Asset): boolean => !assets.some((candidate: Asset): boolean => candidate.kind === asset.kind && candidate.subjectId === asset.subjectId && candidate.version > asset.version));
-}
-
 function contextMappings(project: Project, segmentId: string): ContextTextMapping[] {
   return project.textMappingDecisions.flatMap((decision: TextMappingDecision): ContextTextMapping[] => {
     const placement: TextPlacement | undefined = project.dataset.textPlacements.find((value: TextPlacement): boolean => value.id === decision.placementId && value.segmentId === segmentId);
@@ -156,10 +153,7 @@ function imageContext(project: Project, shot: Shot, frame: StoryboardFrame): Ima
   const allowedInformationIds: string[] = [...new Set(unitInformationIds)];
   const informationGates: ContextInformationGate[] = requireAllowedInformation(project, allowedInformationIds, evaluationAbsoluteMs, frame.id);
   const visiblePersonIds: string[] = shot.presence.filter((presence): boolean => ['VISIBLE', 'HAND_ONLY', 'SILHOUETTE', 'ARCHIVE_IMAGE'].includes(presence.mode)).map((presence): string => presence.personId);
-  const automaticReferenceIds: string[] = latestAssets(project.assets.filter((asset: Asset): boolean =>
-    (asset.kind === 'character' && asset.subjectId !== null && visiblePersonIds.includes(asset.subjectId))
-    || (asset.kind === 'location' && asset.subjectId !== null && asset.subjectId === shot.visualLocationId),
-  )).map((asset: Asset): string => asset.id);
+  const automaticReferenceIds: string[] = currentVisualReferenceAssets(project, shot).map((asset: Asset): string => asset.id);
   const referenceIds: string[] = [...automaticReferenceIds, ...shot.propIds, ...shot.continuityBefore.map((state): string => state.assetId), ...shot.continuityAfter.map((state): string => state.assetId)];
   const visualReferences = [...new Set(referenceIds)].map((id: string) => {
     const asset: Asset | undefined = project.assets.find((value: Asset): boolean => value.id === id && ['character', 'location', 'prop'].includes(value.kind));

@@ -1,3 +1,5 @@
+import { readBuildManifest } from '../src/build.js';
+import { testGeneratorBuild } from './helpers.js';
 import { mkdir, mkdtemp, readFile, readdir, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -29,6 +31,14 @@ import { ProjectStore } from '../src/server/store.js';
 import { nativeData, nativePackage, pcmWav, png, productionPackage, testAudioNormalizer, TEST_AUDIO_NORMALIZATION_OPTIONS, withNativeData } from './helpers.js';
 
 const roots: string[] = [];
+const stores: ProjectStore[] = [];
+const apps: FastifyInstance[] = [];
+function trackedStore(dataRoot: string): ProjectStore {
+  const store: ProjectStore = new ProjectStore(dataRoot);
+  stores.push(store);
+  return store;
+}
+
 
 async function nativeOutline(): Promise<Project> {
   return createSourceOutline(importPackage(await nativePackage()), { proposedTextHoldMs: 2000 });
@@ -41,7 +51,7 @@ async function productionOutline(): Promise<Project> {
 async function temporaryStore(project: Project): Promise<{ root: string; store: ProjectStore }> {
   const root: string = await mkdtemp(join(tmpdir(), 'storyboard-media-workflow-'));
   roots.push(root);
-  const store: ProjectStore = new ProjectStore(join(root, 'data'));
+  const store: ProjectStore = trackedStore(join(root, 'data'));
   await store.create(project);
   return { root, store };
 }
@@ -54,7 +64,9 @@ async function temporaryApp(project: Project): Promise<{ app: FastifyInstance; r
   const config: AppConfig = { host: '127.0.0.1', port: 4317, dataRoot: join(root, 'data'), webRoot,
     pdfFontPath: resolve('assets/fonts/NanumGothic-Regular.ttf'), audioNormalization: TEST_AUDIO_NORMALIZATION_OPTIONS,
     codex: { requestRoot: join(root, 'requests'), speechVoice: 'Yuna' } };
-  return { app: await createApp(config, store, new CodexRequestStore(config.codex.requestRoot)), root, store };
+  const app: FastifyInstance = await createApp(config, store, new CodexRequestStore(config.codex.requestRoot, readBuildManifest()));
+  apps.push(app);
+  return { app, root, store };
 }
 
 function multipartAudio(bytes: Buffer, expectedRevision: number | null): { payload: Buffer; headers: { 'content-type': string } } {
@@ -88,7 +100,7 @@ async function acceptedImageStore(): Promise<{ app: FastifyInstance; store: Proj
   const { app, store } = await temporaryApp(base);
   const frame: StoryboardFrame = base.frames[0] as StoryboardFrame;
   const mutation = await applyGeneratedImage(base, frame.id, 'generated-frame', '2026-09-06T00:00:00.000Z', {
-    bytes: await png(2, 3), provider: 'codex-app', prompt: '검증', model: 'imagegen', requestId: 'request', mimeType: 'image/png', referenceHashes: [],
+    bytes: await png(2, 3), generatorBuild: testGeneratorBuild(), provider: 'codex-app', prompt: '검증', model: 'imagegen', requestId: 'request', mimeType: 'image/png', referenceHashes: [],
   });
   if (mutation.relativePath === null || mutation.content === null) throw new Error('저장할 이미지 자산이 없습니다.');
   await store.update(base.projectId, 0, (): Project => mutation.project,
@@ -169,6 +181,8 @@ async function unit045Mutation(): Promise<{ base: Project; prepared: Project; cu
 }
 
 afterEach(async (): Promise<void> => {
+  for (const app of apps.splice(0)) await app.close();
+  for (const store of stores.splice(0)) await store.close();
   await Promise.all(roots.splice(0).map(async (root: string): Promise<void> => { await rm(root, { recursive: true, force: true }); }));
 });
 
@@ -589,7 +603,7 @@ describe('H. SOURCE UPDATE', (): void => {
 describe('I. READY METRICS', (): void => {
   it('stale_frame_is_not_counted_as_output_safe', async (): Promise<void> => {
     const base: Project = await nativeOutline(); const { store } = await temporaryStore(base); const frame: StoryboardFrame = base.frames[0] as StoryboardFrame;
-    const mutation = await applyGeneratedImage(base, frame.id, 'stale-metric', '2026-09-06T00:00:00.000Z', { bytes: await png(1, 1), provider: 'codex-app', prompt: '', model: '', requestId: 'request', mimeType: 'image/png', referenceHashes: [] });
+    const mutation = await applyGeneratedImage(base, frame.id, 'stale-metric', '2026-09-06T00:00:00.000Z', { bytes: await png(1, 1), generatorBuild: testGeneratorBuild(), provider: 'codex-app', prompt: '', model: '', requestId: 'request', mimeType: 'image/png', referenceHashes: [] });
     await store.update(base.projectId, 0, (): Project => mutation.project, [{ relativePath: mutation.relativePath as string, content: mutation.content as Buffer }]); expect((await store.list())[0]?.framesOutputSafe).toBe(0);
   });
   it('rejected_frame_is_not_counted_as_output_safe', async (): Promise<void> => {
@@ -633,7 +647,7 @@ describe('J. MIGRATION', (): void => {
   });
   it('migration_preserves_generation_records', async (): Promise<void> => {
     const project: Project = await nativeOutline(); const asset: Asset = { id: 'generated-asset', kind: 'prop', subjectId: null, path: 'assets/a.png', mimeType: 'image/png', sha256: sha256Text('asset'), description: '', durationMs: null, version: 1 };
-    const record: GenerationRecord = { id: 'legacy-generation', provider: 'codex-app', model: 'model', modelVersion: null, requestId: null, prompt: '', templateVersion: '1.0.0', seed: null, referenceHashes: [], resultAssetIds: [asset.id], shotIds: [], createdAt: '2026-09-06T00:00:00.000Z' };
+    const record: GenerationRecord = { id: 'legacy-generation', provider: 'codex-app', model: 'model', generatorBuild: null, modelVersion: null, requestId: null, prompt: '', templateVersion: '1.0.0', seed: null, referenceHashes: [], resultAssetIds: [asset.id], shotIds: [], createdAt: '2026-09-06T00:00:00.000Z' };
     expect(parseProject(legacy14({ ...project, assets: [asset], generationRecords: [record] })).generationRecords).toEqual([record]);
   });
 });

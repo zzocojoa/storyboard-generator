@@ -1,3 +1,5 @@
+import type { BuildManifest } from '../build.js';
+import { sameGenerationBuild } from '../build-fingerprint.js';
 import { contractError } from '../domain/errors.js';
 import { assertAudioTimingRelation, audioOverhangAfterMs, audioOverhangBeforeMs } from '../domain/audio.js';
 import { reviewInformationEmission } from '../domain/emission.js';
@@ -64,7 +66,12 @@ function speechPrompt(context: SpeechContext): string {
   return `한국어 영상 제작용 가이드 음성입니다. 다음 원문을 바꾸거나 덧붙이지 말고 또렷하고 자연스럽게 읽으세요.\n\n${context.unit.text}`;
 }
 
-export async function buildCodexWork(request: CodexRequest, project: Project, store: ProjectStore): Promise<CodexWork> {
+export async function buildCodexWork(request: CodexRequest, project: Project, store: ProjectStore, build: BuildManifest): Promise<CodexWork> {
+  if (request.status !== 'pending') throw contractError('CODEX_REQUEST_SETTLED', `${request.id}: 이미 ${request.status} 상태인 요청입니다.`, []);
+  if (request.generatorBuild === null || request.generatorBuild === undefined) throw contractError('CODEX_REQUEST_BUILD_UNVERIFIED', `${request.id}: 생성 Build를 증명할 수 없습니다. 현재 Build에서 새 요청을 만드세요.`, []);
+  if (!sameGenerationBuild(request.generatorBuild, build)) {
+    throw contractError('CODEX_REQUEST_BUILD_CHANGED', `${request.id}: 요청 이후 생성 로직의 Build가 변경됐습니다. 현재 Build에서 새 요청을 만드세요.`, []);
+  }
   const actualHash: string = codexRequestBasis(project, request.kind, request.targetId);
   if (actualHash !== request.basisHash) throw contractError('CODEX_REQUEST_STALE', `${request.id}: 요청 이후 대상 내용이 바뀌었습니다. 새 생성 요청을 만드세요.`, []);
   if (request.kind === 'proposal') {

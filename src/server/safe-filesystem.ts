@@ -2,11 +2,12 @@ import { constants } from 'node:fs';
 import type { Dirent } from 'node:fs';
 import { link, lstat, mkdir, open, readdir, realpath, rename, rmdir, unlink } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { contractError } from '../domain/errors.js';
 import { isMissingFile } from '../io/package.js';
 
 export type FileIdentity = { dev: number; ino: number };
+export type SafeFileMetadata = FileIdentity & { size: number; mtimeMs: number; ctimeMs: number };
 export type SafePathKind = 'missing' | 'file' | 'directory';
 
 function unsafe(path: string, reason: string): never {
@@ -24,6 +25,11 @@ export class SafeStoreFilesystem {
 
   async initialize(): Promise<void> {
     await mkdir(this.#configuredRoot, { recursive: true });
+    await this.openExisting();
+  }
+
+  /** 읽기 전용 감사는 폴더 생성이나 복구 없이 기존 루트만 연다. */
+  async openExisting(): Promise<void> {
     const canonicalRoot: string = await realpath(this.#configuredRoot);
     const metadata = await lstat(canonicalRoot);
     if (!metadata.isDirectory()) unsafe(canonicalRoot, 'root is not a directory');
@@ -170,10 +176,57 @@ export class SafeStoreFilesystem {
     return targetIdentity;
   }
 
+  /** 완성·fsync된 같은 디렉터리 임시 파일을 no-replace link로 공개하고 자기 inode만 정리한다. */
+  async publishExclusiveFileWithIdentity(finalPath: string, content: string | Buffer, temporaryToken: string): Promise<FileIdentity> {
+    if (!/^[a-zA-Z0-9.-]{1,100}$/.test(temporaryToken)) unsafe(finalPath, 'invalid publication token');
+    this.#assertWithin(finalPath);
+    const parent: string = dirname(finalPath);
+    const temporary: string = join(parent, `.publish-${basename(finalPath)}-${temporaryToken}.tmp`);
+    let identity: FileIdentity | null = null;
+    let published: boolean = false;
+    try {
+      identity = await this.writeExclusiveWithIdentity(temporary, content);
+      await this.requireDirectory(parent);
+      await link(temporary, finalPath);
+      published = true;
+      if (!sameFileIdentity(identity, await this.identity(finalPath))) unsafe(finalPath, 'published identity changed');
+      await this.syncDirectory(parent);
+      await this.unlinkFile(temporary, identity);
+      await this.syncDirectory(parent);
+      if (!sameFileIdentity(identity, await this.identity(finalPath))) unsafe(finalPath, 'published identity changed after sync');
+      return identity;
+    } catch (error: unknown) {
+      if (identity !== null) {
+        try {
+          if (published) {
+            if (!(await this.read(finalPath)).equals(Buffer.from(content))) unsafe(finalPath, 'published bytes changed before cleanup');
+            await this.unlinkFile(finalPath, identity);
+          }
+          await this.unlinkFile(temporary, identity);
+          await this.syncDirectory(parent);
+        } catch (cleanupError: unknown) {
+          throw new AggregateError([error, cleanupError], `원자 게시 실패 후 소유 파일을 정리할 수 없습니다. path=${finalPath}`);
+        }
+      }
+      if (error instanceof Error && 'code' in error && error.code === 'EEXIST') {
+        throw contractError('EXCLUSIVE_FILE_EXISTS', `원자 게시 대상이 이미 존재합니다. path=${finalPath}`, []);
+      }
+      throw error;
+    }
+  }
+
   async identity(path: string): Promise<FileIdentity> {
     await this.requireFile(path);
     const metadata = await lstat(path);
     return { dev: metadata.dev, ino: metadata.ino };
+  }
+
+  /** 목록 캐시의 identity 판정용 metadata이며 콘텐츠 무결성 증명을 대신하지 않는다. */
+  async fileMetadata(path: string): Promise<SafeFileMetadata> {
+    await this.requireFile(path);
+    const metadata = await lstat(path);
+    if (!metadata.isFile() || metadata.isSymbolicLink()) unsafe(path, 'metadata target is not a regular file');
+    return { dev: metadata.dev, ino: metadata.ino, size: metadata.size, mtimeMs: metadata.mtimeMs, ctimeMs: metadata.ctimeMs };
   }
 
   async unlinkFile(path: string, expectedIdentity?: FileIdentity): Promise<void> {
