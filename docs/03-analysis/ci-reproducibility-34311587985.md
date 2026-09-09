@@ -329,14 +329,33 @@ timeout Probe 자체 Assertion 실패 시 원본 stderr·JSON·lifecycle 보존�
 
 새 증거에 따른 추가 비교를 `isolated-worktree.json`에 먼저 기록했다. 같은 Commit의 독립 임시 worktree에서 기존 설치 의존성을 참조하고 웹 Build·전체 E2E·Audio 3회 반복을 각각 한 번 실행했다. 최종 check와 Test·Script·설정 107개 파일의 Hash 및 제품 Build 지문이 일치한다. 제품 코드·시간 제한·Worker·Retry·Assertion을 바꾸지 않았다. 단위 check는 이미 같은 코드에서 통과했으므로 다시 반복하지 않았다. 격리 환경의 E2E 16개와 실제 Chromium 140.0.7339.16의 Audio 21개가 통과했다. 공유 디렉터리 변경 주체까지 규명했다는 뜻은 아니다.
 
-사용자 `test-results 2/`, 공유 `dist/web/assets 2`, 운영 데이터·Request·서버 PID 89219는 변경하지 않았다. 공유 웹 출력 복원이나 운영 배포는 수행하지 않았다. 각 실행의 Process Group 종료와 임시 Root 부재를 확인하고 격리 worktree의 필요한 증거를 복사한 뒤 소유 작업 공간만 정리한다.
+사용자 `test-results 2/`, 공유 `dist/web/assets 2`, 운영 데이터·Request·서버 PID 89219는 변경하지 않았다. 공유 웹 출력 복원이나 운영 배포는 수행하지 않았다. 각 실행의 Process Group 종료와 임시 Root 부재를 확인하고 격리 worktree의 필요한 증거를 복사한 뒤 소유 작업 공간만 정리했다. 실제 Audio 21개 모두 소유 자원 0·Root 삭제를 검증했다.
 
 ### 원격 상태와 남은 판단
 
-이 문서 작성 시 이번 코드의 원격 Push·PR 본문 갱신·새 CI는 미실행이다. `a853449`의 과거 PR CI 성공을 `71de79f`의 원격 검증으로 사용하지 않는다. 후속 원격 결과는 [PR #7의 check 및 본문](https://github.com/zzocojoa/storyboard-generator/pull/7)에서 실제 Feature Head·Base·checkout·Run/Attempt와 함께 확인해야 한다. 성공 진단 보존 설정은 로컬에서 검사했으나 새 설정의 실제 Hosted 업로드·내용 확인은 별도 검증 항목이다.
+코드 `71de79f`와 첫 조사 문서를 포함한 Head `3b3a9ab707624e1ac2d5a5dc917658de1724c821`을 같은 Branch에 Push하고 [PR #7 본문](https://github.com/zzocojoa/storyboard-generator/pull/7)을 새 결과로 갱신했다. [새 CI Run 34345837439 / Attempt 1](https://github.com/zzocojoa/storyboard-generator/actions/runs/34345837439/attempts/1)의 check와 e2e가 성공했다. 실제 checkout은 `2ec2d9fcbeb563374712dbbc5db48305429ee80e`, 부모는 Base `781d9f1`과 Head `3b3a9ab`이며 Tree는 `e13de2eadb5fbfbd16e8019a9e4838ae06bb4fd0`다.
 
-로컬 구현·회귀 검증 범위의 판단은 GO다. 최종 병합 판단은 새 Head의 원격 check/e2e와 비교 Artifact 확인을 조건으로 하는 **조건부 GO**다. 자동 병합·master 직접 Push·보호 설정 변경·운영 배포는 수행하지 않는다. 이번 범위의 추가 권장 로직 수정: 없다. 미확정 원인 조사와 공유 웹 출력 환경 문제는 별도 잔여 사항이다.
+| 새 원격 명령 | 실제 결과 | 시간 |
+|---|---|---:|
+| `npm run check` | 58 파일·1,196 성공, TypeScript·Web TypeScript·Schema·Build 성공, Required 391·네 오류 수 0 | Vitest 109.38초, check Job 2분 16초 |
+| `npm run check:e2e` | 16 성공 | 24.7초 |
+| 실제 Audio/RAF 7개 × 3회 | 21 성공 | 41.8초 |
+
+Runner는 Ubuntu 24.04.4·이미지 `20260831.293.1`, Node 24.20.0, npm 11.19.0, Vitest 5.0.0이다. 원본 로그와 실제 Artifact의 환경·설정 Hash·checkout·Build manifest를 대조했다. 제품의 Source/Generation/Runtime 지문은 로컬 최종 check와 같다. 위 과거 `a853449`의 결과를 새 결과로 복사하지 않았다.
+
+[성공 Artifact 10101715130](https://github.com/zzocojoa/storyboard-generator/actions/runs/34345837439/artifacts/10101715130)을 실제 업로드·다운로드해 `check.log`, Vitest JSON, lifecycle, 환경과 숨김 Build manifest를 확인했다. Artifact 이름은 `ci-check-34345837439-1-2ec2d9fcbeb563374712dbbc5db48305429ee80e`, 크기는 273,913 bytes, digest는 `bb7fc5a55d90bb7c4f0e13e913efd23e784bf0145d70c434859796193fc00e32`다. 실패 Artifact의 기존 보존 계약과 별개로 새 성공 보존 경로도 검증했다. Shell의 통제된 upstream Exit 7이 tee 뒤에서도 7로 유지되는 것도 확인했다.
+
+| 새 원격 우선 Test | 전체 시간 | 같은 Process의 의미 단계 시간(ms) |
+|---|---:|---|
+| 복구 Lock 순서 | 1,692.52ms | committedCrash 970.46 → Child ready 358.96 → Barrier 72.82 → 소유 중 편집 119.85 → release/result 153.56 → Revision·편집 검사 12.85 |
+| proposal→image→speech 연쇄 | 968.70ms | Fixture 103.47; proposal 요청/적용 26.85/219.87; image 요청/적용 21.87/190.54; speech 입력/요청/적용 0.89/35.16/227.48; Receipt 세 검사 17.51/21.40/20.98; replay 30.35/39.73 |
+
+원격의 152개 Scope·3,562개 이벤트에서 Root 82개 모두 진행 Operation·등록 자원 0으로 삭제됐고 취소·정리 실패·Root 보존 이벤트는 없었다. 성공과 실패를 같은 구조로 비교할 수 있게 됐지만 최초 Host/fsync 지연 원인은 여전히 unknown이다.
+
+이 원격 결과를 반영하는 마지막 변경은 문서뿐이다. 문서 발행에 따라 자동 실행되는 최종 Head CI는 1회만 확인하고 결과를 PR 본문의 Head·checkout·Run과 연결한다. 이 한도는 `remote-verification-plan.json`에 기록했다. 수동 재실행이나 추가 코드 변경은 하지 않는다.
+
+이 PR의 구현·정리 안전성·진단 보존 변경에 대한 병합 판단은 **GO**다. 문서 포함 최종 Head의 필수 check/e2e 상태는 PR에서 다시 대조하며 실제 병합은 수행하지 않았다. master 직접 Push·보호 설정 변경·운영 배포도 수행하지 않았다. 이번 범위의 추가 권장 로직 수정: 없다. 최초 timeout·ENOTEMPTY Writer의 원인 조사와 공유 웹 출력 환경 문제는 별도 잔여 사항이다.
 
 이번 후속 증거는 `.local/ci-investigation/pr-7-followup/`에 있으며 Git에서 제외한다. 계획·환경·원본 Hash는 `experiment-plan.json`, `start-environment.json`, `original-evidence-hashes.json`, 단계 비교는 `comparisons.json`, 격리 코드 대조는 `isolated-code-equivalence.json`이다. 새 실행마다 stdout/stderr·Vitest JSON·lifecycle·Build manifest·종료 상태를 별도로 보존했다. 조사 문서 Commit 이후 코드·설정 변경이 없다면 위 검증은 동일한 실행 코드에 적용된다.
 
-구현과 실행 가능한 로컬 검증은 완료했으며, 원본 최초 timeout과 ENOTEMPTY Writer의 원인 해결은 완료하지 않았다.
+구현과 로컬·원격 검증은 완료했으며, 원본 최초 timeout과 ENOTEMPTY Writer의 원인 해결은 완료하지 않았다.
