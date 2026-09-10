@@ -119,3 +119,28 @@ body:has(.document-workflow[open]) { min-width: 0; }
 .document-candidate-evidence dl > div { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 12px; border-top: 1px solid var(--doc-border); padding: 12px 0; }
 .document-candidate-evidence dt { font-family: ui-monospace, monospace; }
 .document-candidate-evidence dd { margin: 0; overflow-wrap: anywhere; }
+.document-review-panel { padding: 24px; border: 1px solid var(--doc-border); border-top: 3px solid var(--doc-accent); border-radius: 6px; background: var(--doc-bg); }
+.document-review-panel h2 { font-size: 24px; }
+.document-review-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-block: 16px; }
+.document-review-progress, .document-review-note { font-size: 14px; color: var(--doc-muted); line-height: 1.7; }
+.document-review-error { color: #a52e1b; padding: 12px; background: #fff2ee; font-size: 14px; overflow-wrap: anywhere; }
+.document-review-origin { display: inline-block; font-size: 12px; line-height: 1.5; margin-top: 6px; padding: 3px 8px; border-radius: 3px; }
+.document-review-origin.pending { color: #8a4309; background: #fff1df; }
+.document-review-origin.confirmed { color: #295a3d; background: #ecf4ed; }
+.document-review-results { border-top: 1px solid var(--doc-border); margin-top: 20px; padding-top: 8px; }
+.document-review-results > p { font-size: 14px; line-height: 1.8; }
+.document-review-results summary, .document-preset summary { cursor: pointer; font-size: 14px; font-weight: 600; padding-block: 12px; }
+.document-review-suggestion { padding: 16px 0; border-top: 1px solid var(--doc-border); }
+.document-review-suggestion > div:first-child { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; font-size: 14px; }
+.document-review-suggestion > div:first-child span { font-family: ui-monospace, monospace; }
+.document-review-suggestion > p { margin: 8px 0; font-size: 13px; line-height: 1.8; }
+.document-review-suggestion > small { color: var(--doc-muted); }
+.document-review-evidence { margin: 12px 0; font-size: 12px; overflow-wrap: anywhere; }
+.document-review-evidence blockquote { margin: 8px 0; padding: 8px 12px; border-left: 2px solid var(--doc-border); line-height: 1.7; }
+.document-preset { margin-top: 20px; padding-top: 8px; border-top: 1px solid var(--doc-border); }
+.document-preset p { font-size: 13px; line-height: 1.7; color: var(--doc-muted); }
+.document-preset-save { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin-top: 16px; }
+.document-preset-save label { flex: 1 1 180px; }
+.document-production-origins { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; }
+.document-production-origins > div { display: flex; flex-direction: column; font-size: 12px; }
+@media (max-width: 640px) { .document-review-panel { padding: 16px; } .document-review-actions > button { flex: 1 1 100%; white-space: normal; } }

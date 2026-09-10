@@ -17,5 +17,10 @@
   "codex": {
     "requestRoot": ".local/codex-requests",
     "speechVoice": "Yuna"
+  },
+  "documentReview": {
+    "executable": "/Applications/ChatGPT.app/Contents/Resources/codex",
+    "requestRoot": ".local/document-reviews",
+    "timeoutMs": 240000
   }
 }

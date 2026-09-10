@@ -38,6 +38,9 @@ import type { AssetWrite, ProjectStore } from './store.js';
 import { inspectDocuments } from '../documents/compile.js';
 import { readDocumentSources, writeDocumentPackage } from '../documents/io.js';
 import { DocumentBindingsSchema, DocumentSettingsSchema } from '../documents/schema.js';
+import { CodexAppReviewEngine } from '../documents/review-engine.js';
+import { DocumentReviewService } from '../documents/review-service.js';
+import { registerDocumentReviewRoutes } from './document-review-routes.js';
 
 const ProjectParamsSchema = z.strictObject({ projectId: IdSchema });
 const ShotParamsSchema = ProjectParamsSchema.extend({ shotId: IdSchema });
@@ -93,6 +96,7 @@ export type HttpErrorBody = { error: {
 } };
 
 const conflictPolicies: ReadonlyMap<string, boolean> = new Map<string, boolean>([
+  ['DOCUMENT_REVIEW_BUSY', true], ['DOCUMENT_REVIEW_BASIS_CHANGED', false], ['DOCUMENT_REVIEW_NOT_COMPLETED', false],
   ['DOCUMENT_OUTPUT_EXISTS', false],
   ['CODEX_REQUEST_SETTLED', false], ['CODEX_REQUEST_STATE_CONFLICT', false], ['CODEX_REQUEST_STORE_BUSY', true], ['REVIEW_BUNDLE_EXISTS', false],
   ['CODEX_REQUEST_APPLY_IN_PROGRESS', true], ['CODEX_APPLY_RESULT_CONFLICT', false],
@@ -123,6 +127,9 @@ function isValidationError(error: Error, code: string): boolean {
 /** 서버 오류 코드를 사용자 입력, 충돌, 복구 잠금과 일시 장애로 명시적으로 분류한다. */
 export function httpErrorPolicy(error: Error): HttpErrorPolicy {
   const code: string = 'code' in error && typeof error.code === 'string' ? error.code : error.name;
+  if (code === 'DOCUMENT_REVIEW_NOT_FOUND') return { status: 404, category: 'not-found', scope: 'request', retryable: false, operatorActionRequired: false, mutationBlocked: false };
+  if (['DOCUMENT_REVIEW_UNAVAILABLE', 'DOCUMENT_REVIEW_STORAGE_FAILED'].includes(code)) return { status: 503, category: 'unavailable', scope: 'service', retryable: true, operatorActionRequired: false, mutationBlocked: false };
+  if (code === 'DOCUMENT_REVIEW_INPUT_TOO_LARGE') return { status: 400, category: 'validation', scope: 'request', retryable: false, operatorActionRequired: false, mutationBlocked: false };
   if (['CODEX_APPLY_EVIDENCE_CONFLICT', 'CODEX_APPLY_RECEIPT_UNRESOLVED', 'CODEX_APPLY_RECOVERY_REQUIRED'].includes(code)) return { status: 423, category: 'locked', scope: 'request', retryable: code === 'CODEX_APPLY_RECOVERY_REQUIRED', operatorActionRequired: code !== 'CODEX_APPLY_RECOVERY_REQUIRED', mutationBlocked: false };
   if (code === 'CODEX_REQUEST_RECOVERY_REQUIRED' || code === 'REVIEW_BUNDLE_CLAIM_RECOVERY_REQUIRED') return { status: 423, category: 'locked', scope: 'request', retryable: false, operatorActionRequired: true, mutationBlocked: false };
   if (code === 'CODEX_REQUEST_STORE_UNAVAILABLE' || code === 'REVIEW_BUNDLE_WRITE_FAILED') return { status: 503, category: 'unavailable', scope: 'service', retryable: true, operatorActionRequired: false, mutationBlocked: false };
@@ -209,16 +216,20 @@ async function ensureWebRoot(path: string): Promise<void> {
 }
 
 export async function createApp(config: AppConfig, store: ProjectStore, requests: CodexRequestStore,
-  audioNormalizerOverride?: WorkerAudioNormalizer): Promise<FastifyInstance> {
+  audioNormalizerOverride?: WorkerAudioNormalizer, documentReviewOverride?: DocumentReviewService): Promise<FastifyInstance> {
   if (!sameGenerationBuild(requests.buildManifest(), buildForSpeechVoice(config.codex.speechVoice))) throw contractError('INVALID_CODEX_REQUEST_STORE_BUILD', 'Request Store의 Build와 현재 소스·음성 설정이 다릅니다.', []);
   await ensureWebRoot(config.webRoot);
   await store.initialize();
   await requests.initialize();
   await requests.reconcilePendingApplies(store, new Date().toISOString());
+  const documentReviews: DocumentReviewService | null = documentReviewOverride ?? (config.documentReview === undefined ? null
+    : new DocumentReviewService(config.documentReview.requestRoot, new CodexAppReviewEngine(config.documentReview.executable, config.documentReview.timeoutMs)));
+  try { if (documentReviews !== null) await documentReviews.initialize(); }
+  catch (error: unknown) { await store.close(); throw error; }
   const audioNormalizer: WorkerAudioNormalizer = audioNormalizerOverride ?? new WorkerAudioNormalizer(config.audioNormalization);
   const app: FastifyInstance = Fastify({ logger: { level: 'info' }, bodyLimit: MAX_AUDIO_BYTES + 1024 * 1024 });
   app.addHook('onClose', async (): Promise<void> => {
-    const closed: PromiseSettledResult<void>[] = await Promise.allSettled([audioNormalizer.close(), store.close()]);
+    const closed: PromiseSettledResult<void>[] = await Promise.allSettled([audioNormalizer.close(), store.close(), documentReviews?.close() ?? Promise.resolve()]);
     const failures: unknown[] = closed.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map((result: PromiseRejectedResult): unknown => result.reason);
     if (failures.length > 0) throw new AggregateError(failures, 'App 종료 중 Worker·Store 정리에 실패했습니다.');
   });
@@ -227,6 +238,7 @@ export async function createApp(config: AppConfig, store: ProjectStore, requests
   app.setErrorHandler((error: Error, request: FastifyRequest, reply: FastifyReply): void => {
     reply.status(httpErrorPolicy(error).status).send(errorBody(error, request));
   });
+  registerDocumentReviewRoutes(app, documentReviews);
 
   app.get('/api/status', async (): Promise<object> => {
     const [allRequests, storageStatus] = await Promise.all([requests.statusRequests(), store.statusSnapshot()]);

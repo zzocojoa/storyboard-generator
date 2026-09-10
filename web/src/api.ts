@@ -4,6 +4,9 @@ import { BuildManifestSchema } from '../../src/build-schema.js';
 import { z } from 'zod';
 import { DocumentPreviewSchema } from '../../src/documents/schema.js';
 import type { DocumentBindings, DocumentPreview, DocumentSettings } from '../../src/documents/schema.js';
+import type { DocumentReviewInput } from '../../src/documents/review-input.js';
+import { ProductionPresetSchema, ReviewRuntimeStatusSchema, ReviewStateSchema } from '../../src/documents/review-model.js';
+import type { ProductionFields, ProductionPreset, ReviewRuntimeStatus, ReviewState } from '../../src/documents/review-model.js';
 import { IssueSchema, ProjectSchema } from '../../src/domain/schema.js';
 import type { FinalReadinessReport } from '../../src/domain/final-readiness.js';
 import type { Project } from '../../src/domain/schema.js';
@@ -169,6 +172,20 @@ export async function previewDocumentPackage(directory: string, bindings: Docume
 
 export async function createDocumentPackage(directory: string, output: string, settings: DocumentSettings): Promise<{ handoffPath: string; projectId: string }> {
   return z.strictObject({ handoffPath: z.string(), projectId: z.string() }).parse(await request('/api/document-packages', json('POST', { directory, output, settings })));
+}
+
+export async function documentReviewStatus(): Promise<ReviewRuntimeStatus> { return ReviewRuntimeStatusSchema.parse(await request('/api/document-reviews/status', {})); }
+export async function listDocumentPresets(): Promise<ProductionPreset[]> { return z.strictObject({ presets: z.array(ProductionPresetSchema) }).parse(await request('/api/document-presets', {})).presets; }
+export async function saveDocumentPreset(name: string, fields: ProductionFields): Promise<ProductionPreset> {
+  return z.strictObject({ preset: ProductionPresetSchema }).parse(await request('/api/document-presets', json('POST', { name, fields }))).preset;
+}
+export async function startDocumentReview(input: DocumentReviewInput): Promise<ReviewState> {
+  return z.strictObject({ review: ReviewStateSchema }).parse(await request('/api/document-reviews', json('POST', input))).review;
+}
+export async function readDocumentReview(id: string): Promise<ReviewState> { return z.strictObject({ review: ReviewStateSchema }).parse(await request(`/api/document-reviews/${encodeURIComponent(id)}`, {})).review; }
+export async function cancelDocumentReview(id: string): Promise<ReviewState> { return z.strictObject({ review: ReviewStateSchema }).parse(await request(`/api/document-reviews/${encodeURIComponent(id)}/cancel`, json('POST', {}))).review; }
+export async function validateDocumentReview(id: string, input: DocumentReviewInput): Promise<ReviewState> {
+  return z.strictObject({ review: ReviewStateSchema }).parse(await request(`/api/document-reviews/${encodeURIComponent(id)}/validate`, json('POST', input))).review;
 }
 
 export async function mutateProject(projectId: string, path: string, method: 'DELETE' | 'PATCH' | 'POST', body: unknown): Promise<Project> {

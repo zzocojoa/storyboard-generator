@@ -6,6 +6,11 @@ import { apiErrorMessage, createDocumentPackage, previewDocumentPackage } from '
 import { DocumentMappings, DocumentProductionFields, FieldError } from './DocumentImportFields.js';
 import { mappingProblems, reviewProductionFields, selectedBindings } from './document-import-state.js';
 import type { FieldProblem, MappingField, ProductionFields, ProductionReview } from './document-import-state.js';
+import type { ProductionPreset, ReviewAuditEntry } from '../../src/documents/review-model.js';
+import { DocumentReviewPanel } from './DocumentReviewPanel.js';
+import { applyDocumentPreset, buildDocumentReviewAudit, reviewEntryKey } from './document-review-state.js';
+import type { ReviewDraft } from './document-review-state.js';
+import { useDocumentReview } from './useDocumentReview.js';
 import './document-import.css';
 
 type ImportStep = 1 | 2 | 3;
@@ -36,8 +41,11 @@ export function DocumentImportPanel(props: DocumentImportProps): ReactElement {
   const [directory, setDirectory] = useState<string>('');
   const [output, setOutput] = useState<string>('');
   const [preview, setPreview] = useState<DocumentPreview | null>(null);
+  const [automaticPreview, setAutomaticPreview] = useState<DocumentPreview | null>(null);
   const [bindings, setBindings] = useState<DocumentBindings>(EMPTY_BINDINGS);
   const [production, setProduction] = useState<ProductionFields>(EMPTY_PRODUCTION);
+  const [reviewEntries, setReviewEntries] = useState<ReviewAuditEntry[]>([]);
+  const [preset, setPreset] = useState<ProductionPreset | null>(null);
   const [version, setVersion] = useState<string>('');
   const [hold, setHold] = useState<string>('');
   const [busy, setBusy] = useState<boolean>(false);
@@ -48,6 +56,23 @@ export function DocumentImportPanel(props: DocumentImportProps): ReactElement {
   const existing: boolean = preview !== null && props.existingProjectIds.includes(preview.projectId);
   const blocked: boolean = busy || props.working;
   const unresolved: number = preview === null ? 0 : mappingProblems(preview, bindings).length;
+  const reviewDraft: ReviewDraft = { bindings, production, entries: reviewEntries };
+  const applyReviewDraft = (draft: ReviewDraft): void => { setBindings(draft.bindings); setProduction(draft.production); setReviewEntries(draft.entries); setProblems([]); };
+  const codexReview = useDocumentReview({ directory, preview, draft: reviewDraft, preset, onApplied: applyReviewDraft });
+  const pendingReview: number = reviewEntries.filter((entry: ReviewAuditEntry): boolean => !entry.confirmed).length;
+  const selectPreset = (selected: ProductionPreset | null): void => {
+    setPreset(selected);
+    if (selected !== null) applyReviewDraft(applyDocumentPreset(reviewDraft, selected));
+    else setReviewEntries((entries: ReviewAuditEntry[]): ReviewAuditEntry[] => entries.filter((entry: ReviewAuditEntry): boolean => entry.origin !== 'preset'));
+  };
+  const noteManualEdit = (field: ReviewAuditEntry['field'], key: string, value: string): void => {
+    const target: string = reviewEntryKey({ field, key }); codexReview.edited(target);
+    setReviewEntries((entries: ReviewAuditEntry[]): ReviewAuditEntry[] => [
+      ...entries.filter((entry: ReviewAuditEntry): boolean => reviewEntryKey(entry) !== target).map((entry: ReviewAuditEntry): ReviewAuditEntry =>
+        field !== 'production' && entry.origin === 'inference' ? { ...entry, confirmed: false } : entry),
+      ...(value === '' ? [] : [{ field, key, value, origin: 'user' as const, reason: '사용자가 직접 입력한 값입니다.', evidence: [], confirmed: true, reviewId: null, model: null }]),
+    ]);
+  };
 
   useEffect((): void => {
     if (props.open && !dialog.current?.open) dialog.current?.showModal();
@@ -69,6 +94,7 @@ export function DocumentImportPanel(props: DocumentImportProps): ReactElement {
     finally { pending.current = false; setBusy(false); }
   };
   const clearSource = (value: string): void => {
+    codexReview.reset(); setAutomaticPreview(null); setReviewEntries([]); setPreset(null);
     setDirectory(value); setPreview(null); setBindings(EMPTY_BINDINGS); setProduction(EMPTY_PRODUCTION);
     setOutput(''); setVersion(''); setHold(''); setHandoffPath(null); setError(null); setProblems([]); setMessage('');
   };
@@ -76,10 +102,11 @@ export function DocumentImportPanel(props: DocumentImportProps): ReactElement {
   const analyze = async (): Promise<void> => {
     if (!directory.trim()) { setProblems([{ id: 'document-directory', message: '제작 문서 8개가 있는 폴더 경로를 입력하세요.' }]); return; }
     const next: DocumentPreview = await previewDocumentPackage(directory.trim(), EMPTY_BINDINGS);
-    if (next.sourceFingerprint !== preview?.sourceFingerprint) { setPreview(next); setBindings(EMPTY_BINDINGS); }
+    if (next.sourceFingerprint !== preview?.sourceFingerprint) { setPreview(next); setAutomaticPreview(next); setBindings(EMPTY_BINDINGS); setReviewEntries([]); codexReview.reset(); }
     setStep(2);
   };
   const changeBinding = (field: MappingField, key: string, targetId: string): void => {
+    noteManualEdit(field, key, targetId);
     setBindings((current: DocumentBindings): DocumentBindings => ({ ...current, [field]: [...current[field].filter((entry): boolean => entry.key !== key), { key, targetId }] }));
     setMessage('');
   };
@@ -102,6 +129,8 @@ export function DocumentImportPanel(props: DocumentImportProps): ReactElement {
     setMessage(remaining.length === 0 ? '모든 연결을 확인했습니다.' : '연결 후보를 갱신했습니다. 남은 항목을 선택하세요.');
   };
   const continueToPackage = async (): Promise<void> => {
+    if (codexReview.working) { setError('Codex 검토가 끝나거나 취소한 뒤 다음 단계로 진행하세요.'); return; }
+    if (pendingReview > 0) { setError(`Codex가 입력한 제안 ${pendingReview}개의 근거를 확인한 뒤 진행하세요.`); return; }
     const next: DocumentPreview | null = await reviewConnections();
     if (next === null) return;
     const result: ProductionReview = reviewProductionFields(production);
@@ -110,15 +139,16 @@ export function DocumentImportPanel(props: DocumentImportProps): ReactElement {
     setStep(3);
   };
   const create = async (): Promise<void> => {
-    if (preview === null) throw new Error('문서를 먼저 검토하세요.');
+    if (preview === null || automaticPreview === null) throw new Error('문서를 먼저 검토하세요.');
     const result: ProductionReview = reviewProductionFields(production);
     if (!result.valid) { setProblems(result.problems); setStep(2); return; }
     const remaining: FieldProblem[] = [];
     if (!version.trim()) remaining.push({ id: 'document-version', message: '패키지 버전을 입력하세요.' });
     if (!output.trim()) remaining.push({ id: 'document-output', message: '새 패키지를 저장할 폴더 경로를 입력하세요.' });
     if (remaining.length > 0) { setProblems(remaining); return; }
-    const settings: DocumentSettings = DocumentSettingsSchema.parse({ formatVersion: '1.0.0', sourceFingerprint: preview.sourceFingerprint,
-      packageVersion: version.trim(), timebase: result.timebase, profile: result.profile, bindings: selectedBindings(bindings) });
+    const settings: DocumentSettings = DocumentSettingsSchema.parse({ formatVersion: '1.1.0', sourceFingerprint: preview.sourceFingerprint,
+      packageVersion: version.trim(), timebase: result.timebase, profile: result.profile, bindings: selectedBindings(bindings),
+      reviewAudit: buildDocumentReviewAudit(preview, automaticPreview, reviewDraft, preset) });
     const created = await createDocumentPackage(directory.trim(), output.trim(), settings);
     setHandoffPath(created.handoffPath);
     setMessage('패키지 생성 완료');
@@ -157,8 +187,11 @@ export function DocumentImportPanel(props: DocumentImportProps): ReactElement {
                 <FieldError id="document-directory" problems={problems} />
                 <ul className="document-file-list">{DOCUMENT_FILES.map((file, index: number): ReactElement => <li key={file.key}><span>{String(index + 1).padStart(2, '0')}</span><div><strong>{DOCUMENT_LABELS[index]}</strong><code>{file.name}</code></div></li>)}</ul>
               </section>}
-              {step === 2 && preview !== null && <><DocumentMappings preview={preview} bindings={bindings} problems={problems} onChange={changeBinding} onReview={(): void => { void run(review); }} />
-                <DocumentProductionFields fields={production} problems={problems} onChange={(field: keyof ProductionFields, value: string): void => { setProduction((current: ProductionFields): ProductionFields => ({ ...current, [field]: value })); }} /></>}
+              {step === 2 && preview !== null && <><DocumentReviewPanel controls={codexReview} entries={reviewEntries} preset={preset} onPreset={selectPreset}
+                onConfirm={(key: string): void => { setReviewEntries((entries: ReviewAuditEntry[]): ReviewAuditEntry[] => entries.map((entry: ReviewAuditEntry): ReviewAuditEntry => reviewEntryKey(entry) === key ? { ...entry, confirmed: true } : entry)); }}
+                onConfirmAll={(): void => { setReviewEntries((entries: ReviewAuditEntry[]): ReviewAuditEntry[] => entries.map((entry: ReviewAuditEntry): ReviewAuditEntry => ({ ...entry, confirmed: true }))); setError(null); }} />
+                <DocumentMappings preview={preview} bindings={bindings} entries={reviewEntries} problems={problems} onChange={changeBinding} onReview={(): void => { void run(review); }} />
+                <DocumentProductionFields fields={production} entries={reviewEntries} problems={problems} onChange={(field: keyof ProductionFields, value: string): void => { noteManualEdit('production', field, value); setProduction((current: ProductionFields): ProductionFields => ({ ...current, [field]: value })); }} /></>}
               {step === 3 && preview !== null && <section className="document-section"><header><span className="document-kicker">패키지 출력</span><h2>저장 위치와 버전</h2><p>새 폴더에 원본 문서 8개, 연결·제작 설정, handoff 파일을 저장합니다.</p></header>
                 {handoffPath === null ? <div className="document-fields-grid"><label className="document-full-field" htmlFor="document-output">새 패키지 폴더<input id="document-output" aria-label="새 패키지 폴더" value={output} onChange={(event): void => { setOutput(event.target.value); }} aria-invalid={problems.some((problem: FieldProblem): boolean => problem.id === 'document-output')} /><small>원본 폴더 밖에 아직 존재하지 않는 새 폴더 경로를 입력하세요.</small><FieldError id="document-output" problems={problems} /></label>
                   <label className="document-full-field" htmlFor="document-version">패키지 버전<input id="document-version" aria-label="패키지 버전" value={version} placeholder="예: draft-01" onChange={(event): void => { setVersion(event.target.value); }} aria-invalid={problems.some((problem: FieldProblem): boolean => problem.id === 'document-version')} /><FieldError id="document-version" problems={problems} /></label></div>

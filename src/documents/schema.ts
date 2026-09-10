@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { HashSchema, IdSchema, ProfileSchema, SourceRefSchema, TimebaseSchema } from '../domain/schema.js';
 import type { Snapshot, SourceRef, SourceUnit } from '../domain/schema.js';
+import { ReviewAuditSchema } from './review-model.js';
 
 export const DOCUMENT_FILES = [
   { key: 'broadcast', name: 'broadcast_readable_script.md', role: 'readable' },
@@ -19,9 +20,10 @@ export const DocumentBindingsSchema = z.strictObject({
   people: z.array(BindingSchema), scenes: z.array(BindingSchema), units: z.array(BindingSchema),
 });
 export const DocumentSettingsSchema = z.strictObject({
-  formatVersion: z.literal('1.0.0'), sourceFingerprint: HashSchema,
+  formatVersion: z.enum(['1.0.0', '1.1.0']), sourceFingerprint: HashSchema,
   packageVersion: z.string().min(1), timebase: TimebaseSchema, profile: ProfileSchema,
   bindings: DocumentBindingsSchema,
+  reviewAudit: ReviewAuditSchema.optional(),
 });
 export type DocumentBindings = z.infer<typeof DocumentBindingsSchema>;
 export type DocumentSettings = z.infer<typeof DocumentSettingsSchema>;

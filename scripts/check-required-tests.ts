@@ -3,6 +3,15 @@ import { extname, join } from 'node:path';
 import { contractError } from '../src/domain/errors.js';
 
 const REQUIRED_TEST_NAMES: readonly string[] = [
+  'document_review_validates_candidates_evidence_duplicates_and_no_false_document_claims',
+  'document_review_preserves_manual_edits_and_requires_confirmed_audit_for_package_roundtrip',
+  'document_review_engine_enforces_chatgpt_tools_json_and_execution_limits',
+  'document_review_service_runs_deduplicates_cancels_retries_and_detects_changed_sources',
+  'document_review_restart_preserves_terminal_results_presets_and_marks_interrupted_work',
+  'document_review_api_rejects_invalid_origin_body_and_busy_then_cancels_without_project_changes',
+  'e2e_codex_document_review_autofills_confirms_presets_and_creates_audited_package',
+  'e2e_codex_document_review_cancels_and_preserves_connection_edits_during_review',
+
   'documents_eight_files_preserve_full_sources_timeline_and_reopen',
   'documents_do_not_assign_character_ids_by_roster_order',
   'documents_independent_project_without_optional_content_is_supported',

@@ -3,6 +3,8 @@ import type { CandidateEvidence, DocumentBindings, DocumentPreview, MappingChoic
 import { DOCUMENT_FILES } from '../../src/documents/schema.js';
 import { choiceValue, mappingInputId, MAPPING_GROUPS } from './document-import-state.js';
 import type { FieldProblem, MappingField, ProductionFields } from './document-import-state.js';
+import type { ReviewAuditEntry } from '../../src/documents/review-model.js';
+import { PRODUCTION_LABELS, ReviewOrigin } from './DocumentReviewPanel.js';
 
 function sourceName(fileId: string): string {
   return DOCUMENT_FILES.find((file): boolean => 'document-' + file.key === fileId)?.name ?? fileId;
@@ -14,6 +16,7 @@ export function FieldError(props: { id: string; problems: readonly FieldProblem[
 }
 
 function MappingRow(props: { field: MappingField; title: string; choice: MappingChoice; bindings: DocumentBindings; problems: readonly FieldProblem[];
+  entries: readonly ReviewAuditEntry[];
   onChange: (field: MappingField, key: string, value: string) => void }): ReactElement {
   const { field, title, choice, bindings } = props;
   const id: string = mappingInputId(field, choice.key);
@@ -27,11 +30,12 @@ function MappingRow(props: { field: MappingField; title: string; choice: Mapping
       <option value="">연결 선택 필요</option>
       {value !== '' && !choice.candidates.includes(value) && <option value={value}>{value} · 다시 선택 필요</option>}
       {choice.candidates.map((candidate: string): ReactElement => <option key={candidate} value={candidate}>{candidate}</option>)}
-    </select><FieldError id={id} problems={props.problems} /></div>
+    </select><ReviewOrigin entry={props.entries.find((entry: ReviewAuditEntry): boolean => entry.field === field && entry.key === choice.key && entry.value === value)} /><FieldError id={id} problems={props.problems} /></div>
   </div>;
 }
 
 export function DocumentMappings(props: { preview: DocumentPreview; bindings: DocumentBindings; problems: readonly FieldProblem[];
+  entries: readonly ReviewAuditEntry[];
   onChange: (field: MappingField, key: string, value: string) => void; onReview: () => void }): ReactElement {
   return <section className="document-section" aria-labelledby="document-mappings-title">
     <header><span className="document-kicker">연결 검토</span><h2 id="document-mappings-title">이름과 원문을 연결하세요</h2>
@@ -57,6 +61,7 @@ export function DocumentMappings(props: { preview: DocumentPreview; bindings: Do
 }
 
 export function DocumentProductionFields(props: { fields: ProductionFields; problems: readonly FieldProblem[];
+  entries: readonly ReviewAuditEntry[];
   onChange: (field: keyof ProductionFields, value: string) => void }): ReactElement {
   const attributes = (field: keyof ProductionFields): { id: string; value: string; 'aria-invalid': boolean; 'aria-describedby': string | undefined } => {
     const id: string = 'document-' + field;
@@ -73,6 +78,6 @@ export function DocumentProductionFields(props: { fields: ProductionFields; prob
       <label htmlFor="document-width">화면비 가로<input type="number" min="1" step="1" aria-label="화면비 가로" {...attributes('width')} onChange={(event): void => { props.onChange('width', event.target.value); }} /><FieldError id="document-width" problems={props.problems} /></label>
       <label htmlFor="document-height">화면비 세로<input type="number" min="1" step="1" aria-label="화면비 세로" {...attributes('height')} onChange={(event): void => { props.onChange('height', event.target.value); }} /><FieldError id="document-height" problems={props.problems} /></label>
       <label className="document-full-field" htmlFor="document-startTimecode">시작 타임코드<input aria-label="시작 타임코드" {...attributes('startTimecode')} onChange={(event): void => { props.onChange('startTimecode', event.target.value); }} /><small>HH:MM:SS:FF · 논드롭 프레임</small><FieldError id="document-startTimecode" problems={props.problems} /></label>
-    </div><p className="document-help">그림 스타일과 실사·AI 제작 방식은 콘티 편집기에서 정합니다.</p>
+    </div><div className="document-production-origins">{props.entries.filter((entry: ReviewAuditEntry): boolean => entry.field === 'production').map((entry: ReviewAuditEntry): ReactElement => <div key={entry.key}><span>{PRODUCTION_LABELS[entry.key]} · {entry.value}</span><ReviewOrigin entry={entry} /></div>)}</div><p className="document-help">그림 스타일과 실사·AI 제작 방식은 콘티 편집기에서 정합니다.</p>
   </section>;
 }

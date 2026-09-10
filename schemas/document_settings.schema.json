@@ -4,11 +4,13 @@
   "properties": {
     "formatVersion": {
       "type": "string",
-      "const": "1.0.0"
+      "enum": [
+        "1.0.0",
+        "1.1.0"
+      ]
     },
     "sourceFingerprint": {
-      "type": "string",
-      "pattern": "^[a-f0-9]{64}$"
+      "$ref": "#/$defs/__schema0"
     },
     "packageVersion": {
       "type": "string",
@@ -95,19 +97,19 @@
         "people": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema0"
+            "$ref": "#/$defs/__schema1"
           }
         },
         "scenes": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema0"
+            "$ref": "#/$defs/__schema1"
           }
         },
         "units": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema0"
+            "$ref": "#/$defs/__schema1"
           }
         }
       },
@@ -115,6 +117,89 @@
         "people",
         "scenes",
         "units"
+      ],
+      "additionalProperties": false
+    },
+    "reviewAudit": {
+      "type": "object",
+      "properties": {
+        "sourceFingerprint": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "preset": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 100
+                },
+                "fields": {
+                  "type": "object",
+                  "properties": {
+                    "fps": {
+                      "type": "string"
+                    },
+                    "sampleRate": {
+                      "type": "string"
+                    },
+                    "width": {
+                      "type": "string"
+                    },
+                    "height": {
+                      "type": "string"
+                    },
+                    "startTimecode": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "fps",
+                    "sampleRate",
+                    "width",
+                    "height",
+                    "startTimecode"
+                  ],
+                  "additionalProperties": false
+                },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "fields",
+                "createdAt"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "entries": {
+          "maxItems": 3000,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/__schema2"
+          }
+        }
+      },
+      "required": [
+        "sourceFingerprint",
+        "preset",
+        "entries"
       ],
       "additionalProperties": false
     }
@@ -130,6 +215,10 @@
   "additionalProperties": false,
   "$defs": {
     "__schema0": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "__schema1": {
       "type": "object",
       "properties": {
         "key": {
@@ -146,6 +235,112 @@
       "required": [
         "key",
         "targetId"
+      ],
+      "additionalProperties": false
+    },
+    "__schema2": {
+      "type": "object",
+      "properties": {
+        "field": {
+          "type": "string",
+          "enum": [
+            "people",
+            "scenes",
+            "units",
+            "production"
+          ]
+        },
+        "key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1
+        },
+        "origin": {
+          "type": "string",
+          "enum": [
+            "document",
+            "inference",
+            "recommendation",
+            "preset",
+            "user"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "evidence": {
+          "maxItems": 12,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/__schema3"
+          }
+        },
+        "confirmed": {
+          "type": "boolean"
+        },
+        "reviewId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "field",
+        "key",
+        "value",
+        "origin",
+        "reason",
+        "evidence",
+        "confirmed",
+        "reviewId",
+        "model"
+      ],
+      "additionalProperties": false
+    },
+    "__schema3": {
+      "type": "object",
+      "properties": {
+        "fileId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "locator": {
+          "type": "string",
+          "minLength": 1
+        },
+        "quote": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        }
+      },
+      "required": [
+        "fileId",
+        "locator",
+        "quote"
       ],
       "additionalProperties": false
     }
