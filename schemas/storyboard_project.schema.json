@@ -4,7 +4,7 @@
   "properties": {
     "schemaVersion": {
       "type": "string",
-      "const": "1.21.0"
+      "const": "1.22.0"
     },
     "projectId": {
       "$ref": "#/$defs/__schema0"
@@ -1131,6 +1131,54 @@
             "items": {
               "$ref": "#/$defs/__schema27"
             }
+          },
+          "sharedScope": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "string",
+                    "const": "1.0.0"
+                  },
+                  "instructionIds": {
+                    "minItems": 2,
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/__schema0"
+                    }
+                  },
+                  "requiredSegmentIds": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/__schema0"
+                    }
+                  },
+                  "sourceEvidence": {
+                    "maxItems": 64,
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/__schema27"
+                    }
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "version",
+                  "instructionIds",
+                  "requiredSegmentIds",
+                  "sourceEvidence",
+                  "reason"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [

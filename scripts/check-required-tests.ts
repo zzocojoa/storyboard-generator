@@ -3,6 +3,14 @@ import { extname, join } from 'node:path';
 import { contractError } from '../src/domain/errors.js';
 
 const REQUIRED_TEST_NAMES: readonly string[] = [
+  'shared_audio_instruction_rejects_independent_segment_sound_without_a_common_scope',
+  'shared_audio_model_receives_other_segments_and_reuses_one_scoped_sound_without_early_information',
+  'shared_audio_scope_rejects_foreign_invented_conflicting_or_unbound_allocations',
+  'legacy_shared_audio_is_reviewed_without_erasing_media_manual_choices_or_generation_history',
+  'shared_audio_grouping_requires_exact_provenance_and_migration_never_fabricates_scope',
+  'shared_audio_source_update_invalidates_cross_segment_scope_and_preserves_local_choices_and_history',
+  'shared_audio_manual_scope_is_respected_and_local_source_text_does_not_repeat_other_segment_events',
+  'e2e_shared_audio_review_shows_applied_segments_without_repeating_sound_and_preserves_scope_after_reload',
   'automatic_planner_corrects_continuity_with_asset_and_boundary_evidence_without_changing_previous_shots_or_human_review',
   'storyboard_narration_visual_source_supports_one_link_and_independent_unmeasured_speech_without_duplicate_units',
   'storyboard_visual_speech_keeps_unresolved_context_early_reveal_and_explicit_audio_anchor_interlocks',

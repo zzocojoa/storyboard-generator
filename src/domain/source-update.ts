@@ -7,6 +7,7 @@ import { createInitialPlacementInformationDecisions, isIndependentTextRelation }
 import type { AudioCue, Project, Segment, Shot, ShotSourceLink, SourceUnit, StoryboardFrame, TextCue, TextMappingDecision, TextPlacement, TextPlacementInformationDecision } from './schema.js';
 import { ProjectSchema } from './schema.js';
 import { validateProject } from './validation.js';
+import { carrySharedAudioScope } from './shared-audio-scope.js';
 
 type Identified = { id: string };
 export type SourceImpactReport = {
@@ -191,7 +192,7 @@ export function applySourceUpdate(current: Project, incoming: Project, prefix: s
       segments: current.productionPlan.segments.filter((plan): boolean => !impacted.has(plan.segmentId) && incoming.dataset.segments.some((segment): boolean => segment.id === plan.segmentId)) },
     ...(current.audioInstructionDecisions === undefined ? {} : { audioInstructionDecisions: current.audioInstructionDecisions.filter((decision): boolean =>
       !impacted.has(decision.sourceSnapshot.segmentId) && incoming.dataset.instructions.some((instruction): boolean => audioInstructionMatches(instruction, decision.sourceSnapshot))
-      && decision.cueIds.every((id): boolean => preservedAudio.some((cue): boolean => cue.id === id))) }),
+      && decision.cueIds.every((id): boolean => preservedAudio.some((cue): boolean => cue.id === id))).map((decision) => carrySharedAudioScope(current, incoming, decision)) }),
     shots, frames: [...preservedFrames, ...replacementFrames], audioCues: [...preservedAudio, ...replacementAudio], textCues: [...preservedText, ...replacementText],
     textMappingDecisions, textPlacementInformationDecisions, assets: current.assets, generationRecords: current.generationRecords };
   const withText: Project = ProjectSchema.parse({ ...base, textCues: reconcileTextCues(base, textMappingDecisions, holdMs) });

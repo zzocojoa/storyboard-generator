@@ -77,6 +77,6 @@ it('text_reading_migrates_old_snapshot_without_rewriting_original_and_rejects_un
   const project = await readingProject(); const { textReadability: _reading, textLayoutControl: _control, ...previous } = project;
   const legacy = { ...previous, schemaVersion: '1.13.0' }; const bytes: string = JSON.stringify(legacy);
   const evidence = parseProjectSnapshotEvidence(legacy);
-  expect(evidence.project).toEqual({ ...project, textLayoutControl: { version: '1.0.0', mode: 'manual', plannedInputHash: null } }); expect(evidence.projectionHashes).toHaveLength(9); expect(JSON.stringify(legacy)).toBe(bytes);
+  expect(evidence.project).toEqual({ ...project, textLayoutControl: { version: '1.0.0', mode: 'manual', plannedInputHash: null } }); expect(evidence.projectionHashes).toHaveLength(10); expect(JSON.stringify(legacy)).toBe(bytes);
   expect(() => parseProject({ ...legacy, textReadability: { unknown: true } })).toThrowError(expect.objectContaining({ code: 'UNSUPPORTED_LEGACY_TEXT_READABILITY' }));
 });

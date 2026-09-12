@@ -40,8 +40,8 @@ import { automaticPlanProvenance } from './automatic-plan-helpers.js';
 
 function proposed(): AutomaticAudioInstructionPlan {
   return { schemaVersion: '1.0.0', segmentId: 'demonstration', summary: '음악 없이 원문의 물소리를 준비한다.', decisions: [
-    { instructionId: 'ambient-instruction', resolution: 'required', cueIds: [], informationIds: ['reveal:동작'], sourceEvidence: [], reason: '물을 주는 행동의 소리이며 별도 WAV가 필요하다.' },
-    { instructionId: 'music-instruction', resolution: 'none', cueIds: [], informationIds: [], sourceEvidence: [], reason: '원문에 배경 음악 없음이 명시됐다.' },
+    { instructionId: 'ambient-instruction', resolution: 'required', cueIds: [], informationIds: ['reveal:동작'], sourceEvidence: [], sharedScope: null, reason: '물을 주는 행동의 소리이며 별도 WAV가 필요하다.' },
+    { instructionId: 'music-instruction', resolution: 'none', cueIds: [], informationIds: [], sourceEvidence: [], sharedScope: null, reason: '원문에 배경 음악 없음이 명시됐다.' },
   ] };
 }
 
@@ -52,7 +52,7 @@ it('audio_instruction_planner_covers_each_source_preserves_originals_and_never_c
   for (const key of ['dataset', 'sources', 'shots', 'frames', 'textCues', 'assets'] as const) expect(next[key]).toEqual(project[key]);
   expect(next.audioInstructionDecisions).toHaveLength(2);
   expect(next.audioInstructionDecisions!.every((value): boolean => value.origin === 'automatic' && value.reviewStatus === 'proposed')).toBe(true);
-  expect(next.generationRecords.at(-1)?.templateVersion).toBe('automatic-audio-instructions-1.0.0');
+  expect(next.generationRecords.at(-1)?.templateVersion).toBe('automatic-audio-instructions-1.1.0');
   const cue = next.audioCues.find((value): boolean => value.instructionId === 'ambient-instruction')!;
   expect(cue.assetId).toBeNull(); expect(cue.timingStatus).toBe('proposed');
   expect(reviewAudioPlaybackAt(next, cue.startMs).playable).not.toContainEqual(cue);

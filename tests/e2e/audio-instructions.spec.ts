@@ -6,12 +6,63 @@ import { build } from 'vite';
 import { compileAudioInstructionPlan } from '../../src/automation/plan-audio-instructions.js';
 import { buildForSpeechVoice } from '../../src/build.js';
 import { CodexRequestStore } from '../../src/codex/requests.js';
+import { readDocumentSources } from '../../src/documents/io.js';
+import { buildDocumentPackage } from '../../src/documents/package.js';
+import { sharedAudioInstructions } from '../../src/domain/shared-audio-scope.js';
+import { importPackage } from '../../src/importers/import-package.js';
+import { createSourceOutline } from '../../src/proposal/outline.js';
 import { createApp } from '../../src/server/app.js';
 import type { AppConfig } from '../../src/server/config.js';
 import { ProjectStore } from '../../src/server/store.js';
 import { audioInstructionFixture, audioPlaceholderFixture } from '../audio-instruction-helpers.js';
 import { automaticPlanProvenance } from '../automatic-plan-helpers.js';
+import { documentTestSettings, PRODUCTION_DOCUMENT_BINDINGS } from '../document-helpers.js';
 import { pcmWav, TEST_AUDIO_NORMALIZATION_OPTIONS } from '../helpers.js';
+
+test('e2e_shared_audio_review_shows_applied_segments_without_repeating_sound_and_preserves_scope_after_reload', async ({ page }): Promise<void> => {
+  const root = await mkdtemp(join(tmpdir(), 'cutroom-shared-audio-ui-'));
+  const config: AppConfig = { host: '127.0.0.1', port: 0, dataRoot: join(root, 'data'), webRoot: resolve('dist/web'),
+    pdfFontPath: resolve('assets/fonts/NanumGothic-Regular.ttf'), audioNormalization: TEST_AUDIO_NORMALIZATION_OPTIONS,
+    codex: { requestRoot: join(root, 'requests'), speechVoice: 'not-installed' } };
+  const documents = await readDocumentSources('tests/fixtures/production/09_PRODUCTION');
+  const source = createSourceOutline(importPackage(buildDocumentPackage(documents, documentTestSettings(documents, PRODUCTION_DOCUMENT_BINDINGS))), { proposedTextHoldMs: 2000 });
+  const first = source.dataset.segments[0]!;
+  const instructions = source.dataset.instructions.filter((instruction): boolean => instruction.segmentId === first.id && ['music', 'ambience'].includes(instruction.kind));
+  const ambient = instructions.find((instruction): boolean => instruction.kind === 'ambience')!;
+  const store = new ProjectStore(config.dataRoot); await store.create(source);
+  await store.update(source.projectId, 0, (current) => compileAudioInstructionPlan(current, first.id, {
+    schemaVersion: '1.0.0', segmentId: first.id, summary: '장면 공통 지시의 적용 위치를 첫 구간으로 정한 화면 검증 제안',
+    decisions: instructions.map((instruction) => ({ instructionId: instruction.id, resolution: 'required', cueIds: [], informationIds: [], sourceEvidence: [],
+      sharedScope: { version: '1.0.0', instructionIds: sharedAudioInstructions(current, instruction).map((value): string => value.id),
+        requiredSegmentIds: [first.id], sourceEvidence: [], reason: '장면 공통 소리는 첫 구간에서 사용하고 뒤 내레이션에 반복하지 않는 검토용 제안입니다.' },
+      reason: '원문 지시와 적용 구간을 검토하세요. 실제 WAV는 선택 사항입니다.' })),
+  }, automaticPlanProvenance()), []);
+  const app = await createApp(config, store, new CodexRequestStore(config.codex.requestRoot, buildForSpeechVoice('not-installed')));
+  try {
+    await page.goto(await app.listen({ host: '127.0.0.1', port: 0 }));
+    await page.getByRole('navigation', { name: '콘티 작업 공간' }).getByRole('button', { name: '제작 현황', exact: true }).click();
+    await page.getByRole('region', { name: '음향 준비 현황' }).getByRole('listitem').filter({ hasText: ambient.text }).getByRole('button', { name: '이 음향 준비하기', exact: true }).click();
+    const editor = page.getByRole('article', { name: `${ambient.id} 음향 지시 검토` });
+    const scope = editor.getByRole('region', { name: '공통 음향 적용 구간' });
+    await expect(scope).toContainText(`${first.id} · ${first.mode}`);
+    await expect(scope).toContainText('현재 구간에 배치합니다.');
+    await expect(scope).toContainText('뒤 내레이션에 반복하지 않는');
+    await page.reload(); await expect(scope).toContainText(`${first.id} · ${first.mode}`);
+    const before = await store.read(source.projectId);
+    await editor.getByLabel('음향 필요 여부').selectOption('none');
+    await editor.getByRole('textbox', { name: '판정 근거', exact: true }).fill('제작자가 이 구간의 추가 음향을 제외했습니다.');
+    const [saved] = await Promise.all([
+      page.waitForResponse((response): boolean => response.request().method() === 'PATCH' && new URL(response.url()).pathname.endsWith(`/audio-instructions/${encodeURIComponent(ambient.id)}`)),
+      editor.getByRole('button', { name: '음향 판정 저장', exact: true }).click(),
+    ]);
+    expect(saved.status()).toBe(200); await expect(scope).toHaveCount(0);
+    await expect(editor.getByLabel('음향 필요 여부')).toHaveValue('none');
+    const after = await store.read(source.projectId);
+    expect(after.audioInstructionDecisions!.find((decision): boolean => decision.instructionId === ambient.id)).toMatchObject({ resolution: 'none', sharedScope: null, origin: 'manual', reviewStatus: 'proposed' });
+    expect(after.dataset).toEqual(source.dataset); expect(after.sources).toEqual(source.sources); expect(after.assets).toEqual([]);
+    expect(after.generationRecords).toEqual(before.generationRecords); expect(after.shots).toEqual(before.shots);
+  } finally { await app.close(); await store.close(); await rm(root, { recursive: true, force: true }); }
+});
 
 test('e2e_audio_instruction_shows_exact_script_evidence_and_keeps_it_through_manual_review', async ({ page }): Promise<void> => {
   const root = await mkdtemp(join(tmpdir(), 'cutroom-audio-evidence-ui-'));

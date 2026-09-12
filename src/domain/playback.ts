@@ -1,4 +1,5 @@
 import { audioCueSource } from './audio-source.js';
+import { audioCueInstructionIssues } from './audio-instruction-evidence.js';
 import { audioTimingIssues } from './audio.js';
 import { reviewInformationEmission, textCueInformationIds } from './emission.js';
 import { issue } from './errors.js';
@@ -78,6 +79,7 @@ export function reviewAudioPlaybackAt(project: Project, playheadMs: number): Aud
     const issues: Issue[] = [
       ...audioAssetIssues(project, cue),
       ...audioTimingIssues(project, cue),
+      ...audioCueInstructionIssues(project, cue),
       ...reviewInformationEmission(project, { entityId: cue.id, channel: 'audio-playback', informationIds, atMs: cue.startMs }),
     ];
     if (issues.length === 0) playable.push(cue);

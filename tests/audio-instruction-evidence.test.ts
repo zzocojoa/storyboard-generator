@@ -16,8 +16,8 @@ import { automaticPlanProvenance } from './automatic-plan-helpers.js';
 function proposed(): AutomaticAudioInstructionPlan {
   return { schemaVersion: '1.0.0', segmentId: 'demonstration', summary: '지문에 적힌 문 두드림을 음향 지시로 연결한다.', decisions: [
     { instructionId: 'ambient-instruction', resolution: 'required', cueIds: [], informationIds: ['reveal:동작'],
-      sourceEvidence: [{ unitId: '동작', quote: '문을 두드리는 소리가 들린다.' }], reason: '빈 환경 음향 칸을 무음으로 단정하지 않고 지문의 실제 소리를 인용한다.' },
-    { instructionId: 'music-instruction', resolution: 'none', cueIds: [], informationIds: [], sourceEvidence: [], reason: '배경 음악 없음이 명시됐다.' },
+      sourceEvidence: [{ unitId: '동작', quote: '문을 두드리는 소리가 들린다.' }], sharedScope: null, reason: '빈 환경 음향 칸을 무음으로 단정하지 않고 지문의 실제 소리를 인용한다.' },
+    { instructionId: 'music-instruction', resolution: 'none', cueIds: [], informationIds: [], sourceEvidence: [], sharedScope: null, reason: '배경 음악 없음이 명시됐다.' },
   ] };
 }
 
@@ -61,9 +61,9 @@ it('audio_instruction_evidence_rejects_invented_foreign_spoken_duplicate_or_unbo
 it('legacy_empty_automatic_sound_is_preserved_blocked_and_replanned_without_replacing_real_media_or_manual_choices', async (): Promise<void> => {
   const initial = await audioPlaceholderFixture();
   const generated = compileAudioInstructionPlan(initial, 'demonstration', proposed(), automaticPlanProvenance());
-  const legacy = { ...generated, schemaVersion: '1.20.0', audioInstructionDecisions: generated.audioInstructionDecisions!.map(({ sourceEvidence: _evidence, ...decision }) => decision) };
+  const legacy = { ...generated, schemaVersion: '1.20.0', audioInstructionDecisions: generated.audioInstructionDecisions!.map(({ sourceEvidence: _evidence, sharedScope: _scope, ...decision }) => decision) };
   const bytes: string = JSON.stringify(legacy); const project = parseProject(legacy);
-  expect(JSON.stringify(legacy)).toBe(bytes); expect(project.schemaVersion).toBe('1.21.0');
+  expect(JSON.stringify(legacy)).toBe(bytes); expect(project.schemaVersion).toBe('1.22.0');
   const cue = project.audioCues.find((value): boolean => value.instructionId === 'ambient-instruction')!;
   expect(storyboardAudioIssues(project, cue)).toContainEqual(expect.objectContaining({ code: 'AUDIO_INSTRUCTION_CONTENT_REQUIRED' }));
   expect(() => confirmAudioInstruction(project, 'ambient-instruction')).toThrow();

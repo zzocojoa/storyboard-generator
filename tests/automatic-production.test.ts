@@ -272,7 +272,7 @@ describe('자동 제작 기준', (): void => {
   it('이전 저장본의 원본과 자산을 보존하고 제작 계획을 임의로 복원하지 않는다', async (): Promise<void> => {
     const project = await automaticPlanProject(); const { productionPlan: _plan, textLayout: _textLayout, textReadability: _textReadability, textLayoutControl: _control, ...withoutPlan } = project;
     const legacy = { ...withoutPlan, schemaVersion: '1.10.0' }; const snapshot = structuredClone(legacy);
-    expect(parseProject(legacy)).toEqual({ ...project, schemaVersion: '1.21.0', productionPlan: null, textLayoutControl: { version: '1.0.0', mode: 'manual', plannedInputHash: null } });
+    expect(parseProject(legacy)).toEqual({ ...project, schemaVersion: '1.22.0', productionPlan: null, textLayoutControl: { version: '1.0.0', mode: 'manual', plannedInputHash: null } });
     expect(legacy).toEqual(snapshot);
     expect(() => parseProject({ ...legacy, productionPlan: { unknown: '보존해야 할 자료' } })).toThrowError(expect.objectContaining({ code: 'UNSUPPORTED_LEGACY_PRODUCTION_PLAN' }));
   });

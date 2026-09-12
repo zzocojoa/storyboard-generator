@@ -4,7 +4,7 @@ import { reviewInformationEmission } from './emission.js';
 import { issue } from './errors.js';
 import type { AudioCue, Issue, Project, ShotSourceLink } from './schema.js';
 import { sourceRevealEvidenceMs } from './source-anchor.js';
-import { audioInstructionContentIssues, audioInstructionEvidenceIssues } from './audio-instruction-evidence.js';
+import { audioCueInstructionIssues } from './audio-instruction-evidence.js';
 
 type PlannedSourceEvidence = { usage: ShotSourceLink['usage']; atMs: number };
 
@@ -28,12 +28,8 @@ export function storyboardAudioIssues(project: Project, cue: AudioCue): Issue[] 
   const source = audioCueSource(project, cue);
   if (source === null) return [issue('AUDIO_SOURCE_CONTEXT_MISSING', 'error', cue.id, 'audioSource', '대사·음향 지시의 원문 연결을 확인하세요.', 'valid source', cue.instructionId ?? cue.unitId, [])];
   const plannedStart: number | null = plannedAudioSourceStart(project, cue);
-  const instruction = project.dataset.instructions.find((value): boolean => value.id === cue.instructionId);
-  const decision = project.audioInstructionDecisions?.find((value): boolean => value.instructionId === cue.instructionId);
-  const instructionIssues: Issue[] = instruction === undefined || decision === undefined ? []
-    : [...audioInstructionContentIssues(project, instruction, decision), ...audioInstructionEvidenceIssues(project, instruction, decision)];
   const anchorIssues: Issue[] = cue.timingStatus !== 'measured' && cue.timingRelation !== 'j-cut' && cue.unitId !== null && plannedStart !== cue.startMs
     ? [issue('STORYBOARD_AUDIO_TIMING_REQUIRED', 'conflict', cue.id, 'timing', '음성 전용 원문의 최초 Anchor와 발화 시작을 맞추세요. 같은 원문을 그림에도 쓰면 직접 시각 연결을 확정하고 최초 공개 이후에 발화를 배치하세요. 실제 음원은 선택 사항입니다.', String(cue.startMs), plannedStart === null ? null : String(plannedStart), source.sourceRefs)] : [];
-  return [...audioTimingIssues(project, cue), ...anchorIssues, ...instructionIssues,
+  return [...audioTimingIssues(project, cue), ...anchorIssues, ...audioCueInstructionIssues(project, cue),
     ...reviewInformationEmission(project, { entityId: cue.id, channel: 'export', informationIds: source.informationIds, atMs: cue.startMs })];
 }

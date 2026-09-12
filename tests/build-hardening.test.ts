@@ -169,7 +169,7 @@ describe('생성 계약 Build 식별', (): void => {
       templateVersion: '1', seed: null, referenceHashes: [], resultAssetIds: [], shotIds: [], createdAt: '2026-09-07T00:00:00.000Z', generatorBuild: null };
     const input = { ...legacyTextProject(project), schemaVersion: '1.7.0', generationRecords: [legacy] };
     const migrated: Project = parseProject(input);
-    expect(migrated).toEqual({ ...input, schemaVersion: '1.21.0', textLayout: project.textLayout, textReadability: project.textReadability, textLayoutControl: { version: '1.0.0', mode: 'manual', plannedInputHash: null } });
+    expect(migrated).toEqual({ ...input, schemaVersion: '1.22.0', textLayout: project.textLayout, textReadability: project.textReadability, textLayoutControl: { version: '1.0.0', mode: 'manual', plannedInputHash: null } });
     expect(parseProject(migrated)).toEqual(migrated);
   });
 

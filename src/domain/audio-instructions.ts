@@ -3,12 +3,13 @@ import { audioCueSource, audioInstructionMatches } from './audio-source.js';
 import { audioInstructionContentIssues, audioInstructionEvidenceIssues } from './audio-instruction-evidence.js';
 import { automaticAudioProtected } from './edit-protection.js';
 import { assertNoErrors, contractError, issue } from './errors.js';
-import { AudioInstructionDecisionSchema, AudioInstructionEvidenceSchema, IdSchema, ProjectSchema } from './schema.js';
+import { AudioInstructionDecisionSchema, AudioInstructionEvidenceSchema, IdSchema, ProjectSchema, SharedAudioScopeSchema } from './schema.js';
 import type { AudioCue, AudioInstructionDecision, Instruction, Issue, Project } from './schema.js';
 
 export const AudioInstructionInputSchema = z.strictObject({
   instructionId: IdSchema, resolution: z.enum(['none', 'required']), cueIds: z.array(IdSchema), informationIds: z.array(IdSchema), reason: z.string().trim().min(1),
   sourceEvidence: z.array(AudioInstructionEvidenceSchema).max(64).optional(),
+  sharedScope: SharedAudioScopeSchema.nullable().optional(),
 });
 export type AudioInstructionInput = z.infer<typeof AudioInstructionInputSchema>;
 

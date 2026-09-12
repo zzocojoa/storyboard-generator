@@ -268,11 +268,19 @@ function migrate120To121(input: JsonObject): JsonObject {
   return { ...input, schemaVersion: '1.21.0' };
 }
 
+function migrate121To122(input: JsonObject): JsonObject {
+  if (input.schemaVersion !== '1.21.0') return input;
+  if (Array.isArray(input.audioInstructionDecisions) && input.audioInstructionDecisions.some((decision): boolean => isJsonObject(decision) && 'sharedScope' in decision)) {
+    throw contractError('UNSUPPORTED_LEGACY_SHARED_AUDIO_SCOPE', '1.21 이전 저장본에는 공통 음향의 적용 구간 판정이 없습니다. 버전과 sharedScope를 확인하세요.', []);
+  }
+  return { ...input, schemaVersion: '1.22.0' };
+}
+
 /** 실제 저장 형식에서 정의된 순방향 변환만 수행한다. 과거 버전을 역으로 추측하지 않는다. */
 function projectMigrationInputs(input: unknown): readonly unknown[] {
   if (!isJsonObject(input)) return [input];
   const migrations: readonly ((value: JsonObject) => JsonObject)[] = [migrate10To11, migrate11To12, migrate12To13,
-    migrate13To14, migrate14To15, migrate15To16, migrate16To17, migrate17To18, migrate18To19, migrate19To110, migrate110To111, migrate111To112, migrate112To113, migrate113To114, migrate114To115, migrate115To116, migrate116To117, migrate117To118, migrate118To119, migrate119To120, migrate120To121];
+    migrate13To14, migrate14To15, migrate15To16, migrate16To17, migrate17To18, migrate18To19, migrate19To110, migrate110To111, migrate111To112, migrate112To113, migrate113To114, migrate114To115, migrate115To116, migrate116To117, migrate117To118, migrate118To119, migrate119To120, migrate120To121, migrate121To122];
   return migrations.reduce<readonly JsonObject[]>((states, migrate): readonly JsonObject[] => {
     const previous: JsonObject = states[states.length - 1]!;
     const next: JsonObject = migrate(previous);
