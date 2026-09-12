@@ -319,7 +319,7 @@ function FrameEditor(props: { project: Project; shot: Shot; frame: StoryboardFra
   useEffect((): void => { setPreviewFailed(false); }, [props.frame.imageAssetId]);
 
   const outputState: string = reviewFrameLabel(props.project, props.frame);
-  return <article className="frame-editor">{recovery.notice}
+  return <article className="frame-editor" id={`frame-editor-${props.frame.id}`} tabIndex={-1}>{recovery.notice}
     <header><b>{props.frame.role.toUpperCase()}</b><span>+{props.frame.offsetMs}ms · {outputState}</span></header>
     {props.frame.imageAssetId !== null && <figure className="frame-review-preview">{previewFailed ? <p role="alert">그림 파일을 확인하지 못했습니다. 자산 무결성 상태를 확인하세요.</p> : <img src={`/api/projects/${encodeURIComponent(props.project.projectId)}/assets/${encodeURIComponent(props.frame.imageAssetId)}`} alt={`${props.frame.role} 프레임 생성 결과 검토`} onError={(): void => { setPreviewFailed(true); }} />}<figcaption>그림 검토용 원본 · {props.frame.visualReview === 'accepted' ? '승인된 그림' : '미승인 그림'} · 최종 재생·출력은 별도 검사합니다.</figcaption></figure>}
     <p>STORED {props.frame.offsetMs}ms · DISPLAY {frameDisplayAbsoluteMs(props.shot, props.frame)}ms · EVALUATION {frameEvaluationAbsoluteMs(props.shot, props.frame)}ms</p>
@@ -1057,7 +1057,13 @@ export default function App(): ReactElement {
     {monitorOpen && <PlaybackMonitor reviewPlayback={reviewPlayback} project={project} playhead={playhead} maturity={outputMaturity} playing={playing} onToggle={togglePlayback}
       onSeek={(value): void => { audioController.reset(); setPlaying(false); setPlayhead(value); }}
       onInspect={(frameId): void => { const target = project.frames.find((value): boolean => value.id === frameId); const current = project.shots.find((value): boolean => value.id === target?.shotId);
-        if (current !== undefined) { audioController.reset(); setPlaying(false); setMonitorOpen(false); setSegmentId(current.segmentId); setShotId(current.id); openEditor('frames'); } }} onClose={(): void => { audioController.reset(); setPlaying(false); setMonitorOpen(false); }} />}
+        if (current !== undefined) {
+          audioController.reset(); setPlaying(false); setMonitorOpen(false); setSegmentId(current.segmentId); setShotId(current.id); openEditor('frames');
+          window.requestAnimationFrame((): void => {
+            const editor: HTMLElement | null = document.getElementById(`frame-editor-${frameId}`);
+            editor?.focus({ preventScroll: true }); editor?.scrollIntoView({ block: 'start' });
+          });
+        } }} onClose={(): void => { audioController.reset(); setPlaying(false); setMonitorOpen(false); }} />}
     {storageRecoveryRequired && <div className="storage-recovery-banner" role="alert"><strong>STORAGE RECOVERY REQUIRED</strong><span>해당 Project는 저장소 복구 전 변경할 수 없습니다. 자동 재시도하지 마세요.</span></div>}
     {assetIntegrityIssues.length > 0 && <div className="asset-integrity-banner" role="alert"><strong>ASSET REPAIR REQUIRED</strong><span>{assetIntegrityIssues.map((item: AssetIntegrityUiIssue): string => `${item.assetId} · ${item.code}`).join(' / ')}</span></div>}
     {notice !== null && <button className={`notice ${notice.tone}`} onClick={(): void => { setNotice(null); }}>{notice.text}<span>×</span></button>}

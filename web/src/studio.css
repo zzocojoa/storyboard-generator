@@ -302,6 +302,7 @@ body { min-width: 360px; min-height: 100dvh; }
 .automatic-production pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .automatic-scope { color: #606757; }
 .frame-review-preview { margin: 12px 0; }
+.frame-editor:focus { outline: 2px solid var(--studio-accent); outline-offset: 3px; }
 .frame-review-preview img { display: block; width: 100%; max-height: 420px; object-fit: contain; background: #f1f2ec; }
 .frame-review-preview figcaption { font-size: 12px; line-height: 1.6; padding-top: 8px; }
 .production-reference-review { border-top: 1px solid var(--studio-line); margin-top: 30px; padding-top: 24px; }
