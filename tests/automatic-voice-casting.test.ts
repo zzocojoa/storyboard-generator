@@ -10,13 +10,14 @@ import { AutomationSettingsSchema } from '../src/automation/run-schema.js';
 import type { AutomationSettings } from '../src/automation/run-schema.js';
 import { createAutomationRun } from '../src/automation/run-state.js';
 import { missingVoiceCastingSpeakers, requiredAutomationSpeechVoices, resolvedAutomationSpeakerVoices } from '../src/automation/speech-settings.js';
-import type { StructuredGenerationInput, StructuredGenerationResult } from '../src/codex/structured-engine.js';
+import type { StructuredGenerationResult } from '../src/codex/structured-engine.js';
 import type { Project } from '../src/domain/schema.js';
 import type { InstalledSpeechVoice } from '../src/domain/speech-voice.js';
 import { voiceCastingIssues } from '../src/domain/voice-casting.js';
 import { parseProject, parseProjectSnapshotEvidence } from '../src/io/project.js';
 import { automaticPlanProject, automaticPlanProvenance, stagedPlanSpeech } from './automatic-plan-helpers.js';
 import { createExecutionHarness, initial, settings } from './automatic-executor-helpers.js';
+import { manualMissingSpeechProject } from './automatic-missing-speech-helpers.js';
 
 const automatic: AutomationSettings = { ...settings, speakerVoices: [], voicePlanning: 'automatic' };
 const catalog: InstalledSpeechVoice[] = [{ name: 'Yuna', locale: 'ko_KR', sample: '안녕하세요' }, { name: 'Test Korean', locale: 'ko_KR', sample: '차분하게 안내합니다' }];
@@ -91,13 +92,14 @@ describe('Codex 화자 자동 배정', (): void => {
     const h = await createExecutionHarness(async (phase): Promise<void> => { if (phase === 'after-project-commit' && failOnce) { failOnce = false; interrupted.abort(); throw new Error('배정 Commit 이후 중단 검증'); } });
     try {
       await new AutomationRunExecutor(h.services).cancel(h.id);
-      const created = { ...initial(h.source), settings: automatic }; await h.services.runs.create(created, h.source);
+      // 기존 편집 컷에서 배정→재시작→음성만 검사하며 무관한 제작 계획·기준 그림을 생성하지 않는다.
+      const manual = await manualMissingSpeechProject();
+      const source = await h.services.projects.update(h.source.projectId, 0, (current): Project => ({ ...current, shots: manual.shots }), []);
+      const created = { ...initial(source), settings: automatic }; await h.services.runs.create(created, source);
       h.engine.voiceCatalog = async (): Promise<InstalledSpeechVoice[]> => structuredClone(catalog);
-      const normalModel = h.engine.model.run; const castingCalls = vi.fn();
-      h.engine.model.run = async (input: StructuredGenerationInput, callSignal: AbortSignal): Promise<StructuredGenerationResult> => {
-        if (JSON.stringify(input.outputSchema).includes('"assignments"')) { castingCalls(); return output(plan); }
-        return normalModel(input, callSignal);
-      };
+      const casting = vi.fn(async (): Promise<StructuredGenerationResult> => output(plan));
+      const image = vi.fn(async (): Promise<never> => { throw new Error('음성 배정 재시작 검사에서 그림 생성을 호출할 수 없습니다.'); });
+      h.engine.model.run = casting; h.engine.image.run = image;
       const speech = vi.fn(async (input: SpeechGenerationInput): Promise<SpeechGenerationResult> => ({ ...stagedPlanSpeech(await h.services.projects.read(h.source.projectId)).result, voice: { ...input.voice } }));
       h.engine.speech.run = speech;
       const first = await new AutomationRunExecutor(h.services).run(created.id, interrupted.signal);
@@ -110,10 +112,11 @@ describe('Codex 화자 자동 배정', (): void => {
       const afterSpeech = new AbortController();
       h.services.onSpeechReady = async (): Promise<void> => { afterSpeech.abort(); };
       const resumed = await new AutomationRunExecutor(h.services).run(created.id, afterSpeech.signal);
-      expect(resumed.run.status).toBe('paused'); expect(castingCalls).toHaveBeenCalledTimes(1); expect(speech).toHaveBeenCalledTimes(1);
+      expect(resumed.run.status).toBe('paused'); expect(casting).toHaveBeenCalledTimes(1); expect(image).not.toHaveBeenCalled();
+      expect(resumed.run.jobs.map((job): string => job.task.kind)).toEqual(['voice-casting', 'repair']); expect(speech).toHaveBeenCalledTimes(1);
       expect(speech.mock.calls[0]![0].voice).toEqual(selectedVoice);
       const final = await h.services.projects.read(h.source.projectId);
-      expect(final.voiceCasting).toEqual(cast.voiceCasting); expect(final.dataset).toEqual(h.source.dataset);
+      expect(final.voiceCasting).toEqual(cast.voiceCasting); expect(final.dataset).toEqual(source.dataset); expect(final.shots).toEqual(source.shots);
       expect(final.generationRecords.filter((record): boolean => record.templateVersion === 'automatic-voice-casting-1.0.0')).toHaveLength(1);
       expect(final.frames.every((frame): boolean => frame.visualReview !== 'accepted')).toBe(true);
     } finally { await h.close(); }
