@@ -9,15 +9,94 @@ import { CodexRequestStore } from '../../src/codex/requests.js';
 import { readDocumentSources } from '../../src/documents/io.js';
 import { buildDocumentPackage } from '../../src/documents/package.js';
 import { sharedAudioInstructions } from '../../src/domain/shared-audio-scope.js';
+import { applySourceUpdate } from '../../src/domain/source-update.js';
 import { importPackage } from '../../src/importers/import-package.js';
 import { createSourceOutline } from '../../src/proposal/outline.js';
 import { createApp } from '../../src/server/app.js';
 import type { AppConfig } from '../../src/server/config.js';
 import { ProjectStore } from '../../src/server/store.js';
 import { audioInstructionFixture, audioPlaceholderFixture } from '../audio-instruction-helpers.js';
+import { occurrencePlan, occurrenceProject } from '../audio-occurrence-helpers.js';
 import { automaticPlanProvenance } from '../automatic-plan-helpers.js';
 import { documentTestSettings, PRODUCTION_DOCUMENT_BINDINGS } from '../document-helpers.js';
-import { pcmWav, TEST_AUDIO_NORMALIZATION_OPTIONS } from '../helpers.js';
+import { nativeData, pcmWav, TEST_AUDIO_NORMALIZATION_OPTIONS, withNativeData } from '../helpers.js';
+
+test('e2e_audio_occurrences_show_distinct_sources_and_times_and_preserve_edits_until_explicit_review', async ({ page }): Promise<void> => {
+  const root = await mkdtemp(join(tmpdir(), 'cutroom-occurrences-ui-'));
+  const config: AppConfig = { host: '127.0.0.1', port: 0, dataRoot: join(root, 'data'), webRoot: resolve('dist/web'),
+    pdfFontPath: resolve('assets/fonts/NanumGothic-Regular.ttf'), audioNormalization: TEST_AUDIO_NORMALIZATION_OPTIONS,
+    codex: { requestRoot: join(root, 'requests'), speechVoice: 'not-installed' } };
+  const store = new ProjectStore(config.dataRoot); const source = await occurrenceProject(); await store.create(source);
+  const generated = await store.update(source.projectId, 0, (current) => compileAudioInstructionPlan(current, 'demonstration', occurrencePlan(), automaticPlanProvenance()), []);
+  const app = await createApp(config, store, new CodexRequestStore(config.codex.requestRoot, buildForSpeechVoice('not-installed')));
+  try {
+    await page.goto(await app.listen({ host: '127.0.0.1', port: 0 }));
+    await page.getByRole('navigation', { name: '콘티 작업 공간' }).getByRole('button', { name: '제작 현황', exact: true }).click();
+    await page.getByRole('region', { name: '음향 준비 현황' }).getByRole('listitem').filter({ hasText: '물이 흙에 닿는 소리' }).getByRole('button', { name: '이 음향 준비하기', exact: true }).click();
+    const editor = page.getByRole('article', { name: 'ambient-instruction 음향 지시 검토' });
+    const occurrences = editor.getByRole('region', { name: '발생별 음향 배치' });
+    await expect(occurrences.getByRole('group', { name: '소리 1', exact: true }).getByLabel('소리 인용')).toHaveValue('물이 흙에 닿는 소리');
+    await expect(occurrences.getByRole('group', { name: '소리 2', exact: true }).getByLabel('소리 인용')).toHaveValue('컵을 내려놓는 소리');
+    for (const value of [{ text: '물이 흙에 닿는 소리', start: 6000, end: 6500 }, { text: '컵을 내려놓는 소리', start: 11000, end: 11500 }]) {
+      const track = page.locator('.track-editor').filter({ has: page.locator('p', { hasText: new RegExp(`^${value.text}$`) }) });
+      await expect(track).toHaveCount(1);
+      await track.getByLabel('START MS').fill(String(value.start)); await track.getByLabel('END MS').fill(String(value.end));
+      const [response] = await Promise.all([
+        page.waitForResponse((entry): boolean => entry.request().method() === 'PATCH' && new URL(entry.url()).pathname.includes('/audio/')),
+        track.getByRole('button', { name: '타이밍 저장', exact: true }).click(),
+      ]);
+      expect(response.status()).toBe(200);
+    }
+    await expect(occurrences).toContainText('6000–6500 ms'); await expect(occurrences).toContainText('11000–11500 ms');
+    const reason = occurrences.getByRole('group', { name: '소리 1', exact: true }).getByLabel('발생 근거');
+    await reason.fill('물을 붓는 순간의 별도 소리로 확인했습니다.');
+    await page.reload(); await expect(reason).toHaveValue('물을 붓는 순간의 별도 소리로 확인했습니다.');
+    await expect(editor.getByRole('button', { name: '음향 판정 확인', exact: true })).toBeDisabled();
+    const [response] = await Promise.all([
+      page.waitForResponse((entry): boolean => entry.request().method() === 'PATCH' && new URL(entry.url()).pathname.endsWith('/audio-instructions/ambient-instruction')),
+      editor.getByRole('button', { name: '음향 판정 저장', exact: true }).click(),
+    ]);
+    expect(response.status()).toBe(200); await expect(editor).toContainText('직접 설정 · 검토 대기');
+    await page.reload(); await expect(occurrences).toContainText('6000–6500 ms'); await expect(occurrences).toContainText('11000–11500 ms');
+    const saved = await store.read(source.projectId); const decision = saved.audioInstructionDecisions!.find((value): boolean => value.instructionId === 'ambient-instruction')!;
+    expect(decision.occurrences).toHaveLength(2); expect(decision.cueIds).toEqual(generated.audioInstructionDecisions![0]!.cueIds);
+    expect(decision.occurrences![0]!.reason).toBe('물을 붓는 순간의 별도 소리로 확인했습니다.'); expect(decision.reviewStatus).toBe('proposed');
+    const [confirmed] = await Promise.all([
+      page.waitForResponse((entry): boolean => entry.request().method() === 'POST' && new URL(entry.url()).pathname.endsWith('/audio-instructions/ambient-instruction/confirm')),
+      editor.getByRole('button', { name: '음향 판정 확인', exact: true }).click(),
+    ]);
+    expect(confirmed.status()).toBe(200);
+    const after = await store.read(source.projectId);
+    expect(after.audioInstructionDecisions!.find((value): boolean => value.instructionId === 'ambient-instruction')?.reviewStatus).toBe('confirmed');
+    for (const key of ['dataset', 'sources', 'assets', 'frames', 'generationRecords'] as const) expect(after[key]).toEqual(generated[key]);
+    expect(after.audioCues.every((cue): boolean => cue.assetId === null)).toBe(true);
+    await occurrences.getByRole('button', { name: '소리 발생 추가', exact: true }).click();
+    const unfinished = occurrences.getByRole('group', { name: '소리 3', exact: true });
+    await unfinished.getByLabel('소리 인용').fill('');
+    await page.reload(); await expect(unfinished.getByLabel('소리 인용')).toHaveValue('');
+    await expect(unfinished.getByLabel('발생 근거')).toHaveValue('');
+    await expect(editor.getByRole('button', { name: '음향 판정 저장', exact: true })).toBeDisabled();
+    expect(await store.read(source.projectId)).toEqual(after);
+    const payload = { handoff: source.handoff, files: source.sources.map((value) => ({ path: value.path, content: value.content })) };
+    const data = nativeData(payload);
+    const incoming = createSourceOutline(importPackage(withNativeData(payload, { ...data,
+      units: data.units.filter((unit): boolean => unit.id !== '동작'), informationRules: data.informationRules.filter((rule): boolean => rule.id !== 'reveal:동작'),
+    })), { proposedTextHoldMs: 2000 });
+    const updated = await store.update(source.projectId, after.revision, (current) => applySourceUpdate(current, incoming, 'occurrence-source-update'), []);
+    await page.reload();
+    await page.getByRole('button', { name: 'DEMONSTRATION 00:05:00', exact: true }).click();
+    await page.getByRole('navigation', { name: '선택 컷 편집 항목' }).getByRole('button', { name: '음성', exact: true }).click();
+    await page.getByRole('button', { name: '현재 작업 위치 다시 기억', exact: true }).click();
+    await editor.getByRole('button', { name: '작성한 값을 현재 기준으로 검토', exact: true }).click();
+    const first = occurrences.getByRole('group', { name: '소리 1', exact: true });
+    await expect(first.getByLabel('소리 원문')).toHaveValue('동작');
+    await expect(first.getByLabel('소리 원문').locator('option:checked')).toHaveText('원본에서 사라진 연결 · 동작');
+    await first.getByLabel('발생 근거').fill('원문 변경 후 이전 소리 연결을 다시 확인합니다.');
+    await page.reload(); await expect(first.getByLabel('발생 근거')).toHaveValue('원문 변경 후 이전 소리 연결을 다시 확인합니다.');
+    await expect(first.getByLabel('소리 인용')).toHaveValue('물이 흙에 닿는 소리');
+    expect(await store.read(source.projectId)).toEqual(updated);
+  } finally { await app.close(); await store.close(); await rm(root, { recursive: true, force: true }); }
+});
 
 test('e2e_shared_audio_review_shows_applied_segments_without_repeating_sound_and_preserves_scope_after_reload', async ({ page }): Promise<void> => {
   const root = await mkdtemp(join(tmpdir(), 'cutroom-shared-audio-ui-'));

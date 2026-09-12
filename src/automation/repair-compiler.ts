@@ -1,4 +1,5 @@
 import { reviewVisualPlanChangeIssues } from '../domain/edit.js';
+import { storyboardAudioIssues } from '../domain/audio-storyboard.js';
 import { contractError } from '../domain/errors.js';
 import { reviewFinalReadiness } from '../domain/final-readiness.js';
 import { assertGenerationRecordTransition } from '../domain/generation-records.js';
@@ -29,7 +30,8 @@ function validateRepair(before: Project, next: Project, basis: SourceRepairBasis
   const changed: string[] = [...new Set(basis.targets.map((target): string => target.shotId))];
   const current: Issue[] = repairIssues(next, basis.segmentId);
   const issues: Issue[] = [...changed.flatMap((id): Issue[] => reviewVisualPlanChangeIssues(before, next, id).blockingIssues),
-    ...current.filter((value): boolean => value.severity === 'error' || value.severity === 'conflict' && (!prior.has(stableJsonStringify(value)) || basis.audioCueIds.includes(value.entityId) || basis.speechCueIds.includes(value.entityId)))];
+    ...current.filter((value): boolean => value.severity === 'error' || value.severity === 'conflict' && (!prior.has(stableJsonStringify(value)) || basis.audioCueIds.includes(value.entityId) || basis.speechCueIds.includes(value.entityId))),
+    ...next.audioCues.filter((cue): boolean => basis.soundCueIds.includes(cue.id)).flatMap((cue): Issue[] => storyboardAudioIssues(next, cue))];
   const unique: Issue[] = [...new Map(issues.map((value): [string, Issue] => [stableJsonStringify(value), value])).values()];
   if (unique.length > 0) throw contractError('AUTOMATION_REPAIR_INVALID', `${basis.segmentId}: 기존 컷과 확정 시각을 보존하면서 연결을 보정하세요.\n${unique.map((value): string => `${value.code}: ${value.entityId}.${value.field}: ${value.message}`).join('\n')}`, unique);
   return [...new Map(current.map((value): [string, Issue] => [stableJsonStringify(value), value])).values()];

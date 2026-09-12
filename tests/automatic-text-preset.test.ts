@@ -171,11 +171,11 @@ it('automatic_text_preset_legacy_migration_keeps_file_hashes_and_treats_unknown_
     await store.create(project); const directory: string = join(root, sha256Text(project.projectId));
     const path: string = join(directory, 'project.json'); const versionPath: string = join(directory, 'versions', '000000.json');
     await writeFile(path, bytes); await writeFile(versionPath, bytes);
-    expect(evidence.project.schemaVersion).toBe('1.22.0');
+    expect(evidence.project.schemaVersion).toBe('1.23.0');
     expect((await store.read(project.projectId)).textLayoutControl.mode).toBe('manual');
     expect(await readFile(path, 'utf8')).toBe(bytes); expect(await readFile(versionPath, 'utf8')).toBe(bytes);
     await store.update(project.projectId, 0, (current) => ({ ...current, title: '이전 콘티에서 이어 편집' }), []);
     expect(await readFile(versionPath, 'utf8')).toBe(bytes);
-    expect(JSON.parse(await readFile(path, 'utf8'))).toMatchObject({ schemaVersion: '1.22.0', revision: 1, textLayoutControl: { mode: 'manual' } });
+    expect(JSON.parse(await readFile(path, 'utf8'))).toMatchObject({ schemaVersion: '1.23.0', revision: 1, textLayoutControl: { mode: 'manual' } });
   } finally { await store.close(); await rm(root, { recursive: true, force: true }); }
 });

@@ -212,6 +212,14 @@ export const AudioCueSchema = z.strictObject({
   if (cue.instructionId !== undefined && !['sfx', 'music'].includes(cue.kind)) context.addIssue({ code: 'custom', path: ['kind'], message: '음향 지시를 발화로 합성할 수 없습니다.' });
 });
 export const AudioInstructionEvidenceSchema = z.strictObject({ unitId: IdSchema, quote: z.string().trim().min(1) });
+export const AudioInstructionOccurrenceSourceSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('unit'), unitId: IdSchema, quote: z.string().trim().min(1) }),
+  z.strictObject({ kind: z.literal('instruction'), quote: z.string().trim().min(1) }),
+]);
+export const AudioInstructionOccurrenceSchema = z.strictObject({
+  cueId: IdSchema, source: AudioInstructionOccurrenceSourceSchema, informationIds: z.array(IdSchema), reason: z.string().trim().min(1),
+  supportingUnitIds: z.array(IdSchema).max(64).optional(),
+});
 export const SharedAudioScopeSchema = z.strictObject({
   version: z.literal('1.0.0'), instructionIds: z.array(IdSchema).min(2), requiredSegmentIds: z.array(IdSchema),
   sourceEvidence: z.array(AudioInstructionEvidenceSchema).max(64), reason: z.string().trim().min(1),
@@ -223,6 +231,7 @@ export const AudioInstructionDecisionSchema = z.strictObject({
   origin: z.enum(['automatic', 'manual']), generationId: IdSchema.nullable(),
   sourceEvidence: z.array(AudioInstructionEvidenceSchema).max(64).optional(),
   sharedScope: SharedAudioScopeSchema.nullable().optional(),
+  occurrences: z.array(AudioInstructionOccurrenceSchema).max(128).optional(),
 });
 export const TextCueAuthoritySchema = z.enum(['placement', 'mapping-decision', 'source-unit', 'review-required']);
 const TextCueFieldsSchema = z.strictObject({
@@ -292,7 +301,7 @@ export const VoiceCastingSchema = z.strictObject({
 });
 export type VoiceCasting = z.infer<typeof VoiceCastingSchema>;
 export const ProjectSchema = z.strictObject({
-  schemaVersion: z.literal('1.22.0'), projectId: IdSchema, title: z.string().min(1), revision: z.number().int().nonnegative(),
+  schemaVersion: z.literal('1.23.0'), projectId: IdSchema, title: z.string().min(1), revision: z.number().int().nonnegative(),
   voiceCasting: VoiceCastingSchema.optional(), textTypography: TextTypographySchema.optional(),
   storyboardIdentity: z.strictObject({ sourceProjectId: IdSchema, creationFingerprint: HashSchema }).optional(),
   profile: ProfileSchema, productionPlan: ProductionPlanSchema.nullable(), textLayout: TextLayoutPresetSchema, textLayoutControl: TextLayoutControlSchema, textReadability: TextReadabilityPolicySchema,
@@ -338,6 +347,7 @@ export type StoryboardFrame = z.infer<typeof FrameSchema>;
 export type AudioTimingRelation = z.infer<typeof AudioTimingRelationSchema>;
 export type AudioCue = z.infer<typeof AudioCueSchema>;
 export type AudioInstructionDecision = z.infer<typeof AudioInstructionDecisionSchema>;
+export type AudioInstructionOccurrence = z.infer<typeof AudioInstructionOccurrenceSchema>;
 export type SharedAudioScope = z.infer<typeof SharedAudioScopeSchema>;
 export type TextCueAuthority = z.infer<typeof TextCueAuthoritySchema>;
 export type TextCue = z.infer<typeof TextCueSchema>;

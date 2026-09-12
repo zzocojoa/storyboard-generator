@@ -11,13 +11,13 @@ export function compileRepairAudio(project: Project, basis: SourceRepairBasis, p
   const preparedIds: string[] = project.audioCues.filter((cue): boolean => basis.audioCueIds.includes(cue.id) && cue.timingStatus === 'prepared').map((cue): string => cue.id);
   if (preparedIds.length > 0 && plan.schemaVersion !== '1.2.0') throw contractError('AUTOMATION_REPAIR_AUDIO_VERSION', '준비 음향의 자동 배치에는 결과 계약 1.2.0이 필요합니다.', []);
   const timings = plan.schemaVersion === '1.0.0' ? [] : plan.audioTimings;
-  const expectedIds: string[] = [...basis.speechCueIds, ...preparedIds];
+  const expectedIds: string[] = [...basis.speechCueIds, ...basis.soundCueIds, ...preparedIds];
   const timingIds: string[] = timings.map((timing): string => timing.cueId);
   const speechIds: string[] = speech.map((value): string => value.cueId);
   if (new Set(timingIds).size !== timingIds.length || new Set(speechIds).size !== speechIds.length
     || timingIds.length !== expectedIds.length
     || expectedIds.some((id): boolean => !timingIds.includes(id)) || speechIds.some((id): boolean => !basis.speechCueIds.includes(id))) {
-    throw contractError('AUTOMATION_REPAIR_AUDIO_SCOPE', '명시한 미등록 발화·준비 음향마다 배치가 하나씩 필요합니다. 선택적으로 생성한 음성은 대상 발화와 일치해야 하며 기존 등록 음원의 시각은 변경할 수 없습니다.', []);
+    throw contractError('AUTOMATION_REPAIR_AUDIO_SCOPE', '명시한 미등록 발화·발생별 음향 지시·준비 음향마다 배치가 하나씩 필요합니다. 선택적으로 생성한 음성은 대상 발화와 일치해야 하며 기존 등록 음원의 시각은 변경할 수 없습니다.', []);
   }
   const entries = timings.map((timing) => {
     const previous: AudioCue | undefined = project.audioCues.find((cue): boolean => cue.id === timing.cueId);

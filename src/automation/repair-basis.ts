@@ -11,7 +11,7 @@ import { AutomaticAudioTimingSchema, AutomaticSourceSchema } from './plan-schema
 const RepairTargetSchema = z.strictObject({ shotId: IdSchema, linkIndex: z.number().int().nonnegative(), unitId: IdSchema });
 export const SourceRepairBasisSchema = z.strictObject({
   projectId: IdSchema, revision: z.number().int().nonnegative(), projectHash: HashSchema, segmentId: IdSchema,
-  targets: z.array(RepairTargetSchema).max(4096), audioCueIds: z.array(IdSchema).max(256), speechCueIds: z.array(IdSchema).max(256),
+  targets: z.array(RepairTargetSchema).max(4096), audioCueIds: z.array(IdSchema).max(256), speechCueIds: z.array(IdSchema).max(256), soundCueIds: z.array(IdSchema).max(256),
 });
 export const SourceRepairPlanSchema = z.strictObject({
   schemaVersion: z.literal('1.0.0'), segmentId: IdSchema, summary: z.string().trim().min(1).max(4000),
@@ -22,7 +22,7 @@ export const SourceRepairAudioPlanSchema = SourceRepairSpeechPlanSchema.extend({
 export const SourceRepairResultSchema = z.discriminatedUnion('schemaVersion', [SourceRepairPlanSchema, SourceRepairSpeechPlanSchema, SourceRepairAudioPlanSchema]);
 export type SourceRepairBasis = z.infer<typeof SourceRepairBasisSchema>;
 export type SourceRepairPlan = z.infer<typeof SourceRepairResultSchema>;
-export type SourceRepairScope = Pick<SourceRepairBasis, 'targets' | 'audioCueIds' | 'speechCueIds'>;
+export type SourceRepairScope = Pick<SourceRepairBasis, 'targets' | 'audioCueIds' | 'speechCueIds' | 'soundCueIds'>;
 
 /** 기존 미정 링크·미측정 음원과 보호된 컷에 걸치지 않는 미등록 발화를 선택한다. */
 export function sourceRepairScope(project: Project, segmentId: string): SourceRepairScope {
@@ -31,19 +31,23 @@ export function sourceRepairScope(project: Project, segmentId: string): SourceRe
   const audioCueIds: string[] = selected.filter((cue): boolean => cue.assetId !== null && cue.timingStatus !== 'measured' && !automaticAudioProtected(project, cue)).map((cue): string => cue.id);
   const speechCueIds: string[] = selected.filter((cue): boolean => cue.assetId === null && cue.timingStatus === 'proposed'
     && ['dialogue', 'voiceover', 'panel'].includes(cue.kind) && !automaticAudioProtected(project, cue)).map((cue): string => cue.id);
-  const audioUnits: Set<string> = new Set(project.audioCues.filter((cue): boolean => audioCueIds.includes(cue.id) || speechCueIds.includes(cue.id)).flatMap((cue): string[] => cue.unitId === null ? [] : [cue.unitId]));
+  const soundCueIds: string[] = selected.filter((cue): boolean => cue.assetId === null && cue.timingStatus === 'proposed'
+    && ['sfx', 'music'].includes(cue.kind) && !automaticAudioProtected(project, cue)
+    && (project.audioInstructionDecisions ?? []).some((decision): boolean => decision.reviewStatus !== 'confirmed'
+      && (decision.occurrences ?? []).some((occurrence): boolean => occurrence.cueId === cue.id))).map((cue): string => cue.id);
+  const audioUnits: Set<string> = new Set(project.audioCues.filter((cue): boolean => audioCueIds.includes(cue.id) || speechCueIds.includes(cue.id) || soundCueIds.includes(cue.id)).flatMap((cue): string[] => cue.unitId === null ? [] : [cue.unitId]));
   const targets: SourceRepairScope['targets'] = shots.flatMap((shot): SourceRepairScope['targets'] => shot.sourceLinks.flatMap((link, linkIndex): SourceRepairScope['targets'] => {
     const pending: boolean = link.status !== 'confirmed' || link.temporalAnchor.status !== 'confirmed';
     const changedAudio: boolean = link.usage === 'audio-only' && audioUnits.has(link.unitId) && link.temporalAnchor.basis === 'proposal';
     return pending || changedAudio ? [{ shotId: shot.id, linkIndex, unitId: link.unitId }] : [];
   }));
-  return { targets, audioCueIds, speechCueIds };
+  return { targets, audioCueIds, speechCueIds, soundCueIds };
 }
 
 export function createSourceRepairBasis(project: Project, segmentId: string): SourceRepairBasis {
   if (!project.dataset.segments.some((segment): boolean => segment.id === segmentId)) throw contractError('SEGMENT_NOT_FOUND', `연결 검토 구간이 없습니다: ${segmentId}`, []);
   const scope: SourceRepairScope = sourceRepairScope(project, segmentId);
-  if (scope.targets.length === 0 && scope.audioCueIds.length === 0 && scope.speechCueIds.length === 0) throw contractError('AUTOMATION_NO_REPAIR', `${segmentId}: 보존된 컷에서 자동 보완할 미정 연결·음원이 없습니다.`, []);
+  if (scope.targets.length === 0 && scope.audioCueIds.length === 0 && scope.speechCueIds.length === 0 && scope.soundCueIds.length === 0) throw contractError('AUTOMATION_NO_REPAIR', `${segmentId}: 보존된 컷에서 자동 보완할 미정 연결·음원이 없습니다.`, []);
   return SourceRepairBasisSchema.parse({ projectId: project.projectId, revision: project.revision, projectHash: automaticHash(project), segmentId, ...scope });
 }
 

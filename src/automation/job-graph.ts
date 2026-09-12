@@ -55,9 +55,9 @@ export function nextAutomaticWork(run: AutomationRun, project: Project): Automat
     .sort((left, right): number => left.startMs - right.startMs)
     .filter((segment): boolean => project.shots.some((shot): boolean => shot.segmentId === segment.id && (shot.proposalOrigin !== 'source-outline' || automaticShotProtected(project, shot))))
     .filter((segment): boolean => !run.jobs.some((job): boolean => job.task.kind === 'repair' && job.task.segmentId === segment.id))
-    .filter((segment): boolean => { const scope = sourceRepairScope(project, segment.id); return automationAudioProduction(run.settings) === 'guide-voice'
+    .filter((segment): boolean => { const scope = sourceRepairScope(project, segment.id); return scope.soundCueIds.length > 0 || (automationAudioProduction(run.settings) === 'guide-voice'
       ? scope.targets.length > 0 || scope.audioCueIds.length > 0 || scope.speechCueIds.length > 0
-      : scope.targets.some((target): boolean => { const link = project.shots.find((shot): boolean => shot.id === target.shotId)?.sourceLinks[target.linkIndex]; return link?.status !== 'confirmed' || link.temporalAnchor.status !== 'confirmed'; }); })
+      : scope.targets.some((target): boolean => { const link = project.shots.find((shot): boolean => shot.id === target.shotId)?.sourceLinks[target.linkIndex]; return link?.status !== 'confirmed' || link.temporalAnchor.status !== 'confirmed'; })); })
     .map((segment): AutomationTask => ({ kind: 'repair', segmentId: segment.id }));
   if (repairs.length > 0) return register(run, repairs);
   const protectedSegments: Set<string> = new Set(project.shots.filter((shot): boolean => automaticShotProtected(project, shot)).map((shot): string => shot.segmentId));

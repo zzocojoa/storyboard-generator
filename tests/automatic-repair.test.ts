@@ -65,7 +65,7 @@ describe('기존 컷의 미정 연결 자동 보완', (): void => {
       { ...h.project, frames: h.project.frames.map((frame) => frame.shotId === shot.id ? { ...frame, visualReview: 'accepted' } : frame) },
     ];
     for (const project of variants) {
-      expect(sourceRepairScope(project, 'demonstration')).toEqual({ targets: [], audioCueIds: [], speechCueIds: [] });
+      expect(sourceRepairScope(project, 'demonstration')).toEqual({ targets: [], audioCueIds: [], speechCueIds: [], soundCueIds: [] });
       expect(() => createSourceRepairBasis(project, 'demonstration')).toThrowError(expect.objectContaining({ code: 'AUTOMATION_NO_REPAIR' }));
     }
     const split = splitShot(h.project, shot.id, 6000, 'repair-neighbor', 'repair-neighbor-frame');

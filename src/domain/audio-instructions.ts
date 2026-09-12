@@ -1,17 +1,33 @@
 import { z } from 'zod';
 import { audioCueSource, audioInstructionMatches } from './audio-source.js';
 import { audioInstructionContentIssues, audioInstructionEvidenceIssues } from './audio-instruction-evidence.js';
+import { audioOccurrenceStructureIssues } from './audio-occurrences.js';
 import { automaticAudioProtected } from './edit-protection.js';
 import { assertNoErrors, contractError, issue } from './errors.js';
-import { AudioInstructionDecisionSchema, AudioInstructionEvidenceSchema, IdSchema, ProjectSchema, SharedAudioScopeSchema } from './schema.js';
-import type { AudioCue, AudioInstructionDecision, Instruction, Issue, Project } from './schema.js';
+import { AudioInstructionDecisionSchema, AudioInstructionEvidenceSchema, AudioInstructionOccurrenceSchema, IdSchema, ProjectSchema, SharedAudioScopeSchema } from './schema.js';
+import type { AudioCue, AudioInstructionDecision, AudioInstructionOccurrence, Instruction, Issue, Project } from './schema.js';
+import { stableJsonStringify } from '../io/stable-json.js';
+
+export const AudioInstructionOccurrenceInputSchema = AudioInstructionOccurrenceSchema.extend({ cueId: IdSchema.nullable() });
 
 export const AudioInstructionInputSchema = z.strictObject({
   instructionId: IdSchema, resolution: z.enum(['none', 'required']), cueIds: z.array(IdSchema), informationIds: z.array(IdSchema), reason: z.string().trim().min(1),
   sourceEvidence: z.array(AudioInstructionEvidenceSchema).max(64).optional(),
   sharedScope: SharedAudioScopeSchema.nullable().optional(),
+  occurrences: z.array(AudioInstructionOccurrenceInputSchema).max(128).optional(),
 });
 export type AudioInstructionInput = z.infer<typeof AudioInstructionInputSchema>;
+type ResolvedAudioInstructionInput = Omit<AudioInstructionInput, 'occurrences'> & { occurrences?: AudioInstructionOccurrence[] };
+
+/** 새 발생만 호출자가 소유한 식별자로 만들고 기존 트랙 연결을 명시적으로 보존한다. */
+export function resolveAudioInstructionInput(input: AudioInstructionInput, newCueId: string): ResolvedAudioInstructionInput {
+  const { occurrences, ...rest } = input;
+  if (occurrences === undefined) return rest;
+  const existingIds: string[] = occurrences.flatMap((value): string[] => value.cueId === null ? [] : [value.cueId]);
+  if (JSON.stringify(existingIds.toSorted()) !== JSON.stringify(input.cueIds.toSorted())) throw contractError('INVALID_AUDIO_INSTRUCTION', '기존 트랙 목록과 발생별 기존 트랙 연결이 다릅니다.', []);
+  const resolved: AudioInstructionOccurrence[] = occurrences.map((value, index): AudioInstructionOccurrence => ({ ...value, cueId: value.cueId ?? `${newCueId}:occurrence:${index}` }));
+  return { ...rest, cueIds: resolved.map((value): string => value.cueId), occurrences: resolved };
+}
 
 export function audioInstructions(project: Project): Instruction[] {
   return project.dataset.instructions.filter((instruction): boolean => instruction.kind === 'music' || instruction.kind === 'ambience');
@@ -27,6 +43,7 @@ export function audioInstructionStructureIssues(project: Project): Issue[] {
     const cues = decision.cueIds.map((id) => project.audioCues.find((cue): boolean => cue.id === id));
     return [
       ...audioInstructionEvidenceIssues(project, instruction, decision),
+      ...audioOccurrenceStructureIssues(project, instruction, decision),
       ...(decisions.filter((value): boolean => value.instructionId === instruction.id).length !== 1 ? [failure('instructionId', '같은 음향 지시의 판정이 중복됩니다.')] : []),
       ...(!audioInstructionMatches(instruction, decision.sourceSnapshot) ? [failure('sourceSnapshot', '음향 지시 원문이나 출처가 변경됐습니다. 새 원문을 검토하세요.')] : []),
       ...(new Set(decision.cueIds).size !== decision.cueIds.length || new Set(decision.informationIds).size !== decision.informationIds.length ? [failure('cueIds', '음향 연결 또는 정보 ID가 중복됩니다.')] : []),
@@ -65,17 +82,28 @@ export function applyAudioInstructionDecision(project: Project, input: AudioInst
   if (decision.origin === 'automatic' && previous !== undefined && (previous.origin === 'manual' || previous.reviewStatus === 'confirmed')) throw contractError('AUDIO_INSTRUCTION_PROTECTED', `${instruction.id}: 직접 입력하거나 확인한 판정은 보존합니다.`, []);
   const owned = project.audioCues.filter((cue): boolean => cue.instructionId === instruction.id);
   if (owned.some((cue): boolean => !decision.cueIds.includes(cue.id) && (cue.assetId !== null || automaticAudioProtected(project, cue)))) throw contractError('AUDIO_INSTRUCTION_AUDIO_IN_USE', '이미 준비한 음원이나 보호된 컷의 음향을 제거할 수 없습니다. 기존 연결을 유지하세요.', []);
-  const create: boolean = decision.resolution === 'required' && decision.cueIds.length === 0;
+  const create: boolean = decision.occurrences === undefined && decision.resolution === 'required' && decision.cueIds.length === 0;
   if (create && project.audioCues.some((cue): boolean => cue.id === newCueId)) throw contractError('DUPLICATE_AUDIO_CUE', `새 음향 트랙 ID가 이미 있습니다: ${newCueId}`, []);
   const newCue: AudioCue = { id: newCueId, unitId: null, instructionId: instruction.id, kind: instruction.kind === 'music' ? 'music' : 'sfx',
     startMs: segment.startMs, endMs: segment.endMs, timingStatus: 'proposed', timingRelation: 'within-segment', assetId: null };
-  if (create && automaticAudioProtected(project, newCue)) throw contractError('AUDIO_INSTRUCTION_PROTECTED', '보호된 컷의 시간대에 새 음향을 추가할 수 없습니다.', []);
+  const newOccurrences: AudioCue[] = (decision.occurrences ?? []).flatMap((occurrence, index): AudioCue[] => {
+    if (project.audioCues.some((cue): boolean => cue.id === occurrence.cueId)) return [];
+    if (occurrence.cueId !== `${newCueId}:occurrence:${index}`) throw contractError('INVALID_AUDIO_INSTRUCTION', `${occurrence.cueId}: 기존 트랙이 없습니다. 새 발생으로 지정하세요.`, []);
+    return [{ ...newCue, id: occurrence.cueId }];
+  });
+  const additions: AudioCue[] = [...(create ? [newCue] : []), ...newOccurrences];
+  if (additions.some((cue): boolean => automaticAudioProtected(project, cue))) throw contractError('AUDIO_INSTRUCTION_PROTECTED', '보호된 컷의 시간대에 새 음향을 추가할 수 없습니다.', []);
   const completed: AudioInstructionDecision = { ...decision, cueIds: create ? [newCueId] : [...decision.cueIds] };
   const next = ProjectSchema.parse({ ...project,
     audioInstructionDecisions: [...(project.audioInstructionDecisions ?? []).filter((value): boolean => value.instructionId !== instruction.id), completed],
-    audioCues: [...project.audioCues.filter((cue): boolean => cue.instructionId !== instruction.id || completed.cueIds.includes(cue.id)), ...(create ? [newCue] : [])],
+    audioCues: [...project.audioCues.filter((cue): boolean => cue.instructionId !== instruction.id || completed.cueIds.includes(cue.id)), ...additions],
   });
   assertNoErrors(audioInstructionStructureIssues(next), 'INVALID_AUDIO_INSTRUCTION');
+  for (const cue of owned) {
+    if ((cue.assetId !== null || automaticAudioProtected(project, cue)) && stableJsonStringify(audioCueSource(project, cue)) !== stableJsonStringify(audioCueSource(next, cue))) {
+      throw contractError('AUDIO_INSTRUCTION_AUDIO_IN_USE', `${cue.id}: 음원이나 보호된 컷에 연결된 소리의 원문·정보를 변경할 수 없습니다. 기존 연결을 유지하고 다른 발생은 새 트랙으로 추가하세요.`, []);
+    }
+  }
   const contentIssues: Issue[] = audioInstructionContentIssues(next, instruction, completed);
   if (contentIssues.length > 0) throw contractError('INVALID_AUDIO_INSTRUCTION', contentIssues[0]!.message, contentIssues);
   return next;
@@ -85,7 +113,9 @@ export function updateAudioInstruction(project: Project, input: AudioInstruction
   const value = AudioInstructionInputSchema.parse(input);
   const instruction = audioInstructions(project).find((candidate): boolean => candidate.id === value.instructionId);
   if (instruction === undefined) throw contractError('AUDIO_INSTRUCTION_NOT_FOUND', `음향 지시가 없습니다: ${value.instructionId}`, []);
-  return applyAudioInstructionDecision(project, { ...value, sourceSnapshot: structuredClone(instruction), reviewStatus: 'proposed', origin: 'manual', generationId: null }, newCueId);
+  const previous = project.audioInstructionDecisions?.find((decision): boolean => decision.instructionId === value.instructionId);
+  if (previous?.occurrences !== undefined && value.occurrences === undefined) throw contractError('INVALID_AUDIO_INSTRUCTION', '발생별 연결이 있는 판정입니다. 현재 발생 목록을 포함하여 저장하세요.', []);
+  return applyAudioInstructionDecision(project, { ...resolveAudioInstructionInput(value, newCueId), sourceSnapshot: structuredClone(instruction), reviewStatus: 'proposed', origin: 'manual', generationId: null }, newCueId);
 }
 
 export function confirmAudioInstruction(project: Project, instructionId: string): Project {

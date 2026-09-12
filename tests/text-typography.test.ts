@@ -84,7 +84,7 @@ it('text_typography_pdf_keeps_selected_overlay_font_and_redacts_selection_extern
 it('text_typography_migration_preserves_117_source_and_rejects_unknown_legacy_selection', async (): Promise<void> => {
   const fixture = await finalFixture(); const legacy = { ...fixture.project, schemaVersion: '1.17.0' };
   const bytes: string = stableJsonStringify(legacy); const evidence = parseProjectSnapshotEvidence(legacy);
-  expect(evidence.project).toEqual({ ...legacy, schemaVersion: '1.22.0' }); expect(evidence.project).not.toHaveProperty('textTypography');
+  expect(evidence.project).toEqual({ ...legacy, schemaVersion: '1.23.0' }); expect(evidence.project).not.toHaveProperty('textTypography');
   expect(evidence.projectionHashes).toContain(sha256Text(bytes)); expect(stableJsonStringify(legacy)).toBe(bytes);
   expect(() => parseProject({ ...legacy, textTypography: { unknown: 'preserve me' } })).toThrowError(expect.objectContaining({ code: 'UNSUPPORTED_LEGACY_TEXT_TYPOGRAPHY' }));
 });

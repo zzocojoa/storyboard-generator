@@ -345,7 +345,7 @@ describe('J-cut and L-cut contract', (): void => {
 describe('1.3 to 1.4 migration', (): void => {
   it('migration_1_3_to_1_4_defaults_audio_to_within_segment', async (): Promise<void> => {
     const migrated: Project = parseProject(legacy13(await outline()));
-    expect(migrated.schemaVersion).toBe('1.22.0');
+    expect(migrated.schemaVersion).toBe('1.23.0');
     expect(migrated.audioCues.every((cue: AudioCue): boolean => cue.timingRelation === 'within-segment')).toBe(true);
   });
 

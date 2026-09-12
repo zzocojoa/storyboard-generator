@@ -40,8 +40,8 @@ import { automaticPlanProvenance } from './automatic-plan-helpers.js';
 
 function proposed(): AutomaticAudioInstructionPlan {
   return { schemaVersion: '1.0.0', segmentId: 'demonstration', summary: '음악 없이 원문의 물소리를 준비한다.', decisions: [
-    { instructionId: 'ambient-instruction', resolution: 'required', cueIds: [], informationIds: ['reveal:동작'], sourceEvidence: [], sharedScope: null, reason: '물을 주는 행동의 소리이며 별도 WAV가 필요하다.' },
-    { instructionId: 'music-instruction', resolution: 'none', cueIds: [], informationIds: [], sourceEvidence: [], sharedScope: null, reason: '원문에 배경 음악 없음이 명시됐다.' },
+    { instructionId: 'ambient-instruction', resolution: 'required', cueIds: [], informationIds: ['reveal:동작'], sourceEvidence: [], sharedScope: null, occurrences: [{ cueId: null, supportingUnitIds: [], source: { kind: 'instruction', quote: '물 흐르는 소리' }, informationIds: ['reveal:동작'], reason: '물을 주는 행동의 소리' }], reason: '물을 주는 행동의 소리를 별도 지시로 기록한다.' },
+    { instructionId: 'music-instruction', resolution: 'none', cueIds: [], informationIds: [], sourceEvidence: [], sharedScope: null, occurrences: [], reason: '원문에 배경 음악 없음이 명시됐다.' },
   ] };
 }
 
@@ -52,7 +52,7 @@ it('audio_instruction_planner_covers_each_source_preserves_originals_and_never_c
   for (const key of ['dataset', 'sources', 'shots', 'frames', 'textCues', 'assets'] as const) expect(next[key]).toEqual(project[key]);
   expect(next.audioInstructionDecisions).toHaveLength(2);
   expect(next.audioInstructionDecisions!.every((value): boolean => value.origin === 'automatic' && value.reviewStatus === 'proposed')).toBe(true);
-  expect(next.generationRecords.at(-1)?.templateVersion).toBe('automatic-audio-instructions-1.1.0');
+  expect(next.generationRecords.at(-1)?.templateVersion).toBe('automatic-audio-instructions-1.2.0');
   const cue = next.audioCues.find((value): boolean => value.instructionId === 'ambient-instruction')!;
   expect(cue.assetId).toBeNull(); expect(cue.timingStatus).toBe('proposed');
   expect(reviewAudioPlaybackAt(next, cue.startMs).playable).not.toContainEqual(cue);
@@ -103,7 +103,8 @@ it('audio_instruction_jobs_precede_cut_or_repair_and_remain_inside_selected_unpr
 
 it('audio_instruction_information_is_carried_to_existing_audio_and_export_review_and_navigation', async (): Promise<void> => {
   const project = await audioInstructionFixture(); const sound = project.audioCues.find((cue): boolean => cue.unitId === '효과음')!;
-  const next = updateAudioInstruction(project, { ...proposed().decisions[0]!, cueIds: [sound.id], reason: '연결 근거 contact@example.com' }, 'unused');
+  const { occurrences: _occurrences, ...legacyDecision } = proposed().decisions[0]!;
+  const next = updateAudioInstruction(project, { ...legacyDecision, cueIds: [sound.id], reason: '연결 근거 contact@example.com' }, 'unused');
   expect(audioCueSource(next, sound)?.informationIds).toEqual(expect.arrayContaining(['reveal:동작', 'reveal:효과음']));
   expect(reviewInformationEmission(next, { entityId: sound.id, channel: 'audio-playback', informationIds: ['reveal:동작'], atMs: sound.startMs }).map((value): string => value.code)).not.toContain('INFORMATION_WITHOUT_OUTPUT_SOURCE');
   const table = createCsvProjection(next, {}, { maturity: 'draft', channel: 'csv-export' }); const column = table[0]!.indexOf('audio_instruction_decisions');

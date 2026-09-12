@@ -73,6 +73,6 @@ it('text_presentation_pdf_and_monitor_share_individual_layout_and_legacy_values_
   expect(layoutStoryboardText(projection.items[0]!.overlayInputs, project.profile.aspectWidth, project.profile.aspectHeight, project.textLayout, font.metrics)).toEqual(projectTextLayoutAt(project, cue.startMs, 'draft', font));
   const pdf = await renderPdfProjection(projection, TEST_TEXT_FONT_PATH, '2026-09-12T00:00:00.000Z'); expect(pdf.subarray(0, 4).toString()).toBe('%PDF');
   const legacy = { ...fixture.project, schemaVersion: '1.18.0' }; const original: string = JSON.stringify(legacy);
-  expect(parseProject(legacy)).toEqual({ ...legacy, schemaVersion: '1.22.0' }); expect(JSON.stringify(legacy)).toBe(original);
+  expect(parseProject(legacy)).toEqual({ ...legacy, schemaVersion: '1.23.0' }); expect(JSON.stringify(legacy)).toBe(original);
   expect(() => parseProject({ ...legacy, textCues: project.textCues })).toThrowError(expect.objectContaining({ code: 'UNSUPPORTED_LEGACY_TEXT_PRESENTATION' }));
 });

@@ -3,6 +3,13 @@ import { extname, join } from 'node:path';
 import { contractError } from '../src/domain/errors.js';
 
 const REQUIRED_TEST_NAMES: readonly string[] = [
+  'audio_occurrences_create_independent_sources_and_timing_without_late_information_on_early_sound',
+  'audio_occurrences_reject_missing_foreign_spoken_duplicate_or_unbound_sources_atomically',
+  'audio_occurrences_reuse_one_existing_effect_for_corresponding_action_and_sound_evidence_without_duplicates',
+  'audio_occurrences_are_automatically_timed_in_existing_cuts_without_audio_files_or_changing_confirmed_source_ranges',
+  'legacy_combined_audio_occurrences_remain_reviewable_and_only_unprotected_unmeasured_plans_are_repaired',
+  'audio_occurrence_migration_and_source_update_preserve_old_bytes_and_invalidate_changed_sources',
+  'e2e_audio_occurrences_show_distinct_sources_and_times_and_preserve_edits_until_explicit_review',
   'released_update_lock_during_identity_observation_preserves_committed_read',
   'shared_audio_instruction_rejects_independent_segment_sound_without_a_common_scope',
   'shared_audio_model_receives_other_segments_and_reuses_one_scoped_sound_without_early_information',

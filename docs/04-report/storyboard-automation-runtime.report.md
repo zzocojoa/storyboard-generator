@@ -2,11 +2,19 @@
 
 ## 현재 통합 상태
 
+Project 1.23은 한 음향 지시의 서로 다른 발생을 원문 인용·트랙·정보 공개 조건별로 나누고 실제 WAV 없이 시각을 제안한다. 같은 발생을 지문과 효과음이 함께 설명하면 보충 원문을 연결해 기존 트랙을 재사용한다. 기존 컷에도 미확인 발생의 시간 배치 작업을 등록하며 컷·확정 Source 범위·원문·보호된 음원·과거 생성 기록을 보존한다. 여러 원문을 한 자동 전용 트랙에 합친 이전 제안은 검토 대상으로 남기며 사람 확인을 자동 변경하지 않는다. 1.22 파일은 메모리에서 버전만 이관한다.
+
+검증 가능한 범위는 공개 합성 자료의 독립된 두 소리·잘못된 인용/정보/트랙 거부·기존 효과음 재사용·편집된 컷 안의 배치·이전 파일/Source Update 보존·PDF 본문/시각이다. 브라우저에서 시각 수정·명시적인 판정 확인·빈 입력의 재열기, 원문 변경으로 사라진 연결과 작성 중 인용 보존을 확인했다. 원본 변경 뒤 작업 위치를 다시 선택·기억하는 기존 절차를 테스트에 반영했으며 시간 제한이나 재시도 횟수를 늘리지 않았다. 새 발생 계약의 실제 모델 결과 및 작품 전체 그림·연출·Final 품질은 아직 검증 완료로 주장하지 않는다.
+
+현재 로컬 `npm run check`는 116개 파일·1,539개 검사(556.57초), 서버/Web 타입·필수 이름 724개(누락·중복·skip·only 0)·Schema 일치·웹 빌드를 통과했다. 전체 E2E 73개(4.8분)도 통과했다. 이후 추가한 사라진 음향 연결의 입력 보존은 타입 검사와 해당 E2E(9.8초), 모델 응답 필수 키는 관련 3개 검사로 확인했다. 첫 전체 검사 실패는 새 이관 단계 수 기대값과 샌드박스의 로컬 포트 제한이었으며, 각각 수정·포트 허용 실행으로 확인했다. 증거는 `.local/validation/automation-runtime/`의 `audio-occurrences-check-verified.log`, `audio-occurrences-all-e2e.log`, `audio-occurrences-draft-recovery-final.log`, `audio-occurrences-model-schema.log`, `audio-occurrences-final-types.log`, `audio-occurrences-draft-types.log`다.
+
 기본 완료 조건은 그림·연출·시간·대사·음향 지시이며 가이드 음성은 선택이다. 사용자가 승인한 원격 `codex/document-handoff` 브랜치의 [초안 PR #8](https://github.com/zzocojoa/storyboard-generator/pull/8)이 열려 있다. `master`의 PR 필수·strict `check`/`e2e`·관리자 적용·강제 푸시/삭제 금지는 유지한다. 실제 제작 원문·생성 미디어·로컬 실행 기록은 전송하지 않는다. 전체 자동 제작과 작품 품질 검증이 남아 있어 초안 상태이며 최종 머지는 하지 않았다.
+
+선택 재생의 실제 Audio 3회 반복도 21개 모두 통과했다(45.6초). 근거는 `audio-occurrences-real-audio-repeat.log`다. 실제 음원 생성·재생을 기본 콘티 완료 조건에 추가하지 않았다.
 
 커밋 `ca9867c5e0079bdd6cb00ecb45f45155c17aff0e`의 [CI 34687161467](https://github.com/zzocojoa/storyboard-generator/actions/runs/34687161467)는 `check`와 `e2e`를 모두 통과했다. 전체 115개 파일·1,530개 검사, 필수 이름 714개(누락·중복·skip·only 0), 전체 E2E 72개와 실제 Audio 3회 반복 21개가 통과했다. 정상 해제된 잠금을 읽는 경쟁은 수정 전 실패를 재현해 수정했고, 남아 있는 파일 오류·복구 차단을 보존한다. 백업의 게시·바이트 복원·복원본 검토/편집은 독립된 검사와 각각 5초 한도를 사용한다. 재시도·시간 제한을 늘리지 않았다. 증거는 `.local/validation/automation-runtime/backup-ci-complete.log`와 `released-lock-{red,storage,e2e-fixed}.log`다.
 
-추가 PDF 보완은 같은 원문의 반복 표시만으로 실제 음향 배치 지시를 오해하지 않도록 현재 구간의 적용/제외 결론, 전체 적용 구간과 이유를 출력한다. 미판정·오래된 원문·잘못된 공통 범위를 검토 완료로 표시하지 않으며 외부 검토의 이유 문장도 비식별화한다. 관련 6개 파일·44개 검사와 타입·필수 이름 717개를 통과했다. 실제 revision 126의 두 구간에서 음향 지시 4개를 발췌한 PDF 4페이지를 생성해 원문·판단 문장 보존, 페이지 경계와 실제 렌더링을 확인했다. 원본 Version 바이트와 사람 승인 상태는 그대로다. 검증용 발췌이며 전체 콘티 출력이 아니다. 증거는 `shared-audio-pdf-{final-focused,types,registry}.log`, 실제 작업 폴더의 `shared-audio-pdf-final-verification.json`·`output/pdf/shared-audio-scope-review-final.pdf`다. 이 추가 보완의 전체 원격 CI는 아직 수행 전이다.
+추가 PDF 보완은 같은 원문의 반복 표시만으로 실제 음향 배치 지시를 오해하지 않도록 현재 구간의 적용/제외 결론, 전체 적용 구간과 이유를 출력한다. 미판정·오래된 원문·잘못된 공통 범위를 검토 완료로 표시하지 않으며 외부 검토의 이유 문장도 비식별화한다. 관련 6개 파일·44개 검사와 타입·필수 이름 717개를 통과했다. 실제 revision 126의 두 구간에서 음향 지시 4개를 발췌한 PDF 4페이지를 생성해 원문·판단 문장 보존, 페이지 경계와 실제 렌더링을 확인했다. 원본 Version 바이트와 사람 승인 상태는 그대로다. 검증용 발췌이며 전체 콘티 출력이 아니다. 증거는 `shared-audio-pdf-{final-focused,types,registry}.log`, 실제 작업 폴더의 `shared-audio-pdf-final-verification.json`·`output/pdf/shared-audio-scope-review-final.pdf`다. 커밋 `66ffcd8`의 [CI 34687806911](https://github.com/zzocojoa/storyboard-generator/actions/runs/34687806911)에서 이 PDF 보완의 전체 `check`·`e2e`와 Audio 반복 검사가 통과했다.
 
 실제 PRJ-008은 25분·24구간의 제작 기준 66개와 현재 기준 그림 66장을 준비했다. 이전 버전까지 이미지 69개의 실제 해시·디코딩·원문 보존을 검사했다. 같은 장소의 앞선 기본 이미지를 참조하지 않던 문제를 수정하고 공간 변형 3장을 선택 재생성하여 구조를 직접 비교했다. 현재 기준 66장의 시각 검토 누락은 0건이며, 봉투 2장은 요청한 면과 덮개 모양이 달라 검토 대상으로 남는다. 명시적 공통 대상 ID가 없는 소품 관계나 사람 승인을 자동 확정하지 않았다. 근거는 `.local/validation/automation-runtime/prj008-whole-story-20260912/`의 `reference-stage-complete-verification.json`, `reference-stage-complete-visual-coverage.json`, `reference-stage-remaining-props-visual-review.json`, `location-repair-verification.json`, `location-repair-evening-verification.json`, `location-repair-night-verification.json`이다.
 

@@ -17,7 +17,8 @@ export function audioCueTimingSource(project: Project, cue: AudioCue): AudioSour
   const instructionInformation: string[] = (project.audioInstructionDecisions ?? [])
     .filter((decision): boolean => decision.resolution === 'required' && decision.cueIds.includes(cue.id)
       && project.dataset.instructions.some((instruction): boolean => instruction.id === decision.instructionId && audioInstructionMatches(instruction, decision.sourceSnapshot)))
-    .flatMap((decision): string[] => decision.informationIds);
+    .flatMap((decision): string[] => decision.occurrences === undefined ? decision.informationIds
+      : decision.occurrences.filter((value): boolean => value.cueId === cue.id).flatMap((value): string[] => value.informationIds));
   if (cue.instructionId === undefined) {
     const unit = project.dataset.units.find((value): boolean => value.id === cue.unitId);
     if (unit === undefined) return null;
@@ -30,8 +31,15 @@ export function audioCueTimingSource(project: Project, cue: AudioCue): AudioSour
   const decisions = (project.audioInstructionDecisions ?? []).filter((value): boolean => value.instructionId === instruction.id);
   const decision = decisions[0];
   if (decisions.length !== 1 || decision === undefined || decision.resolution !== 'required' || !decision.cueIds.includes(cue.id) || !audioInstructionMatches(decision.sourceSnapshot, instruction)) return null;
-  return { id: instruction.id, unitId: null, instructionId: instruction.id, segmentId: instruction.segmentId, kind: cue.kind,
-    text: audioInstructionSourceText(instruction, decision), speakerId: null, informationIds: [...new Set(instructionInformation)], sourceRefs: audioInstructionSourceRefs(project, instruction, decision) };
+  const occurrence = decision.occurrences?.find((value): boolean => value.cueId === cue.id);
+  if (decision.occurrences !== undefined && occurrence === undefined) return null;
+  const occurrenceSource = occurrence?.source;
+  const unit = occurrenceSource?.kind === 'unit' ? project.dataset.units.find((value): boolean => value.id === occurrenceSource.unitId) : undefined;
+  if (occurrenceSource?.kind === 'unit' && unit === undefined) return null;
+  return { id: instruction.id, unitId: unit?.id ?? null, instructionId: instruction.id, segmentId: instruction.segmentId, kind: cue.kind,
+    text: occurrence === undefined ? audioInstructionSourceText(instruction, decision) : occurrence.source.quote, speakerId: null,
+    informationIds: [...new Set(instructionInformation)], sourceRefs: occurrence === undefined ? audioInstructionSourceRefs(project, instruction, decision)
+      : [...instruction.sourceRefs, ...(unit?.sourceRefs ?? []), ...(occurrence.supportingUnitIds ?? []).flatMap((id): SourceRef[] => project.dataset.units.find((value): boolean => value.id === id)?.sourceRefs ?? [])] };
 }
 
 /** 출력·음원 등록은 시간 근거뿐 아니라 원문과 트랙의 유형 일치도 요구한다. */

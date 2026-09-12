@@ -2,6 +2,7 @@ import { audioInstructions } from '../domain/audio-instructions.js';
 import { automaticAudioProtected, automaticShotProtected } from '../domain/edit-protection.js';
 import { isAudioInstructionPlaceholder } from '../domain/audio-instruction-evidence.js';
 import { sharedAudioScopeReviewIssues } from '../domain/shared-audio-scope.js';
+import { audioOccurrenceReviewIssues } from '../domain/audio-occurrences.js';
 import type { Instruction, Project } from '../domain/schema.js';
 
 /** 원문에 있는 미판정 지시만 계획한다. 보호된 컷과 이미 검토한 판정은 다시 만들지 않는다. */
@@ -12,7 +13,7 @@ export function automaticAudioInstructionTargets(project: Project, segmentId: st
     const decision = project.audioInstructionDecisions?.find((value): boolean => value.instructionId === instruction.id);
     if (decision === undefined) return true;
     if (decision.origin === 'automatic' && decision.reviewStatus === 'proposed'
-      && sharedAudioScopeReviewIssues(project, instruction, decision).length > 0) {
+      && [...sharedAudioScopeReviewIssues(project, instruction, decision), ...audioOccurrenceReviewIssues(project, instruction, decision)].length > 0) {
       return decision.cueIds.every((id): boolean => project.audioCues.some((cue): boolean =>
         cue.id === id && cue.assetId === null && cue.timingStatus === 'proposed' && !automaticAudioProtected(project, cue)));
     }

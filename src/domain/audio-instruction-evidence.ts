@@ -1,5 +1,6 @@
 import { issue } from './errors.js';
 import { sharedAudioScopeReviewIssues } from './shared-audio-scope.js';
+import { audioOccurrenceReviewIssues } from './audio-occurrences.js';
 import type { AudioCue, AudioInstructionDecision, Instruction, Issue, Project, SourceRef } from './schema.js';
 
 /** 빈칸 표시는 무음 지시도 구체적인 효과음 설명도 아니다. 원문 바이트는 유지한다. */
@@ -27,7 +28,7 @@ export function audioInstructionEvidenceIssues(project: Project, instruction: In
 
 /** 기존 빈 트랙도 Final에서 숨기며 실제 근거를 추가하거나 추가 트랙 없음으로 재검토하게 한다. */
 export function audioInstructionContentIssues(project: Project, instruction: Instruction, decision: AudioInstructionDecision): Issue[] {
-  return [...sharedAudioScopeReviewIssues(project, instruction, decision), ...(decision.resolution === 'required' && isAudioInstructionPlaceholder(instruction.text) && (decision.sourceEvidence?.length ?? 0) === 0
+  return [...sharedAudioScopeReviewIssues(project, instruction, decision), ...audioOccurrenceReviewIssues(project, instruction, decision), ...(decision.resolution === 'required' && isAudioInstructionPlaceholder(instruction.text) && (decision.sourceEvidence?.length ?? 0) === 0
     && decision.cueIds.some((id): boolean => project.audioCues.some((cue): boolean => cue.id === id && cue.instructionId === instruction.id))
     ? [issue('AUDIO_INSTRUCTION_CONTENT_REQUIRED', 'conflict', instruction.id, 'sourceEvidence',
       '빈칸 표시로 음향 트랙을 만들 수 없습니다. 실제 소리가 적힌 같은 구간의 대본 인용을 연결하거나 추가 트랙 없음으로 판정하세요.', 'exact source evidence', instruction.text, instruction.sourceRefs)] : [])];

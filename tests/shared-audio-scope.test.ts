@@ -61,7 +61,8 @@ it('shared_audio_model_receives_other_segments_and_reuses_one_scoped_sound_witho
     model: { run: async (input) => {
       expect(input.prompt).toContain('sharedInstructions'); expect(input.prompt).toContain(project.dataset.units.find((unit): boolean => unit.id === '동작')!.text);
       expect(input.prompt).toContain('demonstration'); expect(input.prompt).toContain('같은 파일/행');
-      calls += 1; const output = scopedPlan(project, other.segmentId);
+      calls += 1; const plan = scopedPlan(project, other.segmentId);
+      const output = { ...plan, decisions: plan.decisions.map((decision) => ({ ...decision, occurrences: [] })) };
       return { model: 'scope-test', turnId: `scope-${calls}`, result: z.json().parse(calls === 1 ? { ...output, decisions: output.decisions.map((decision) => ({ ...decision, sharedScope: null })) } : output) };
     } }, onProgress: async (): Promise<void> => {},
   }, new AbortController().signal);
@@ -117,7 +118,7 @@ it('shared_audio_grouping_requires_exact_provenance_and_migration_never_fabricat
   const separate: Project = { ...project, dataset: { ...project.dataset, instructions: project.dataset.instructions.map((instruction) => instruction.id === 'shared-ambient-other' ? { ...instruction, sourceRefs: [{ ...instruction.sourceRefs[0]!, locator: 'line:41' }] } : instruction) } };
   expect(sharedAudioInstructions(separate, ambient)).toEqual([ambient]);
   const old = { ...project, schemaVersion: '1.21.0' }; const bytes: string = JSON.stringify(old);
-  expect(migrateProjectInput(old)).toEqual({ ...old, schemaVersion: '1.22.0' }); expect(JSON.stringify(old)).toBe(bytes);
+  expect(migrateProjectInput(old)).toEqual({ ...old, schemaVersion: '1.23.0' }); expect(JSON.stringify(old)).toBe(bytes);
   const generated = compileAudioInstructionPlan(project, 'demonstration', scopedPlan(project, 'demonstration'), automaticPlanProvenance());
   expect(() => migrateProjectInput({ ...generated, schemaVersion: '1.21.0' })).toThrowError(expect.objectContaining({ code: 'UNSUPPORTED_LEGACY_SHARED_AUDIO_SCOPE' }));
 });
