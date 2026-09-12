@@ -1,3 +1,4 @@
+import { plannedAudioSourceStart } from './audio-storyboard.js';
 import { z } from 'zod';
 import { contractError, issue } from './errors.js';
 import { synchronizePlacementInformationDecisions } from './placement-information.js';
@@ -35,7 +36,7 @@ export type TextMappingDecisionInput = z.infer<typeof TextMappingDecisionInputSc
 export type ShotSourceLinksInput = z.infer<typeof ShotSourceLinksInputSchema>;
 export type MoveShotSourceLinkInput = z.infer<typeof MoveShotSourceLinkInputSchema>;
 
-export type GateEvidenceType = 'base-exact' | 'text-mapping' | 'source-anchor' | 'measured-audio' | 'unit-order' | 'segment-start';
+export type GateEvidenceType = 'base-exact' | 'text-mapping' | 'source-anchor' | 'measured-audio' | 'planned-audio' | 'unit-order' | 'segment-start';
 export type EffectiveInformationGate = {
   id: string; segmentId: string; baseNotBeforeMs: number; effectiveNotBeforeMs: number;
   notBeforeUnitId: string | null; notBeforeUnitOrder: number | null; precision: InformationRule['precision'];
@@ -160,11 +161,24 @@ function audioEvidence(project: Project, rule: InformationRule): GateEvidence[] 
   });
 }
 
+/** 콘티의 명시적인 발화 Anchor를 계획 근거로 사용하며 측정 음원으로 간주하지 않는다. */
+function plannedAudioEvidence(project: Project, rule: InformationRule): GateEvidence[] {
+  const segment = project.dataset.segments.find((value): boolean => value.id === rule.segmentId);
+  if (segment === undefined) return [];
+  return project.audioCues.flatMap((cue): GateEvidence[] => {
+    const unit = project.dataset.units.find((value): boolean => value.id === cue.unitId && value.segmentId === rule.segmentId && value.informationIds.includes(rule.id));
+    if (unit === undefined || cue.timingStatus === 'measured' || cue.timingRelation !== 'within-segment'
+      || cue.startMs < segment.startMs || cue.endMs > segment.endMs || cue.startMs >= cue.endMs
+      || plannedAudioSourceStart(project, cue) !== cue.startMs) return [];
+    return [{ time: cue.startMs, type: 'planned-audio', id: cue.id, refs: unit.sourceRefs }];
+  });
+}
+
 function prioritizedEvidence(project: Project, rule: InformationRule): GateEvidence[] {
-  const priority: Record<GateEvidenceType, number> = { 'base-exact': 0, 'text-mapping': 1, 'source-anchor': 2, 'measured-audio': 3, 'unit-order': 4, 'segment-start': 5 };
+  const priority: Record<GateEvidenceType, number> = { 'base-exact': 0, 'text-mapping': 1, 'source-anchor': 2, 'measured-audio': 3, 'planned-audio': 4, 'unit-order': 5, 'segment-start': 6 };
   const authoritative: GateEvidence[] = rule.precision === 'exact-time'
     ? [{ time: rule.baseNotBeforeMs, type: 'base-exact', id: rule.id, refs: rule.sourceRefs }] : [];
-  return [...authoritative, ...mappingEvidence(project, rule), ...sourceEvidence(project, rule), ...audioEvidence(project, rule), ...heuristicUnitOrderEvidence(project, rule)]
+  return [...authoritative, ...mappingEvidence(project, rule), ...sourceEvidence(project, rule), ...audioEvidence(project, rule), ...plannedAudioEvidence(project, rule), ...heuristicUnitOrderEvidence(project, rule)]
     .sort((left: GateEvidence, right: GateEvidence): number => priority[left.type] - priority[right.type] || left.time - right.time || left.id.localeCompare(right.id));
 }
 
@@ -178,13 +192,13 @@ export function effectiveInformationGate(project: Project, informationId: string
   const selected: GateEvidence | undefined = valid[0];
   const selectedMapping: TextMappingDecision | undefined = selected?.type === 'text-mapping' ? project.textMappingDecisions.find((decision: TextMappingDecision): boolean => decision.id === selected.id) : undefined;
   const provisional: boolean = selectedMapping?.status === 'unresolved' || selected?.id.startsWith('heuristic:') === true;
-  const confirmation: GateEvidence | undefined = provisional ? valid.find((candidate: GateEvidence): boolean => (candidate.type === 'source-anchor' || candidate.type === 'measured-audio') && candidate.time >= (selected?.time ?? rule.baseNotBeforeMs)) : undefined;
+  const confirmation: GateEvidence | undefined = provisional ? valid.find((candidate: GateEvidence): boolean => (candidate.type === 'source-anchor' || candidate.type === 'measured-audio' || candidate.type === 'planned-audio') && candidate.time >= (selected?.time ?? rule.baseNotBeforeMs)) : undefined;
   const effectiveEvidence: GateEvidence | undefined = confirmation ?? selected;
-  const unitOrderConstraint: GateEvidence | undefined = rule.precision === 'unit-order' && (selected?.type === 'source-anchor' || selected?.type === 'measured-audio')
+  const unitOrderConstraint: GateEvidence | undefined = rule.precision === 'unit-order' && (selected?.type === 'source-anchor' || selected?.type === 'measured-audio' || selected?.type === 'planned-audio')
     ? valid.find((candidate: GateEvidence): boolean => candidate.type === 'unit-order') : undefined;
   const reviewReasons: string[] = earlier.map((candidate: GateEvidence): string => `EVIDENCE_PRECEDES_BASE:${candidate.type}:${candidate.id}:${candidate.time}`);
   const conflictingConfirmations: GateEvidence[] = selected?.type === 'text-mapping' || selected?.id.startsWith('heuristic:') === true
-    ? valid.filter((candidate: GateEvidence): boolean => (candidate.type === 'source-anchor' || candidate.type === 'measured-audio') && candidate.time < (selected?.time ?? rule.baseNotBeforeMs)) : [];
+    ? valid.filter((candidate: GateEvidence): boolean => (candidate.type === 'source-anchor' || candidate.type === 'measured-audio' || candidate.type === 'planned-audio') && candidate.time < (selected?.time ?? rule.baseNotBeforeMs)) : [];
   reviewReasons.push(...conflictingConfirmations.map((candidate: GateEvidence): string => `EVIDENCE_PRECEDES_DERIVED:${candidate.type}:${candidate.id}:${candidate.time}`));
   if (unitOrderConstraint !== undefined && selected !== undefined && selected.time < unitOrderConstraint.time) {
     reviewReasons.push(`EVIDENCE_PRECEDES_UNIT_ORDER:${selected.type}:${selected.id}:${selected.time}:${unitOrderConstraint.time}`);
@@ -216,6 +230,7 @@ function placementCue(project: Project, decision: TextMappingDecision, existing:
     unitId: decision.status === 'confirmed' && decision.relation !== 'standalone-placement' && decision.relation !== 'separate-element' ? decision.canonicalUnitId : null,
     placementId: placement.id, mappingDecisionId: null, authority: 'placement', text: placement.text, startMs: placement.startMs,
     endMs: placement.endMs ?? current?.endMs ?? Math.min(segment.endMs, placement.startMs + 2000),
+    ...(current?.presentation === undefined ? {} : { presentation: current.presentation }),
     kind: current?.kind ?? 'overlay', timingStatus: placement.endMs === null ? current?.timingStatus ?? 'proposed' : 'confirmed',
   };
 }
@@ -229,6 +244,7 @@ function canonicalCue(project: Project, decision: TextMappingDecision, existing:
   return [{
     id: current?.id ?? `${decision.id}:canonical`, segmentId: unit.segmentId, unitId: unit.id, placementId: null,
     mappingDecisionId: decision.id, authority: 'mapping-decision',
+    ...(current?.presentation === undefined ? {} : { presentation: current.presentation }),
     text: unit.text, startMs: decision.canonicalStartMs, endMs: decision.canonicalEndMs,
     kind: unit.kind === 'SCREEN_TEXT' ? 'overlay' : 'prop-text', timingStatus: 'confirmed',
   }];
@@ -245,13 +261,13 @@ export function reconcileTextCues(project: Project, decisions: readonly TextMapp
   });
   const canonical: TextCue[] = decisions.flatMap((decision: TextMappingDecision): TextCue[] => canonicalCue(project, decision, project.textCues));
   const decidedUnits: Set<string> = new Set<string>(decisions.flatMap((decision: TextMappingDecision): string[] => decision.canonicalUnitId === null ? [] : [decision.canonicalUnitId]));
-  const unmapped: TextCue[] = project.dataset.units.filter((unit: SourceUnit): boolean => canonicalKinds.has(unit.kind) && !decidedUnits.has(unit.id))
+  const unmapped: TextCue[] = project.dataset.units.filter((unit: SourceUnit): boolean => (canonicalKinds.has(unit.kind) || unit.subtitleSourceRefs !== undefined) && !decidedUnits.has(unit.id))
     .map((unit: SourceUnit): TextCue => {
       const segment: Segment = project.dataset.segments.find((value: Segment): boolean => value.id === unit.segmentId) as Segment;
       const current: TextCue | undefined = project.textCues.find((cue: TextCue): boolean => cue.unitId === unit.id && cue.placementId === null);
       return current ?? { id: `text-unit-${project.dataset.units.indexOf(unit) + 1}`, segmentId: unit.segmentId, unitId: unit.id, placementId: null,
         mappingDecisionId: null, authority: 'source-unit', text: unit.text, startMs: segment.startMs,
-        endMs: Math.min(segment.endMs, segment.startMs + holdMs), kind: unit.kind === 'SCREEN_TEXT' ? 'overlay' : 'prop-text', timingStatus: 'proposed' };
+        endMs: Math.min(segment.endMs, segment.startMs + holdMs), kind: unit.kind === 'SCREEN_TEXT' ? 'overlay' : canonicalKinds.has(unit.kind) ? 'prop-text' : 'dialogue-subtitle', timingStatus: 'proposed' };
     });
   return [...placed, ...canonical, ...unmapped];
 }

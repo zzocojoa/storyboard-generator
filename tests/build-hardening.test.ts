@@ -1,3 +1,4 @@
+import { legacyTextProject } from './legacy-text-helpers.js';
 import { buildForSpeechVoice, readBuildManifest } from '../src/build.js';
 import type { BuildManifest } from '../src/build.js';
 import { execFile } from 'node:child_process';
@@ -87,6 +88,17 @@ describe('생성 계약 Build 식별', (): void => {
     expect(await runBuild(root)).toMatchObject({ generationInputsDirty: true });
   });
 
+  it('automation_planning_contract_changes_are_fingerprinted_and_marked_dirty', async (): Promise<void> => {
+    const { root } = await buildFixture();
+    const before: BuildManifest = await runBuild(root);
+    await mkdir(join(root, 'src/automation'), { recursive: true });
+    await writeFile(join(root, 'src/automation/plan.ts'), 'export const proposal = "자동 원문 배치";');
+    const after: BuildManifest = await runBuild(root);
+    expect(after.generationInputsDirty).toBe(true);
+    expect(after.generationContractSha256).not.toBe(before.generationContractSha256);
+    expect(after.sourceTreeSha256).not.toBe(before.sourceTreeSha256);
+  });
+
   it('agents_change_changes_generation_contract_hash', async (): Promise<void> => {
     const { root } = await buildFixture();
     const before: BuildManifest = await runBuild(root);
@@ -94,6 +106,21 @@ describe('생성 계약 Build 식별', (): void => {
     const after: BuildManifest = await runBuild(root);
     expect(after.generationContractSha256).not.toBe(before.generationContractSha256);
     expect(after.sourceTreeSha256).toBe(before.sourceTreeSha256);
+  });
+
+  it('local_validation_outputs_do_not_change_runtime_or_generation_build_identity', async (): Promise<void> => {
+    const { root } = await buildFixture();
+    const before: BuildManifest = await runBuild(root);
+    for (const directory of ['web/.local/validation', 'src/automation/.local/validation']) {
+      await mkdir(join(root, directory), { recursive: true });
+      await writeFile(join(root, directory, 'result.json'), '{"result":"검증 출력"}');
+    }
+    const after: BuildManifest = await runBuild(root);
+    expect(after.sourceTreeSha256).toBe(before.sourceTreeSha256);
+    expect(after.generationContractSha256).toBe(before.generationContractSha256);
+    expect(after.generationInputsDirty).toBe(false);
+    await writeFile(join(root, 'web/example.ts'), 'export const view = 2;');
+    expect((await runBuild(root)).sourceTreeSha256).not.toBe(before.sourceTreeSha256);
   });
 
   it('speech_voice_change_changes_runtime_generation_config_hash', async (): Promise<void> => {
@@ -127,7 +154,7 @@ describe('생성 계약 Build 식별', (): void => {
     const generatorBuild = { commitSha: 'b'.repeat(40), appVersion: '0.1.0', projectSchemaVersion: '1.7.0', builtAt: '2026-09-07T00:00:00.000Z', sourceTreeSha256: 'c'.repeat(64) };
     const record = { id: 'legacy-build', provider: 'codex-app', model: 'image-gen', modelVersion: null, requestId: null,
       prompt: '과거 원문', templateVersion: '1', seed: null, referenceHashes: [], resultAssetIds: [], shotIds: [], createdAt: '2026-09-07T00:00:00.000Z', generatorBuild };
-    const input = { ...project, schemaVersion: '1.7.0', generationRecords: [record] };
+    const input = { ...legacyTextProject(project), schemaVersion: '1.7.0', generationRecords: [record] };
     const before: string = JSON.stringify(input);
     const migrated: Project = parseProject(input);
     expect(migrated.generationRecords[0]?.generatorBuild).toEqual({ ...generatorBuild, provenanceVersion: 1, gitStateAvailable: null, headCommitSha: generatorBuild.commitSha,
@@ -140,9 +167,9 @@ describe('생성 계약 Build 식별', (): void => {
     const project: Project = await readinessOutline();
     const legacy: GenerationRecord = { id: 'unknown-build', provider: 'legacy', model: 'unknown', modelVersion: null, requestId: null, prompt: '보존',
       templateVersion: '1', seed: null, referenceHashes: [], resultAssetIds: [], shotIds: [], createdAt: '2026-09-07T00:00:00.000Z', generatorBuild: null };
-    const input = { ...project, schemaVersion: '1.7.0', generationRecords: [legacy] };
+    const input = { ...legacyTextProject(project), schemaVersion: '1.7.0', generationRecords: [legacy] };
     const migrated: Project = parseProject(input);
-    expect(migrated).toEqual({ ...input, schemaVersion: '1.9.0' });
+    expect(migrated).toEqual({ ...input, schemaVersion: '1.21.0', textLayout: project.textLayout, textReadability: project.textReadability, textLayoutControl: { version: '1.0.0', mode: 'manual', plannedInputHash: null } });
     expect(parseProject(migrated)).toEqual(migrated);
   });
 

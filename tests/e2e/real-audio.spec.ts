@@ -45,7 +45,7 @@ async function startAudioApp(record: AudioLifecycleRecorder): Promise<RunningAud
   const payload = await nativePackage();
   const other = createSourceOutline(importPackage(withNativeData(payload, { ...nativeData(payload), projectId: 'real-audio-b' })), { proposedTextHoldMs: 2000 });
   await store.create({ ...other, title: 'Real Audio B' });
-  app = await createApp({ host: '127.0.0.1', port: 0, dataRoot, webRoot: resolve('dist/web'),
+  app = await createApp({ host: '127.0.0.1', port: 0, dataRoot, webRoot: resolve(process.env.CUTROOM_E2E_WEB_ROOT ?? 'dist/web'),
     pdfFontPath: resolve('assets/fonts/NanumGothic-Regular.ttf'), audioNormalization: TEST_AUDIO_NORMALIZATION_OPTIONS,
     codex: { requestRoot, speechVoice: 'Yuna' } }, store, new CodexRequestStore(requestRoot, readBuildManifest()), normalizer);
   app.log.level = 'silent';

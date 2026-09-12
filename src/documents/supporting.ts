@@ -5,6 +5,7 @@ import type { Segment, Snapshot, SourceRef } from '../domain/schema.js';
 import { parseJson, sha256Text } from '../importers/integrity.js';
 import { documentError, documentRefs, documentRows } from './readable.js';
 import type { DocumentSources } from './schema.js';
+import { hasSectionLayout } from './section-format.js';
 
 const SceneManifestSchema = z.looseObject({ scene_id: IdSchema, location_id: IdSchema, cast_ids: z.array(IdSchema) });
 const DocumentManifestSchema = z.looseObject({
@@ -29,7 +30,13 @@ export function parseDocumentManifest(sources: DocumentSources): DocumentManifes
   }
   for (const key of ['edit', 'shooting', 'narration', 'subtitles', 'panel'] as const) {
     const header: string = documentRows(sources[key])[0]?.text ?? '';
-    if (!header.startsWith(`# ${manifest.project_id} `)) documentError(sources[key], 1, `프로젝트 ID ${manifest.project_id}가 포함된 제목이 필요합니다.`);
+    if (hasSectionLayout(sources.edit)) {
+      const title = /^# 「(.+)」 방송용 가독형 스크립트$/u.exec(documentRows(sources.broadcast)[0]?.text ?? '')?.[1];
+      const suffixes = { edit: ' — 편집 대본', shooting: ' — 촬영 대본', narration: ' · 내레이션 녹음본', subtitles: ' · 자막 원문·구간 계획', panel: ' · 패널 진행·녹화본' };
+      const preamble = sources[key].content.split(/^## /mu)[0] ?? '';
+      const identities = [...preamble.matchAll(/^(?:제작 메타데이터: )?(\S+) · /gmu)].map((match): string => match[1] as string);
+      if (title === undefined || header !== `# ${title}${suffixes[key]}` || identities.length !== 1 || identities[0] !== manifest.project_id) documentError(sources[key], 1, `구간 제목형 문서의 작품 제목과 제작 메타데이터 프로젝트 ID(${manifest.project_id})를 확인하세요.`);
+    } else if (!header.startsWith(`# ${manifest.project_id} `)) documentError(sources[key], 1, `프로젝트 ID ${manifest.project_id}가 포함된 제목이 필요합니다.`);
   }
   if (!documentRows(sources.reenactment).some((row): boolean => row.text === `- 프로젝트: ${manifest.project_id}`)) documentError(sources.reenactment, 1, 'manifest와 인물 대본의 프로젝트 ID가 다릅니다.');
   for (const row of documentRows(sources.edit)) {
@@ -90,7 +97,7 @@ export function verifyShootingManifest(file: Snapshot, manifest: DocumentManifes
     const match: RegExpExecArray | null = /^<!-- PRODUCTION_SCENE:(\S+) LOCATION:(\S+) CAST:(\S*) CHILD:(\S+) VEHICLE:(\S+) SFX:(\S+) VIOLENCE:(\S+) COMPLEXITY:(\S+) -->$/u.exec(row.text);
     if (!match?.[1] || !match[2] || match[3] === undefined) documentError(file, row.line, '지원하지 않는 촬영 manifest 표기입니다.');
     const scene = manifest.scenes.find((item): boolean => item.scene_id === match[1]);
-    if (seen.includes(match[1]) || scene === undefined || scene.location_id !== match[2] || JSON.stringify(scene.cast_ids) !== JSON.stringify(match[3] === '' ? [] : match[3].split(','))) documentError(file, row.line, '촬영 문서와 manifest의 장면·장소·출연 ID가 다릅니다.');
+    if (seen.includes(match[1]) || scene === undefined || (scene.location_id !== match[2] && encodeURIComponent(scene.location_id) !== match[2]) || JSON.stringify(scene.cast_ids) !== JSON.stringify(match[3] === '' ? [] : match[3].split(','))) documentError(file, row.line, '촬영 문서와 manifest의 장면·장소·출연 ID가 다릅니다.');
     const fields: string[] = ['child_actor_use', 'vehicle_scene', 'special_effect_level', 'graphic_violence', 'production_complexity'];
     if (fields.some((field: string, index: number): boolean => scene[field] !== match[index + 4])) documentError(file, row.line, '촬영 문서와 manifest의 제작 조건이 다릅니다.');
     seen.push(match[1]);

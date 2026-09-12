@@ -3,7 +3,7 @@ import type { CandidateEvidence, DocumentBindings, DocumentPreview, MappingChoic
 import { DOCUMENT_FILES } from '../../src/documents/schema.js';
 import { choiceValue, mappingInputId, MAPPING_GROUPS } from './document-import-state.js';
 import type { FieldProblem, MappingField, ProductionFields } from './document-import-state.js';
-import type { ReviewAuditEntry } from '../../src/documents/review-model.js';
+import type { ReviewAuditEntry, ReviewSuggestion } from '../../src/documents/review-model.js';
 import { PRODUCTION_LABELS, ReviewOrigin } from './DocumentReviewPanel.js';
 
 function sourceName(fileId: string): string {
@@ -16,11 +16,12 @@ export function FieldError(props: { id: string; problems: readonly FieldProblem[
 }
 
 function MappingRow(props: { field: MappingField; title: string; choice: MappingChoice; bindings: DocumentBindings; problems: readonly FieldProblem[];
-  entries: readonly ReviewAuditEntry[];
+  entries: readonly ReviewAuditEntry[]; suggestions?: readonly ReviewSuggestion[];
   onChange: (field: MappingField, key: string, value: string) => void }): ReactElement {
   const { field, title, choice, bindings } = props;
   const id: string = mappingInputId(field, choice.key);
   const value: string = choiceValue(choice, bindings[field]);
+  const unresolved = value === '' ? props.suggestions?.find((item: ReviewSuggestion): boolean => item.field === field && item.key === choice.key && item.origin === 'unresolved') : undefined;
   const invalid: boolean = props.problems.some((problem: FieldProblem): boolean => problem.id === id);
   return <div className="document-mapping-row">
     <div><label htmlFor={id}>{choice.label}</label><details className="document-source"><summary>출처 보기</summary>
@@ -30,12 +31,13 @@ function MappingRow(props: { field: MappingField; title: string; choice: Mapping
       <option value="">연결 선택 필요</option>
       {value !== '' && !choice.candidates.includes(value) && <option value={value}>{value} · 다시 선택 필요</option>}
       {choice.candidates.map((candidate: string): ReactElement => <option key={candidate} value={candidate}>{candidate}</option>)}
-    </select><ReviewOrigin entry={props.entries.find((entry: ReviewAuditEntry): boolean => entry.field === field && entry.key === choice.key && entry.value === value)} /><FieldError id={id} problems={props.problems} /></div>
+    </select>{unresolved !== undefined && <div className="document-identity-needed"><strong>이름·ID 대응 근거 필요</strong><p>{unresolved.reason}</p>
+      <p>위의 ‘인물 대응표로 보완’에서 원본과 제작 근거를 확인하면 연결할 수 있습니다.</p></div>}<ReviewOrigin entry={props.entries.find((entry: ReviewAuditEntry): boolean => entry.field === field && entry.key === choice.key && entry.value === value)} /><FieldError id={id} problems={props.problems} /></div>
   </div>;
 }
 
 export function DocumentMappings(props: { preview: DocumentPreview; bindings: DocumentBindings; problems: readonly FieldProblem[];
-  entries: readonly ReviewAuditEntry[];
+  entries: readonly ReviewAuditEntry[]; suggestions?: readonly ReviewSuggestion[];
   onChange: (field: MappingField, key: string, value: string) => void; onReview: () => void }): ReactElement {
   return <section className="document-section" aria-labelledby="document-mappings-title">
     <header><span className="document-kicker">연결 검토</span><h2 id="document-mappings-title">이름과 원문을 연결하세요</h2>
@@ -61,7 +63,7 @@ export function DocumentMappings(props: { preview: DocumentPreview; bindings: Do
 }
 
 export function DocumentProductionFields(props: { fields: ProductionFields; problems: readonly FieldProblem[];
-  entries: readonly ReviewAuditEntry[];
+  entries: readonly ReviewAuditEntry[]; suggestions?: readonly ReviewSuggestion[];
   onChange: (field: keyof ProductionFields, value: string) => void }): ReactElement {
   const attributes = (field: keyof ProductionFields): { id: string; value: string; 'aria-invalid': boolean; 'aria-describedby': string | undefined } => {
     const id: string = 'document-' + field;

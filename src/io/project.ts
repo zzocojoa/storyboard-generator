@@ -1,4 +1,7 @@
 import { migrateGeneratorBuildInput } from '../domain/build-provenance.js';
+import { storyboardTextPreset } from '../domain/text-layout-settings.js';
+import { textLayoutControl } from '../domain/text-layout-control.js';
+import { storyboardReadingPreset } from '../domain/text-readability.js';
 import { link, mkdir, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
@@ -9,8 +12,9 @@ import { ProjectSchema, TransitionSchema } from '../domain/schema.js';
 import type { Project } from '../domain/schema.js';
 import { validateProject } from '../domain/validation.js';
 import { importPackage, recoverSourceProject } from '../importers/import-package.js';
-import { isSafePackagePath, parseJson } from '../importers/integrity.js';
+import { isSafePackagePath, parseJson, sha256Text } from '../importers/integrity.js';
 import { readUtf8 } from './package.js';
+import { stableJsonStringify } from './stable-json.js';
 
 type JsonObject = { [key: string]: unknown };
 
@@ -184,10 +188,111 @@ function migrate18To19(input: JsonObject): JsonObject {
     isJsonObject(record) ? { ...record, generatorBuild: migrateGeneratorBuildInput(record.generatorBuild) } : record) };
 }
 
+function migrate19To110(input: JsonObject): JsonObject {
+  return input.schemaVersion === '1.9.0' ? { ...input, schemaVersion: '1.10.0' } : input;
+}
+
+function migrate110To111(input: JsonObject): JsonObject {
+  if (input.schemaVersion !== '1.10.0') return input;
+  if ('productionPlan' in input && input.productionPlan !== null) throw contractError('UNSUPPORTED_LEGACY_PRODUCTION_PLAN', '1.10 저장 형식에는 제작 계획이 없습니다. 알 수 없는 productionPlan을 지우거나 추측해 이관하지 않습니다.', []);
+  return { ...input, schemaVersion: '1.11.0', productionPlan: null };
+}
+
+function migrate111To112(input: JsonObject): JsonObject {
+  if (input.schemaVersion !== '1.11.0') return input;
+  if (Array.isArray(input.audioCues) && input.audioCues.some((cue: unknown): boolean => isJsonObject(cue) && cue.timingStatus === 'prepared')) {
+    throw contractError('UNSUPPORTED_LEGACY_AUDIO_PREPARATION', '1.11 이전 저장본에는 음향 배치 대기 상태가 없습니다. 파일의 지원 버전을 확인하세요.', []);
+  }
+  return { ...input, schemaVersion: '1.12.0' };
+}
+
+function migrate112To113(input: JsonObject): JsonObject {
+  if (input.schemaVersion !== '1.12.0') return input;
+  if ('textLayout' in input) throw contractError('UNSUPPORTED_LEGACY_TEXT_LAYOUT', '1.12 이전 저장본에는 글자 조판 설정이 없습니다. 파일의 버전과 textLayout을 확인하세요.', []);
+  return { ...input, schemaVersion: '1.13.0', textLayout: storyboardTextPreset() };
+}
+
+function migrate113To114(input: JsonObject): JsonObject {
+  if (input.schemaVersion !== '1.13.0') return input;
+  if ('textReadability' in input) throw contractError('UNSUPPORTED_LEGACY_TEXT_READABILITY', '1.13 이전 저장본에는 읽기 기준 설정이 없습니다. 파일 버전과 textReadability를 확인하세요.', []);
+  return { ...input, schemaVersion: '1.14.0', textReadability: storyboardReadingPreset() };
+}
+
+function migrate115To116(input: JsonObject): JsonObject {
+  if (input['schemaVersion'] !== '1.15.0') return input;
+  if (Array.isArray(input['audioCues']) && input['audioCues'].some((cue): boolean => typeof cue === 'object' && cue !== null && 'mix' in cue)) {
+    throw contractError('UNSUPPORTED_LEGACY_AUDIO_MIX', '1.15 이전 저장본에는 음량·페이드 설정이 없습니다. 버전과 Audio Cue mix를 확인하세요.', []);
+  }
+  return { ...input, schemaVersion: '1.16.0' };
+}
+
+function migrate116To117(input: JsonObject): JsonObject {
+  if (input.schemaVersion !== '1.16.0') return input;
+  if ('voiceCasting' in input) throw contractError('UNSUPPORTED_LEGACY_VOICE_CASTING', '1.16 이전 저장본에는 자동 음성 배정이 없습니다. 파일 버전과 voiceCasting을 확인하세요.', []);
+  return { ...input, schemaVersion: '1.17.0' };
+}
+
+function migrate117To118(input: JsonObject): JsonObject {
+  if (input.schemaVersion !== '1.17.0') return input;
+  if ('textTypography' in input) throw contractError('UNSUPPORTED_LEGACY_TEXT_TYPOGRAPHY', '1.17 이전 저장본에는 프로젝트 글꼴·언어 설정이 없습니다. 버전과 textTypography를 확인하세요.', []);
+  return { ...input, schemaVersion: '1.18.0' };
+}
+
+function migrate118To119(input: JsonObject): JsonObject {
+  if (input.schemaVersion !== '1.18.0') return input;
+  if (Array.isArray(input.textCues) && input.textCues.some((cue): boolean => isJsonObject(cue) && 'presentation' in cue)) {
+    throw contractError('UNSUPPORTED_LEGACY_TEXT_PRESENTATION', '1.18 이전 저장본에는 개별 글자 배치가 없습니다. 버전과 presentation을 확인하세요.', []);
+  }
+  return { ...input, schemaVersion: '1.19.0' };
+}
+
+function migrate114To115(input: JsonObject): JsonObject {
+  if (input.schemaVersion !== '1.14.0') return input;
+  if ('textLayoutControl' in input) throw contractError('UNSUPPORTED_LEGACY_TEXT_LAYOUT_CONTROL', '1.14 이전 저장본에는 자동 글자 배치 권한이 없습니다. 버전과 textLayoutControl을 확인하세요.', []);
+  return { ...input, schemaVersion: '1.15.0', textLayoutControl: textLayoutControl('manual') };
+}
+
+function migrate119To120(input: JsonObject): JsonObject {
+  if (input.schemaVersion !== '1.19.0') return input;
+  if ('audioInstructionDecisions' in input || Array.isArray(input.audioCues) && input.audioCues.some((cue): boolean => isJsonObject(cue) && ('instructionId' in cue || cue.unitId === null))) {
+    throw contractError('UNSUPPORTED_LEGACY_AUDIO_INSTRUCTIONS', '1.19 이전 저장본에는 음향 지시 연결이 없습니다. 버전과 instructionId를 확인하세요.', []);
+  }
+  return { ...input, schemaVersion: '1.20.0' };
+}
+
+function migrate120To121(input: JsonObject): JsonObject {
+  if (input.schemaVersion !== '1.20.0') return input;
+  if (Array.isArray(input.audioInstructionDecisions) && input.audioInstructionDecisions.some((decision): boolean => isJsonObject(decision) && 'sourceEvidence' in decision)) {
+    throw contractError('UNSUPPORTED_LEGACY_AUDIO_EVIDENCE', '1.20 이전 저장본에는 음향의 대본 인용 연결이 없습니다. 버전과 sourceEvidence를 확인하세요.', []);
+  }
+  return { ...input, schemaVersion: '1.21.0' };
+}
+
+/** 실제 저장 형식에서 정의된 순방향 변환만 수행한다. 과거 버전을 역으로 추측하지 않는다. */
+function projectMigrationInputs(input: unknown): readonly unknown[] {
+  if (!isJsonObject(input)) return [input];
+  const migrations: readonly ((value: JsonObject) => JsonObject)[] = [migrate10To11, migrate11To12, migrate12To13,
+    migrate13To14, migrate14To15, migrate15To16, migrate16To17, migrate17To18, migrate18To19, migrate19To110, migrate110To111, migrate111To112, migrate112To113, migrate113To114, migrate114To115, migrate115To116, migrate116To117, migrate117To118, migrate118To119, migrate119To120, migrate120To121];
+  return migrations.reduce<readonly JsonObject[]>((states, migrate): readonly JsonObject[] => {
+    const previous: JsonObject = states[states.length - 1]!;
+    const next: JsonObject = migrate(previous);
+    return next === previous ? states : [...states, next];
+  }, [input]);
+}
+
 /** 기존 저장본은 원문·Anchor·Asset을 보존하고 알 수 없는 생성 Build만 null로 이관한다. */
 export function migrateProjectInput(input: unknown): unknown {
-  if (!isJsonObject(input)) return input;
-  return migrate18To19(migrate17To18(migrate16To17(migrate15To16(migrate14To15(migrate13To14(migrate12To13(migrate11To12(migrate10To11(input)))))))));
+  const states: readonly unknown[] = projectMigrationInputs(input);
+  return states[states.length - 1];
+}
+
+export type ProjectSnapshotEvidence = { project: Project; projectionHashes: readonly string[] };
+
+/** 동일한 저장 JSON과 지원하는 순방향 이관의 해시를 결속한다. 파일은 재작성하지 않는다. */
+export function parseProjectSnapshotEvidence(input: unknown): ProjectSnapshotEvidence {
+  const states: readonly unknown[] = projectMigrationInputs(input);
+  const project: Project = parseProject(states[states.length - 1]);
+  return { project, projectionHashes: [...new Set([...states, project].map((value): string => sha256Text(stableJsonStringify(value))))] };
 }
 
 /** 저장된 원본 스냅샷에서 데이터를 다시 계산해 편집 가능한 값과 원문을 구분한다. */

@@ -1,3 +1,4 @@
+import { setImmediate } from 'node:timers/promises';
 import sharp from 'sharp';
 import type { AudioNormalizationPlan, AudioNormalizer } from './audio-normalizer.js';
 import { contractError } from './errors.js';
@@ -217,6 +218,34 @@ export function inspectAudioFileBytes(bytes: Buffer, declaredMimeType: string): 
   return inspectParsedAudio(bytes, declaredMimeType).inspection;
 }
 
+export type AudioFileLevels = {
+  sha256: string; peak: number; peakDbfs: number | null; rmsDbfs: number | null;
+  sampleCount: number; fullScaleSamples: number; silent: boolean;
+};
+
+/** 실제 PCM 전체의 표본 피크와 RMS를 읽는다. LUFS·진성 피크·합성된 믹스의 실측값은 아니다. */
+export async function analyzeAudioFileLevels(bytes: Buffer, declaredMimeType: string, signal: AbortSignal): Promise<AudioFileLevels> {
+  signal.throwIfAborted();
+  const { wav, inspection } = inspectParsedAudio(bytes, declaredMimeType);
+  const width: number = wav.bitsPerSample / 8;
+  const fullScale: number = 2 ** (wav.bitsPerSample - 1);
+  const sampleCount: number = wav.data.length / width;
+  let peak: number = 0; let squared: number = 0; let fullScaleSamples: number = 0;
+  for (let first: number = 0; first < sampleCount; first += 131072) {
+    signal.throwIfAborted();
+    const end: number = Math.min(first + 131072, sampleCount);
+    for (let index: number = first; index < end; index += 1) {
+      const raw: number = wav.bitsPerSample === 16 ? wav.data.readInt16LE(index * width) : wav.data.readIntLE(index * width, width);
+      const absolute: number = Math.abs(raw) / fullScale;
+      peak = Math.max(peak, absolute); squared += absolute * absolute;
+      if (raw === -fullScale || raw === fullScale - 1) fullScaleSamples += 1;
+    }
+    await setImmediate(undefined, { signal });
+  }
+  return { sha256: inspection.sha256, peak, peakDbfs: peak === 0 ? null : 20 * Math.log10(peak),
+    rmsDbfs: squared === 0 ? null : 10 * Math.log10(squared / sampleCount), sampleCount, fullScaleSamples, silent: peak === 0 };
+}
+
 /** PCM WAV를 프로젝트 샘플레이트의 16비트 PCM WAV로 정규화하고 결과를 다시 검사한다. */
 export async function inspectAudioBytes(
   project: Pick<Project, 'handoff'>, bytes: Buffer, declaredMimeType: string, normalizer: AudioNormalizer,
@@ -249,6 +278,19 @@ function assertStoredAudioMetadata(asset: Asset, inspected: InspectedAudioFile):
   }
 }
 
+/** 기존 WAV의 실제 바이트와 카탈로그·프로젝트 PCM 규격을 함께 확인한다. */
+export function inspectStoredAudioAsset(project: Pick<Project, 'handoff'>, asset: Asset, bytes: Buffer): InspectedAudioFile {
+  if (asset.kind !== 'audio') throw contractError('ASSET_KIND_MISMATCH', `Audio Asset이 아닙니다. assetId=${asset.id}, kind=${asset.kind}`, []);
+  const actualHash: string = sha256Bytes(bytes);
+  if (actualHash !== asset.sha256) throw contractError('ASSET_HASH_MISMATCH', `저장 파일 해시가 Asset metadata와 다릅니다. assetId=${asset.id}, expected=${asset.sha256}, actual=${actualHash}`, []);
+  const inspected: InspectedAudioFile = inspectAudioFileBytes(bytes, asset.mimeType);
+  assertStoredAudioMetadata(asset, inspected);
+  if (inspected.sampleRate !== project.handoff.timebase.sampleRate || inspected.codec !== 'pcm_s16le') {
+    throw contractError('AUDIO_ASSET_NORMALIZATION_REQUIRED', `저장 Audio Asset을 프로젝트 PCM 형식으로 정규화해야 합니다. assetId=${asset.id}, actual=${inspected.sampleRate}/${inspected.codec}, target=${project.handoff.timebase.sampleRate}/pcm_s16le`, []);
+  }
+  return inspected;
+}
+
 export async function verifyStoredAsset(project: Pick<Project, 'handoff'>, asset: Asset, bytes: Buffer): Promise<InspectedImage | InspectedAudioFile> {
   const actualHash: string = sha256Bytes(bytes);
   if (actualHash !== asset.sha256) {
@@ -256,12 +298,7 @@ export async function verifyStoredAsset(project: Pick<Project, 'handoff'>, asset
   }
   try {
     if (asset.kind === 'audio') {
-      const inspected: InspectedAudioFile = inspectAudioFileBytes(bytes, asset.mimeType);
-      assertStoredAudioMetadata(asset, inspected);
-      if (inspected.sampleRate !== project.handoff.timebase.sampleRate || inspected.codec !== 'pcm_s16le') {
-        throw contractError('AUDIO_ASSET_NORMALIZATION_REQUIRED', `저장 Audio Asset을 프로젝트 PCM 형식으로 정규화해야 합니다. assetId=${asset.id}, actual=${inspected.sampleRate}/${inspected.codec}, target=${project.handoff.timebase.sampleRate}/pcm_s16le`, []);
-      }
-      return inspected;
+      return inspectStoredAudioAsset(project, asset, bytes);
     }
     return await inspectImageBytes(bytes, asset.mimeType);
   } catch (error: unknown) {

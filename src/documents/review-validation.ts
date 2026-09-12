@@ -2,6 +2,7 @@ import { contractError } from '../domain/errors.js';
 import { ProfileSchema, TimebaseSchema } from '../domain/schema.js';
 import type { Profile, Timebase } from '../domain/schema.js';
 import { validateTimebase } from '../domain/time.js';
+import { verifyIdentityEvidence } from './identity.js';
 import { inspectDocuments } from './compile.js';
 import { DOCUMENT_FILES } from './schema.js';
 import type { DocumentBindings, DocumentPreview, DocumentSettings, DocumentSources, MappingChoice } from './schema.js';
@@ -117,11 +118,20 @@ export function validateReviewAudit(sources: DocumentSources, settings: Document
     ...REVIEW_GROUPS.flatMap((field) => preview[field].map((choice: MappingChoice): [string, string | null] => [reviewTargetKey({ field, key: choice.key }), choice.selected])),
     ...ProductionFieldSchema.options.map((key): [string, string] => [reviewTargetKey({ field: 'production', key }), fields[key]]),
   ]);
+  const identityMatches = settings.identityEvidence === undefined ? [] : verifyIdentityEvidence(sources, settings.bindings, settings.identityEvidence);
   const seen: Set<string> = new Set<string>();
   for (const entry of audit.entries) {
     const key: string = reviewTargetKey(entry);
     if (seen.has(key) || expected.get(key) !== entry.value || !entry.confirmed) throw contractError('INVALID_DOCUMENT_REVIEW_AUDIT', `${key}: 최종 값·중복·확인 상태를 검토하세요.`, []);
-    seen.add(key); validateReviewEvidence(sources, entry.evidence);
+    seen.add(key);
+    if (entry.origin === 'identity-document') {
+      const match = identityMatches.find((item): boolean => item.name === entry.key && item.targetId === entry.value);
+      if (entry.field !== 'people' || match === undefined || entry.reviewId !== null || entry.model !== null
+        || entry.evidence.length !== 1 || entry.evidence[0]?.fileId !== 'identity-characters' || entry.evidence[0]?.locator !== match.locator
+        || entry.evidence[0]?.quote !== JSON.stringify({ name: match.name, character_id: match.targetId })) {
+        throw contractError('INVALID_IDENTITY_AUDIT', `${key}: 검증된 인물 원본과 연결 근거가 일치하지 않습니다.`, []);
+      }
+    } else validateReviewEvidence(sources, entry.evidence);
     if (['inference', 'recommendation'].includes(entry.origin) && (entry.reviewId === null || entry.model === null)) throw contractError('INVALID_DOCUMENT_REVIEW_AUDIT', `${key}: Codex 요청과 모델이 필요합니다.`, []);
     if (entry.origin === 'inference' && (entry.field === 'production' || entry.evidence.length === 0)) throw contractError('INVALID_DOCUMENT_REVIEW_AUDIT', `${key}: 연결 추론의 문서 근거가 필요합니다.`, []);
     if (entry.origin === 'recommendation' && entry.field !== 'production') throw contractError('INVALID_DOCUMENT_REVIEW_AUDIT', `${key}: 추천은 제작 설정에만 허용됩니다.`, []);

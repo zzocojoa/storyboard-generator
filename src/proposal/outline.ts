@@ -2,26 +2,16 @@ import { assertNoErrors, contractError } from '../domain/errors.js';
 import { reconcileTextCues } from '../domain/mapping.js';
 import { ProjectSchema } from '../domain/schema.js';
 import type { AudioCue, Project, Segment, Shot, ShotSourceLink, SourceTemporalAnchor, SourceUnit, StoryboardFrame, TextMappingDecision, TextPlacement } from '../domain/schema.js';
+import { unitAudioKind } from '../domain/unit-media.js';
 import { validateProject } from '../domain/validation.js';
 
 export type OutlineSettings = { proposedTextHoldMs: number };
 
-function audioKind(unit: SourceUnit): AudioCue['kind'] | null {
-  switch (unit.kind) {
-    case 'DIALOGUE': return 'dialogue';
-    case 'NARRATION': return 'voiceover';
-    case 'PANEL': return 'panel';
-    case 'SOUND': return 'sfx';
-    case 'MUSIC': return 'music';
-    default: return null;
-  }
-}
-
 function outlineAudio(project: Project, segment: Segment): AudioCue[] {
-  const units: SourceUnit[] = project.dataset.units.filter((unit): boolean => unit.segmentId === segment.id && audioKind(unit) !== null);
+  const units: SourceUnit[] = project.dataset.units.filter((unit): boolean => unit.segmentId === segment.id && unitAudioKind(unit) !== null);
   const spoken: SourceUnit[] = units.filter((unit): boolean => ['DIALOGUE', 'NARRATION', 'PANEL'].includes(unit.kind));
   return units.map((unit: SourceUnit): AudioCue => {
-    const kind: AudioCue['kind'] | null = audioKind(unit);
+    const kind: AudioCue['kind'] | null = unitAudioKind(unit);
     if (kind === null) throw contractError('INVALID_AUDIO_UNIT', `${unit.id}: 음성 또는 음향 원문이 필요합니다.`, []);
     const index: number = spoken.findIndex((candidate): boolean => candidate.id === unit.id);
     const duration: number = segment.endMs - segment.startMs;

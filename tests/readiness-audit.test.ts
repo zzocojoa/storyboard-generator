@@ -1,3 +1,4 @@
+import { legacyTextProject } from './legacy-text-helpers.js';
 import { describe, expect, it } from 'vitest';
 import { auditGenerationRecords } from '../src/domain/generation-records.js';
 import type { GenerationRecord, Project } from '../src/domain/schema.js';
@@ -56,7 +57,7 @@ describe('Canonical Generation Audit', (): void => {
   });
   it('legacy_generation_record_migrates_build_to_null', async (): Promise<void> => {
     const project: Project = await readinessOutline(); const { generatorBuild: omitted, ...legacy } = record(project); expect(omitted).toBeNull();
-    const migrated: Project = parseProject({ ...project, schemaVersion: '1.6.0', generationRecords: [legacy] });
-    expect(migrated.generationRecords).toEqual([{ ...legacy, generatorBuild: null }]); expect(migrated.schemaVersion).toBe('1.9.0'); expect(parseProject(migrated)).toEqual(migrated);
+    const migrated: Project = parseProject({ ...legacyTextProject(project), schemaVersion: '1.6.0', generationRecords: [legacy] });
+    expect(migrated.generationRecords).toEqual([{ ...legacy, generatorBuild: null }]); expect(migrated.schemaVersion).toBe('1.21.0'); expect(parseProject(migrated)).toEqual(migrated);
   });
 });

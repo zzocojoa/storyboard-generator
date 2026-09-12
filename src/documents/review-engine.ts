@@ -40,6 +40,7 @@ export class CodexAppReviewEngine implements DocumentReviewEngine {
       '-c', 'features.unified_exec=false', '-c', 'features.multi_agent=false', '-c', 'features.hooks=false', '-c', 'web_search="disabled"'], { cwd, stdio: ['pipe', 'pipe', 'pipe'], shell: false });
     const waiting: Map<number | string, RpcWaiter> = new Map<number | string, RpcWaiter>();
     let sequence: number = 0; let buffer: string = ''; let bytes: number = 0; let stderr: string = ''; let finalText: string = ''; let stopped: boolean = false;
+    let stage: string = 'spawn';
     let resolveFinal: (value: string) => void = (): void => undefined;
     let rejectFinal: (error: Error) => void = (): void => undefined;
     const completion: Promise<string> = new Promise<string>((resolve, reject): void => { resolveFinal = resolve; rejectFinal = reject; });
@@ -47,7 +48,10 @@ export class CodexAppReviewEngine implements DocumentReviewEngine {
     void completion.catch((): void => undefined);
     const fail = (error: Error): void => { for (const pending of waiting.values()) pending.reject(error); waiting.clear(); rejectFinal(error); };
     const abort = (): void => { fail(engineError('DOCUMENT_REVIEW_CANCELLED', '문서 자동 검토를 취소했습니다.')); child.kill('SIGTERM'); };
-    const timeout: NodeJS.Timeout = setTimeout((): void => { fail(engineError('DOCUMENT_REVIEW_TIMEOUT', `Codex 검토 제한 시간 ${this.#timeoutMs}ms를 초과했습니다. 다시 실행하세요.`)); child.kill('SIGTERM'); }, this.#timeoutMs);
+    const timeout: NodeJS.Timeout = setTimeout((): void => {
+      const detail: string = JSON.stringify({ timeoutMs: this.#timeoutMs, stage, responseBytes: bytes, pendingRpcIds: [...waiting.keys()], stderr: sanitizedDiagnostic(stderr) });
+      fail(engineError('DOCUMENT_REVIEW_TIMEOUT', `Codex 검토 제한 시간 ${this.#timeoutMs}ms를 초과했습니다. 실행 단계와 엔진 상태를 확인하세요. ${detail}`)); child.kill('SIGTERM');
+    }, this.#timeoutMs);
     const exited: Promise<void> = new Promise<void>((resolve): void => {
       child.once('close', (code: number | null, termination: NodeJS.Signals | null): void => {
         if (!stopped) fail(engineError('DOCUMENT_REVIEW_ENGINE_EXIT', `Codex 엔진이 종료되었습니다. exitCode=${code}, signal=${termination}, detail=${sanitizedDiagnostic(stderr)}`));
@@ -58,6 +62,7 @@ export class CodexAppReviewEngine implements DocumentReviewEngine {
     child.stdin.on('error', (error: Error): void => { if (!stopped) fail(engineError('DOCUMENT_REVIEW_ENGINE_IO', `Codex 입력 전송 실패: ${error.message}`)); });
     child.stderr.on('data', (chunk: Buffer): void => { stderr = (stderr + chunk.toString('utf8')).slice(-8192); });
     const send = (method: string, params: object): Promise<unknown> => new Promise<unknown>((resolve, reject): void => {
+      stage = method;
       const id: number = ++sequence; waiting.set(id, { resolve, reject }); child.stdin.write(JSON.stringify({ id, method, params }) + '\n');
     });
     child.stdout.setEncoding('utf8');
@@ -110,6 +115,7 @@ export class CodexAppReviewEngine implements DocumentReviewEngine {
       }));
       if (thread.approvalPolicy !== 'never' || thread.sandbox.type !== 'readOnly' || thread.sandbox.networkAccess === true) throw engineError('DOCUMENT_REVIEW_ENGINE_POLICY', 'Codex 엔진이 문서 검토의 읽기 전용 정책을 적용하지 않았습니다.');
       await send('turn/start', { threadId: thread.thread.id, input: [{ type: 'text', text: prompt, text_elements: [] }], outputSchema: z.toJSONSchema(DocumentReviewResultSchema) });
+      stage = 'turn/completed';
       const text: string = await completion;
       let result: unknown;
       try { result = JSON.parse(text) as unknown; }

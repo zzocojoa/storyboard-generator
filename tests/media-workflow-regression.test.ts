@@ -1,3 +1,4 @@
+import { legacyTextProject } from './legacy-text-helpers.js';
 import { readBuildManifest } from '../src/build.js';
 import { testGeneratorBuild } from './helpers.js';
 import { join, resolve } from 'node:path';
@@ -164,7 +165,7 @@ function reviewCue(unit: SourceUnit, id: string): TextCue {
 }
 
 function legacy14(project: Project): { [key: string]: unknown } {
-  const legacy = JSON.parse(JSON.stringify(project)) as { [key: string]: unknown };
+  const legacy = JSON.parse(JSON.stringify(legacyTextProject(project))) as { [key: string]: unknown };
   legacy.schemaVersion = '1.4.0';
   delete legacy.textPlacementInformationDecisions;
   return legacy;

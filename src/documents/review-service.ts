@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { RequestLockManager, requestErrorCode } from '../codex/request-lock.js';
 import type { RequestLock } from '../codex/request-lock.js';
 import { contractError } from '../domain/errors.js';
+import { SnapshotSchema } from '../domain/schema.js';
 import { sha256Text } from '../importers/integrity.js';
 import { SafeStoreFilesystem } from '../server/safe-filesystem.js';
 import { documentFingerprint, inspectDocuments } from './compile.js';
@@ -15,9 +16,14 @@ import type { DocumentReviewEngine, ReviewEngineResult } from './review-engine.j
 import { ProductionFieldsSchema, ProductionPresetSchema, ReviewStateSchema } from './review-model.js';
 import type { ProductionFields, ProductionPreset, ReviewState } from './review-model.js';
 import type { DocumentSources } from './schema.js';
+import { DOCUMENT_FILES } from './schema.js';
+import { verifyIdentityEvidence } from './identity.js';
+import type { IdentityBasis, SavedIdentityPreview } from './identity-schema.js';
+import type { DocumentBindings } from './schema.js';
 import { productionSettings, validateDocumentReviewResult } from './review-validation.js';
 
 type ActiveReview = { id: string; basisHash: string; controller: AbortController; promise: Promise<void> };
+type PreparedReview = { stored: StoredReviewInput; sources: DocumentSources; basisHash: string };
 const SERVICE_KEY: string = sha256Text('cutroom-document-review-service-v1');
 
 /** 문서 검토 파일과 실행 엔진을 연결하며 기존 Project 저장소는 수정하지 않는다. */
@@ -67,6 +73,12 @@ export class DocumentReviewService {
   async #finish(state: ReviewState): Promise<void> { await this.#publish(`requests/${state.id}.terminal.json`, ReviewStateSchema.parse(state)); }
 
   async read(id: string): Promise<ReviewState> {
+    const state: ReviewState | null = await this.#readExisting(id);
+    if (state === null) throw contractError('DOCUMENT_REVIEW_NOT_FOUND', `${id}: 문서 검토 요청이 없습니다. 같은 요청 재전송으로 접수 여부를 확인하세요.`, []);
+    return state;
+  }
+
+  async #readExisting(id: string): Promise<ReviewState | null> {
     this.#healthy(); z.uuid().parse(id);
     for (const suffix of ['stale', 'terminal', 'running']) {
       const path: string = this.#fs.path('requests', `${id}.${suffix}.json`);
@@ -76,7 +88,7 @@ export class DocumentReviewService {
         return state;
       }
     }
-    throw contractError('DOCUMENT_REVIEW_NOT_FOUND', `${id}: 문서 검토 요청이 없습니다.`, []);
+    return null;
   }
 
   async presets(): Promise<ProductionPreset[]> {
@@ -98,47 +110,131 @@ export class DocumentReviewService {
     await this.#publish(`presets/${preset.id}.json`, preset); return preset;
   }
 
-  async start(value: DocumentReviewInput): Promise<ReviewState> {
+  async #identitySources(input: IdentityBasis): Promise<DocumentSources> {
+    const sources: DocumentSources = await readDocumentSources(input.directory);
+    if (documentFingerprint(sources) !== input.sourceFingerprint) throw contractError('INVALID_IDENTITY_BASIS', '원본 문서가 변경됐습니다. 문서 확인부터 다시 진행하세요.', []);
+    return sources;
+  }
+
+  /** 과거 모델의 판단 대신 현재 문서에 다시 검증한 인물 원본 사본만 재사용한다. */
+  async #savedIdentity(state: ReviewState, sources: DocumentSources, bindings: DocumentBindings): Promise<SavedIdentityPreview | null> {
+    if (state.status !== 'completed' || state.sourceFingerprint !== documentFingerprint(sources)) return null;
+    const stored: StoredReviewInput = StoredReviewInputSchema.parse(JSON.parse(await this.#fs.readText(this.#fs.path('requests', `${state.id}.input.json`))) as unknown);
+    if (documentReviewBasis(stored) !== state.basisHash || stored.input.sourceFingerprint !== state.sourceFingerprint) {
+      throw contractError('INVALID_DOCUMENT_REVIEW_RECORD', `${state.id}: 저장된 검토 입력과 완료 기록의 기준이 다릅니다.`, []);
+    }
+    if (stored.input.identityEvidence === undefined) return null;
+    const evidence = stored.input.identityEvidence;
+    return { reviewId: state.id, evidence, matches: verifyIdentityEvidence(sources, bindings, evidence) };
+  }
+
+  async findSavedIdentity(input: IdentityBasis): Promise<SavedIdentityPreview | null> {
+    this.#healthy();
+    const sources: DocumentSources = await this.#identitySources(input);
+    const states: ReviewState[] = [];
+    for (const entry of await this.#fs.entries(this.#fs.path('requests'))) {
+      if (!entry.name.endsWith('.terminal.json')) continue;
+      const state: ReviewState = await this.read(z.uuid().parse(entry.name.slice(0, -'.terminal.json'.length)));
+      if (state.status === 'completed' && state.sourceFingerprint === input.sourceFingerprint) states.push(state);
+    }
+    for (const state of states.sort((a: ReviewState, b: ReviewState): number => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id))) {
+      const result: SavedIdentityPreview | null = await this.#savedIdentity(state, sources, input.bindings);
+      if (result !== null) return result;
+    }
+    return null;
+  }
+
+  async validateSavedIdentity(id: string, input: IdentityBasis): Promise<SavedIdentityPreview> {
+    const result: SavedIdentityPreview | null = await this.#savedIdentity(await this.read(id), await this.#identitySources(input), input.bindings);
+    if (result === null) throw contractError('SAVED_IDENTITY_NOT_AVAILABLE', `${id}: 현재 문서에 재사용할 검증된 인물 원본이 없습니다. 보충 파일을 지정하세요.`, []);
+    return result;
+  }
+
+  async #withStartLock(operation: () => Promise<ReviewState>): Promise<ReviewState> {
     this.#healthy();
     if (this.#closing) throw contractError('DOCUMENT_REVIEW_UNAVAILABLE', '문서 검토 서비스를 종료 중입니다.', []);
     if (this.#starting) throw contractError('DOCUMENT_REVIEW_BUSY', '다른 문서 검토를 준비 중입니다. 잠시 후 다시 실행하세요.', []);
     this.#starting = true;
-    try {
-      const input: DocumentReviewInput = DocumentReviewInputSchema.parse(value);
-      const directory: string = await realpath(input.directory);
-      const sources: DocumentSources = await readDocumentSources(directory);
-      if (documentFingerprint(sources) !== input.sourceFingerprint) throw contractError('INVALID_DOCUMENT_FINGERPRINT', '검토 이후 문서가 변경되었습니다. 문서 확인 단계부터 다시 실행하세요.', []);
-      const preset: ProductionPreset | null = input.presetId === null ? null : (await this.presets()).find((item: ProductionPreset): boolean => item.id === input.presetId) ?? null;
-      if (input.presetId !== null && preset === null) throw contractError('INVALID_DOCUMENT_REVIEW_PRESET', '선택한 제작 프리셋이 없습니다. 다시 선택하세요.', []);
-      const stored: StoredReviewInput = { input: { ...input, directory }, preset };
-      const basisHash: string = documentReviewBasis(stored);
-      if (this.#active !== null) {
-        const active: ActiveReview = this.#active;
-        const current: ReviewState = await this.read(active.id);
-        if (current.status === 'running') {
-          if (active.basisHash === basisHash) return current;
-          throw contractError('DOCUMENT_REVIEW_BUSY', '다른 문서를 검토 중입니다. 완료 후 실행하거나 진행 중인 검토를 취소하세요.', []);
-        }
-        await active.promise;
-        this.#healthy();
+    try { return await operation(); } finally { this.#starting = false; }
+  }
+
+  async #prepare(value: DocumentReviewInput): Promise<PreparedReview> {
+    const input: DocumentReviewInput = DocumentReviewInputSchema.parse(value);
+    const directory: string = await realpath(input.directory);
+    const sources: DocumentSources = await readDocumentSources(directory);
+    if (documentFingerprint(sources) !== input.sourceFingerprint) throw contractError('INVALID_DOCUMENT_FINGERPRINT', '검토 이후 문서가 변경되었습니다. 문서 확인 단계부터 다시 실행하세요.', []);
+    const preset: ProductionPreset | null = input.presetId === null ? null : (await this.presets()).find((item: ProductionPreset): boolean => item.id === input.presetId) ?? null;
+    if (input.presetId !== null && preset === null) throw contractError('INVALID_DOCUMENT_REVIEW_PRESET', '선택한 제작 프리셋이 없습니다. 다시 선택하세요.', []);
+    const stored: StoredReviewInput = { input: { ...input, directory }, preset };
+    return { stored, sources, basisHash: documentReviewBasis(stored) };
+  }
+
+  async #running(): Promise<ReviewState | null> {
+    if (this.#active === null) return null;
+    const active: ActiveReview = this.#active;
+    const current: ReviewState = await this.read(active.id);
+    if (current.status === 'running') return current;
+    await active.promise; this.#healthy();
+    return null;
+  }
+
+  async start(value: DocumentReviewInput): Promise<ReviewState> {
+    return this.#withStartLock(async (): Promise<ReviewState> => {
+      const prepared: PreparedReview = await this.#prepare(value);
+      const current: ReviewState | null = await this.#running();
+      if (current !== null) {
+        if (current.basisHash === prepared.basisHash) return current;
+        throw contractError('DOCUMENT_REVIEW_BUSY', '다른 문서를 검토 중입니다. 완료 후 실행하거나 진행 중인 검토를 취소하세요.', []);
       }
-      const preview = inspectDocuments(sources, input.bindings).preview;
-      const prompt: string = documentReviewPrompt(sources, preview, stored);
-      if (Buffer.byteLength(prompt) > 2 * 1024 * 1024) throw contractError('DOCUMENT_REVIEW_INPUT_TOO_LARGE', '자동 검토 입력은 2MB 이하여야 합니다.', []);
-      const now: string = new Date().toISOString();
-      const state: ReviewState = { id: randomUUID(), basisHash, sourceFingerprint: input.sourceFingerprint, createdAt: now, updatedAt: now, status: 'running', model: null, result: null, error: null };
-      await this.#publish(`requests/${state.id}.input.json`, stored);
-      await this.#publish(`requests/${state.id}.snapshots.json`, sources);
-      await this.#publish(`requests/${state.id}.running.json`, state);
-      const controller: AbortController = new AbortController();
-      const active: ActiveReview = { id: state.id, basisHash, controller, promise: Promise.resolve() };
-      this.#active = active;
-      active.promise = this.#execute(state, stored, sources, prompt, controller.signal).catch((error: unknown): void => {
-        this.#storageFailure = contractError('DOCUMENT_REVIEW_STORAGE_FAILED', `검토 결과 저장 실패: ${error instanceof Error ? error.message : String(error)}`, []);
-        console.error(JSON.stringify({ event: 'document-review-storage-failed', requestId: state.id, message: this.#storageFailure.message }));
-      }).finally((): void => { if (this.#active === active) this.#active = null; });
-      return state;
-    } finally { this.#starting = false; }
+      return this.#create(randomUUID(), prepared);
+    });
+  }
+
+  /** 접수 전에 보관한 ID를 재사용한다. 같은 입력은 저장된 상태를 반환하고 새 모델 실행을 만들지 않는다. */
+  async startIdentified(id: string, value: DocumentReviewInput): Promise<ReviewState> {
+    z.uuid().parse(id);
+    return this.#withStartLock(async (): Promise<ReviewState> => {
+      const prepared: PreparedReview = await this.#prepare(value);
+      const state: ReviewState | null = await this.#readExisting(id);
+      const inputPath: string = this.#fs.path('requests', `${id}.input.json`);
+      const snapshotsPath: string = this.#fs.path('requests', `${id}.snapshots.json`);
+      const hasInput: boolean = await this.#fs.exists(inputPath);
+      const hasSnapshots: boolean = await this.#fs.exists(snapshotsPath);
+      if (state !== null) {
+        if (!hasInput || !hasSnapshots) throw contractError('DOCUMENT_REVIEW_START_INCOMPLETE', `${id}: 검토 입력 또는 원본 사본이 없습니다. 저장 기록을 보존하고 확인하세요.`, []);
+        const stored: StoredReviewInput = StoredReviewInputSchema.parse(JSON.parse(await this.#fs.readText(inputPath)) as unknown);
+        const sources: DocumentSources = z.record(z.enum(DOCUMENT_FILES.map((file) => file.key)), SnapshotSchema).parse(JSON.parse(await this.#fs.readText(snapshotsPath)) as unknown);
+        if (documentReviewBasis(stored) !== state.basisHash || stored.input.sourceFingerprint !== state.sourceFingerprint || documentFingerprint(sources) !== state.sourceFingerprint) {
+          throw contractError('INVALID_DOCUMENT_REVIEW_RECORD', `${id}: 저장된 입력·원본 사본·요청 기준이 다릅니다. 기록을 확인하세요.`, []);
+        }
+        if (state.basisHash !== prepared.basisHash) throw contractError('DOCUMENT_REVIEW_ID_CONFLICT', `${id}: 같은 요청 ID에 다른 입력을 보낼 수 없습니다. 현재 값으로 새 검토를 시작하세요.`, []);
+        return state;
+      }
+      if (hasInput || hasSnapshots) throw contractError('DOCUMENT_REVIEW_START_INCOMPLETE', `${id}: 검토 접수 기록이 불완전합니다. 기존 파일을 보존하고 저장 기록을 확인하세요.`, []);
+      if (await this.#running() !== null) throw contractError('DOCUMENT_REVIEW_BUSY', '다른 요청을 검토 중입니다. 기존 검토에 다시 연결하거나 완료 후 재전송하세요.', []);
+      return this.#create(id, prepared);
+    });
+  }
+
+  async #create(id: string, prepared: PreparedReview): Promise<ReviewState> {
+    const { stored, sources, basisHash } = prepared;
+    const input: DocumentReviewInput = stored.input;
+    const preview = inspectDocuments(sources, input.bindings).preview;
+    const prompt: string = documentReviewPrompt(sources, preview, stored);
+    if (Buffer.byteLength(prompt) > 2 * 1024 * 1024) throw contractError('DOCUMENT_REVIEW_INPUT_TOO_LARGE', '자동 검토 입력은 2MB 이하여야 합니다.', []);
+    const now: string = new Date().toISOString();
+    const state: ReviewState = { id, basisHash, sourceFingerprint: input.sourceFingerprint, createdAt: now, updatedAt: now, status: 'running', model: null, result: null, error: null };
+    await this.#publish(`requests/${state.id}.input.json`, stored);
+    await this.#publish(`requests/${state.id}.snapshots.json`, sources);
+    await this.#publish(`requests/${state.id}.running.json`, state);
+    const controller: AbortController = new AbortController();
+    const active: ActiveReview = { id: state.id, basisHash, controller, promise: Promise.resolve() };
+    this.#active = active;
+    active.promise = this.#execute(state, stored, sources, prompt, controller.signal).catch((error: unknown): void => {
+      this.#storageFailure = contractError('DOCUMENT_REVIEW_STORAGE_FAILED', `검토 결과 저장 실패: ${error instanceof Error ? error.message : String(error)}`, []);
+      console.error(JSON.stringify({ event: 'document-review-storage-failed', requestId: state.id, message: this.#storageFailure.message }));
+    }).finally((): void => { if (this.#active === active) this.#active = null; });
+    return state;
   }
 
   async #execute(state: ReviewState, stored: StoredReviewInput, sources: DocumentSources, prompt: string, signal: AbortSignal): Promise<void> {
@@ -146,6 +242,7 @@ export class DocumentReviewService {
     try {
       const generated: ReviewEngineResult = await this.#engine.run(prompt, signal);
       if (signal.aborted) throw contractError('DOCUMENT_REVIEW_CANCELLED', '문서 자동 검토를 취소했습니다.', []);
+      if (stored.input.identityEvidence !== undefined) verifyIdentityEvidence(sources, stored.input.bindings, stored.input.identityEvidence);
       const result = validateDocumentReviewResult(sources, stored.input.bindings, stored.input.production, generated.result);
       if (documentFingerprint(await readDocumentSources(stored.input.directory)) !== state.sourceFingerprint) throw contractError('INVALID_DOCUMENT_FINGERPRINT', '검토 중 원본 문서가 변경되었습니다. 문서를 다시 검토하세요.', []);
       if (signal.aborted) throw contractError('DOCUMENT_REVIEW_CANCELLED', '문서 자동 검토를 취소했습니다.', []);

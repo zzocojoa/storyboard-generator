@@ -33,18 +33,18 @@ function roster(file: Snapshot): DocumentPerson[] {
 
 function markerKind(label: string): SourceUnit['kind'] | null {
   const kinds: ReadonlyMap<string, SourceUnit['kind']> = new Map([
-    ['지문', 'ACTION'], ['음향', 'SOUND'], ['화면 문구', 'SCREEN_TEXT'], ['채팅', 'CHAT'], ['쪽지', 'NOTE'], ['메모', 'NOTE'], ['내레이션', 'NARRATION'],
+    ['지문', 'ACTION'], ['음향', 'SOUND'], ['화면 문구', 'SCREEN_TEXT'], ['채팅', 'CHAT'], ['메시지', 'CHAT'], ['쪽지', 'NOTE'], ['메모', 'NOTE'], ['내레이션', 'NARRATION'], ['속마음', 'DIALOGUE'], ['내면 독백', 'DIALOGUE'],
   ]);
   return kinds.get(label) ?? null;
 }
 
 function spokenUnit(file: Snapshot, row: Row, sceneTitle: string, label: string, text: string, people: readonly DocumentPerson[]): DocumentUnit {
-  const match: RegExpExecArray | null = /^(.+?)(?:\((내레이션|채팅|쪽지)\))?$/u.exec(label);
+  const match: RegExpExecArray | null = /^(.+?)(?:\((내레이션|채팅|메시지|쪽지|메모|내면 독백)\))?$/u.exec(label);
   const name: string = match?.[1] ?? label;
   const person: DocumentPerson | undefined = people.find((item: DocumentPerson): boolean => item.name === name);
   const kind: SourceUnit['kind'] | null = label === '화면 문구' ? 'SCREEN_TEXT' : match?.[2] ? markerKind(match[2]) : person?.kind === 'panel' ? 'PANEL' : 'DIALOGUE';
   if (kind === null || (label !== '화면 문구' && person === undefined)) documentError(file, row.line, `인물 표에 없는 화자 또는 지원하지 않는 유형입니다: ${label}`);
-  return { id: `document-unit-${row.line}`, sceneTitle, kind, speakerName: label === '화면 문구' ? null : name, text, sourceRefs: documentRefs(file, row.line) };
+  return { id: `document-unit-${row.line}`, sceneTitle, kind, speakerName: label === '화면 문구' ? null : name, text, sourceRefs: documentRefs(file, row.line), ...(match?.[2] === '내면 독백' ? { delivery: 'inner-monologue' as const } : {}) };
 }
 
 /** 방송 원문의 유형·순서·문자열과 문서 행을 보존하며 해설은 발화로 만들지 않는다. */
@@ -121,7 +121,7 @@ export function parseReenactment(file: Snapshot): ReadableDocument {
     if (needsSpeaker && (!spoken?.[1] || !spoken[2])) documentError(file, row.line, '화자와 발화 본문을 확인하세요.');
     const speakerName: string | null = spoken?.[1] ?? null;
     if (speakerName !== null && !people.some((person: DocumentPerson): boolean => person.name === speakerName)) documentError(file, row.line, `인물 표에 없는 화자입니다: ${speakerName}`);
-    units.push({ id: `reenactment-unit-${row.line}`, sceneTitle: current.title, kind, speakerName, text: spoken?.[2] ?? body, sourceRefs: documentRefs(file, row.line) });
+    units.push({ id: `reenactment-unit-${row.line}`, sceneTitle: current.title, kind, speakerName, text: spoken?.[2] ?? body, sourceRefs: documentRefs(file, row.line), ...(marked?.[1] === '속마음' ? { delivery: 'inner-monologue' as const } : {}) });
   }
   return { title, people, scenes, units };
 }
@@ -132,7 +132,7 @@ export function compareReadable(broadcast: ReadableDocument, reenactment: Readab
   if (original.length !== reenactment.units.length) throw contractError('INVALID_DOCUMENT_UNIT_COVERAGE', `방송/인물 대본 원문 개수 불일치: ${original.length} / ${reenactment.units.length}`, []);
   for (const [index, unit] of original.entries()) {
     const other: DocumentUnit = reenactment.units[index] as DocumentUnit;
-    if (unit.sceneTitle !== other.sceneTitle || unit.kind !== other.kind || unit.speakerName !== other.speakerName || unit.text !== other.text) {
+    if (unit.sceneTitle !== other.sceneTitle || unit.kind !== other.kind || unit.delivery !== other.delivery || unit.speakerName !== other.speakerName || unit.text !== other.text) {
       throw contractError('INVALID_DOCUMENT_UNIT_CONFLICT', `${unit.sourceRefs[0]?.locator} ↔ ${other.sourceRefs[0]?.locator}: 방송/인물 대본 원문·유형·화자·순서 불일치. expected=${unit.text}, actual=${other.text}`, []);
     }
   }

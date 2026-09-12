@@ -1,5 +1,10 @@
+import { audioCueSource } from './audio-source.js';
+import { audioInstructionStructureIssues } from './audio-instructions.js';
+import { voiceCastingIssues } from './voice-casting.js';
+import { sourceProjectId, validStoryboardIdentity } from './project-identity.js';
 import { audioTimingIssues } from './audio.js';
 import { assetReferenceIssues } from './asset-references.js';
+import { productionLocations, productionPlanIssues } from './production-resources.js';
 import { issue } from './errors.js';
 import { generationRecordIssues } from './generation-records.js';
 import type { Dataset, InformationRule, Issue, Project, Segment, Shot, ShotSourceLink, Snapshot, SourceRef, SourceUnit, TextMappingDecision, TextPlacement, TextPlacementInformationDecision } from './schema.js';
@@ -42,6 +47,7 @@ export function validateDataset(dataset: Dataset, snapshots: readonly Snapshot[]
   const sourceEntities: { id: string; sourceRefs: SourceRef[] }[] = [
     ...dataset.people, ...dataset.locations, ...dataset.scenes, ...dataset.segments, ...dataset.units,
     ...dataset.informationRules, ...dataset.instructions, ...dataset.textPlacements,
+    ...dataset.units.flatMap((unit: SourceUnit) => unit.subtitleSourceRefs === undefined ? [] : [{ id: unit.id, sourceRefs: unit.subtitleSourceRefs }]),
   ];
   const sourceIssues: Issue[] = sourceEntities.flatMap((entity): Issue[] => entity.sourceRefs.flatMap((ref: SourceRef): Issue[] => referenceIssue(snapshots.some((snapshot: Snapshot): boolean => snapshot.id === ref.fileId), entity.id, 'sourceRefs', ref.fileId, [ref])));
   const sceneIssues: Issue[] = dataset.scenes.flatMap((scene): Issue[] => [
@@ -59,6 +65,8 @@ export function validateDataset(dataset: Dataset, snapshots: readonly Snapshot[]
     const speakerProhibited: boolean = ['ACTION', 'SOUND', 'MUSIC', 'SCREEN_TEXT'].includes(unit.kind);
     return [
       ...referenceIssue(segment !== undefined, unit.id, 'segmentId', unit.segmentId, unit.sourceRefs),
+      ...(unit.delivery !== undefined && unit.kind !== 'DIALOGUE' ? [issue('INVALID_UNIT_DELIVERY', 'error', unit.id, 'delivery', '극중 독백은 DIALOGUE 원문에만 지정하세요.', 'DIALOGUE', unit.kind, unit.sourceRefs)] : []),
+      ...(unit.subtitleSourceRefs !== undefined && ['ACTION', 'SOUND', 'MUSIC'].includes(unit.kind) ? [issue('INVALID_SUBTITLE_SOURCE', 'error', unit.id, 'subtitleSourceRefs', '지문·음향·음악은 자막 원문으로 지정할 수 없습니다.', 'textual unit', unit.kind, unit.sourceRefs)] : []),
       ...(unit.speakerId === null ? [] : referenceIssue(dataset.people.some((person): boolean => person.id === unit.speakerId), unit.id, 'speakerId', unit.speakerId, unit.sourceRefs)),
       ...((speakerRequired && unit.speakerId === null) || (speakerProhibited && unit.speakerId !== null) ? [issue('INVALID_UNIT_SPEAKER', 'error', unit.id, 'speakerId', '원문 유형과 화자 선언이 맞지 않습니다.', speakerRequired ? '화자 ID' : 'null', unit.speakerId, unit.sourceRefs)] : []),
       ...unit.informationIds.flatMap((id: string): Issue[] => {
@@ -103,9 +111,12 @@ function sourceOrderIssues(project: Project): Issue[] {
 
 export function validateProject(project: Project, expectedDataset: Dataset): Issue[] {
   const dataset: Dataset = project.dataset;
+  const visualLocations = productionLocations(project);
   const totalEnd: number = dataset.segments.at(-1)?.endMs ?? 0;
   const sourceIssues: Issue[] = JSON.stringify(dataset) === JSON.stringify(expectedDataset) ? [] : [issue('SOURCE_DATASET_MODIFIED', 'error', project.projectId, 'dataset', '원본 데이터가 변경되었습니다. 새 패키지로 가져온 후 변경안을 검토하세요.', null, null, [])];
-  const projectIssues: Issue[] = project.projectId === dataset.projectId && project.projectId === project.handoff.projectId ? [] : [issue('PROJECT_MISMATCH', 'error', project.projectId, 'projectId', '프로젝트와 입력 패키지의 ID가 다릅니다.', dataset.projectId, project.projectId, [])];
+  const sourceId: string = sourceProjectId(project);
+  const independentIdValid: boolean = validStoryboardIdentity(project);
+  const projectIssues: Issue[] = independentIdValid && sourceId === dataset.projectId && sourceId === project.handoff.projectId ? [] : [issue('PROJECT_MISMATCH', 'error', project.projectId, 'projectId', '콘티의 원본 ID와 입력 패키지의 ID가 다릅니다.', dataset.projectId, sourceId, [])];
   const groups = [
     { name: 'shots', ids: project.shots.map((value): string => value.id) },
     { name: 'textMappingDecisions', ids: project.textMappingDecisions.map((value): string => value.id) },
@@ -132,7 +143,7 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
         const frameId: string = link.temporalAnchor.frameId;
         return referenceIssue(project.frames.some((frame): boolean => frame.id === frameId && frame.shotId === shot.id), shot.id, 'sourceLinks.temporalAnchor.frameId', frameId, []);
       }),
-      ...(shot.visualLocationId === null ? [] : referenceIssue(dataset.locations.some((location): boolean => location.id === shot.visualLocationId), shot.id, 'visualLocationId', shot.visualLocationId, [])),
+      ...(shot.visualLocationId === null ? [] : referenceIssue(visualLocations.some((location): boolean => location.id === shot.visualLocationId), shot.id, 'visualLocationId', shot.visualLocationId, [])),
       ...shot.presence.flatMap((presence): Issue[] => referenceIssue(dataset.people.some((person): boolean => person.id === presence.personId), shot.id, 'presence', presence.personId, [])),
       ...(project.frames.some((frame): boolean => frame.shotId === shot.id) ? [] : [issue('SHOT_WITHOUT_FRAME', 'error', shot.id, 'frames', '컷에는 검토용 프레임이 하나 이상 필요합니다.', null, null, [])]),
       ...((shot.transitionOut.kind === 'cut' && shot.transitionOut.durationMs !== 0) || (shot.transitionOut.kind !== 'cut' && (shot.transitionOut.durationMs <= 0 || shot.transitionOut.durationMs > shot.endMs - shot.startMs)) ? [issue('INVALID_TRANSITION_DURATION', 'error', shot.id, 'transitionOut', 'CUT은 0ms, 그 밖의 전환은 컷 길이 안의 양수 밀리초여야 합니다.', `0..${shot.endMs - shot.startMs}`, String(shot.transitionOut.durationMs), [])] : []),
@@ -196,16 +207,15 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
       'hold-previous 컷은 시간상 인접한 직전 컷이 필요합니다.', 'contiguous previous shot', previous?.id ?? null, [],
     )];
   });
-  const audioKinds: { unit: SourceUnit['kind']; cue: Project['audioCues'][number]['kind'] }[] = [
-    { unit: 'DIALOGUE', cue: 'dialogue' }, { unit: 'NARRATION', cue: 'voiceover' }, { unit: 'PANEL', cue: 'panel' }, { unit: 'SOUND', cue: 'sfx' }, { unit: 'MUSIC', cue: 'music' },
-  ];
   const audioIssues: Issue[] = project.audioCues.flatMap((cue): Issue[] => {
     const asset = cue.assetId === null ? undefined : project.assets.find((candidate): boolean => candidate.id === cue.assetId && candidate.kind === 'audio');
     return [
-      ...referenceIssue(dataset.units.some((unit): boolean => unit.id === cue.unitId), cue.id, 'unitId', cue.unitId, []),
+      ...referenceIssue(audioCueSource(project, cue) !== null, cue.id, 'audioSource', cue.instructionId ?? cue.unitId ?? 'missing', []),
       ...intervalIssues(cue.id, cue.startMs, cue.endMs, 0, totalEnd),
-      ...(audioKinds.some((mapping): boolean => mapping.cue === cue.kind && dataset.units.some((unit): boolean => unit.id === cue.unitId && unit.kind === mapping.unit)) ? [] : [issue('AUDIO_KIND_MISMATCH', 'error', cue.id, 'kind', '원문 유형과 음성 트랙의 유형이 다릅니다.', null, cue.kind, [])]),
+      ...(audioCueSource(project, cue) !== null ? [] : [issue('AUDIO_KIND_MISMATCH', 'error', cue.id, 'kind', '원문 유형과 음성 트랙의 유형이 다릅니다.', null, cue.kind, [])]),
       ...(cue.timingStatus === 'measured' && cue.assetId === null ? [issue('MISSING_MEASURED_AUDIO', 'error', cue.id, 'timingStatus', '실제 음성 자산 없이 측정 완료로 표시할 수 없습니다.', null, null, [])] : []),
+      ...(cue.timingStatus === 'prepared' && (cue.assetId === null || !['sfx', 'music'].includes(cue.kind)) ? [issue('INVALID_PREPARED_AUDIO', 'error', cue.id, 'timingStatus', '배치 대기는 실제 파일이 연결된 효과음·음악에만 사용할 수 있습니다.', 'sfx/music with asset', cue.kind, [])] : []),
+      ...(cue.timingStatus === 'prepared' && (asset?.durationMs === null || asset?.durationMs === undefined || asset.durationMs <= 0 || asset.durationMs > cue.endMs - cue.startMs) ? [issue('INVALID_PREPARED_AUDIO_WINDOW', 'error', cue.id, 'timing', '준비 음향의 실제 길이를 담을 수 있는 허용 범위가 필요합니다.', String(asset?.durationMs ?? 'null'), `${cue.startMs}..${cue.endMs}`, [])] : []),
       ...(cue.timingStatus === 'measured' && asset?.durationMs !== cue.endMs - cue.startMs ? [issue('AUDIO_DURATION_MISMATCH', 'error', cue.id, 'timing', '측정된 큐 길이와 오디오 자산 길이가 다릅니다.', String(asset?.durationMs ?? 'null'), String(cue.endMs - cue.startMs), [])] : []),
       ...audioTimingIssues(project, cue),
     ];
@@ -231,6 +241,7 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
   });
   const sourceUnitTextCueIssues: Issue[] = dataset.units.flatMap((unit: SourceUnit): Issue[] => {
     const count: number = project.textCues.filter((cue): boolean => cue.authority === 'source-unit' && cue.unitId === unit.id).length;
+    if (unit.subtitleSourceRefs !== undefined && project.shots.length > 0 && count === 0) return [issue('SUBTITLE_PLAN_COVERAGE', 'error', unit.id, 'textCues', '문서에서 지정한 자막 원문을 글자 트랙에 연결하세요.', '1', '0', unit.subtitleSourceRefs)];
     return count <= 1 ? [] : [issue('DUPLICATE_SOURCE_UNIT_TEXT_CUE', 'error', unit.id, 'textCues', 'Source Unit 권한 Text Cue는 하나만 존재할 수 있습니다.', '0..1', String(count), unit.sourceRefs)];
   });
   const placementCoverage: Issue[] = dataset.textPlacements.flatMap((placement): Issue[] => {
@@ -291,8 +302,8 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
   const assetSubjectIssues: Issue[] = project.assets.flatMap((asset): Issue[] => {
     if (asset.subjectId === null) return ['character', 'location'].includes(asset.kind) ? [issue('MISSING_ASSET_SUBJECT', 'error', asset.id, 'subjectId', '인물·장소 기준 자산은 연결 대상을 지정해야 합니다.', null, null, [])] : [];
     const exists: boolean = asset.kind === 'character' ? dataset.people.some((person): boolean => person.id === asset.subjectId)
-      : asset.kind === 'location' ? dataset.locations.some((location): boolean => location.id === asset.subjectId) : true;
+      : asset.kind === 'location' ? visualLocations.some((location): boolean => location.id === asset.subjectId) : true;
     return referenceIssue(exists, asset.id, 'subjectId', asset.subjectId, []);
   });
-  return [...sourceIssues, ...projectIssues, ...groups.flatMap((group): Issue[] => duplicateIssues(group.ids, group.name)), ...shotIssues, ...coverageIssues, ...unitCoverage, ...sourceOrderIssues(project), ...frameIssues, ...frameGroupIssues, ...visualCoverageIssues, ...holdPreviousIssues, ...audioIssues, ...textIssues, ...sourceUnitTextCueIssues, ...placementCoverage, ...mappingIssues, ...decisionCoverage, ...placementInformationIssues, ...placementInformationCoverage, ...orderIssues, ...continuityIssues, ...generationIssues, ...assetClosureIssues, ...assetSubjectIssues];
+  return [...sourceIssues, ...projectIssues, ...audioInstructionStructureIssues(project), ...productionPlanIssues(project), ...voiceCastingIssues(project), ...groups.flatMap((group): Issue[] => duplicateIssues(group.ids, group.name)), ...shotIssues, ...coverageIssues, ...unitCoverage, ...sourceOrderIssues(project), ...frameIssues, ...frameGroupIssues, ...visualCoverageIssues, ...holdPreviousIssues, ...audioIssues, ...textIssues, ...sourceUnitTextCueIssues, ...placementCoverage, ...mappingIssues, ...decisionCoverage, ...placementInformationIssues, ...placementInformationCoverage, ...orderIssues, ...continuityIssues, ...generationIssues, ...assetClosureIssues, ...assetSubjectIssues];
 }

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { HashSchema, IdSchema, ProfileSchema, SourceRefSchema, TimebaseSchema } from '../domain/schema.js';
 import type { Snapshot, SourceRef, SourceUnit } from '../domain/schema.js';
+import { IdentityEvidenceSchema } from './identity-schema.js';
 import { ReviewAuditSchema } from './review-model.js';
 
 export const DOCUMENT_FILES = [
@@ -20,10 +21,10 @@ export const DocumentBindingsSchema = z.strictObject({
   people: z.array(BindingSchema), scenes: z.array(BindingSchema), units: z.array(BindingSchema),
 });
 export const DocumentSettingsSchema = z.strictObject({
-  formatVersion: z.enum(['1.0.0', '1.1.0']), sourceFingerprint: HashSchema,
+  formatVersion: z.enum(['1.0.0', '1.1.0', '1.2.0']), sourceFingerprint: HashSchema,
   packageVersion: z.string().min(1), timebase: TimebaseSchema, profile: ProfileSchema,
   bindings: DocumentBindingsSchema,
-  reviewAudit: ReviewAuditSchema.optional(),
+  reviewAudit: ReviewAuditSchema.optional(), identityEvidence: IdentityEvidenceSchema.optional(),
 });
 export type DocumentBindings = z.infer<typeof DocumentBindingsSchema>;
 export type DocumentSettings = z.infer<typeof DocumentSettingsSchema>;
@@ -46,6 +47,7 @@ export type DocumentPreview = z.infer<typeof DocumentPreviewSchema>;
 export type DocumentPerson = { name: string; role: string; kind: 'character' | 'panel'; sourceRefs: SourceRef[] };
 export type DocumentUnit = {
   id: string; sceneTitle: string; kind: SourceUnit['kind']; speakerName: string | null; text: string; sourceRefs: SourceRef[];
+  delivery?: 'inner-monologue';
 };
 export type DocumentScene = { title: string; sourceRefs: SourceRef[]; metadata: { key: string; text: string; sourceRefs: SourceRef[] }[] };
 export type ReadableDocument = { title: string; people: DocumentPerson[]; scenes: DocumentScene[]; units: DocumentUnit[] };

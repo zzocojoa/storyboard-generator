@@ -61,7 +61,7 @@ test('e2e_eight_documents_review_settings_package_and_storyboard_import', async 
     for (const binding of SYNTHETIC_DOCUMENT_BINDINGS.people) await secondPanel.getByLabel(`인물 ID: ${binding.key}`, { exact: true }).selectOption(binding.targetId);
     for (const binding of SYNTHETIC_DOCUMENT_BINDINGS.scenes) await secondPanel.getByLabel(`장면 ID: ${binding.key}`, { exact: true }).selectOption(binding.targetId);
     await secondPanel.getByRole('button', { name: '연결 다시 확인', exact: true }).click();
-    await expect(secondPanel.getByRole('status')).toContainText('모든 연결을 확인했습니다.');
+    await expect(secondPanel.locator('.document-progress-note')).toContainText('모든 연결을 확인했습니다.');
     await secondPanel.getByLabel('프레임레이트', { exact: true }).selectOption('30/1');
     await secondPanel.getByLabel('음성 샘플레이트', { exact: true }).selectOption('48000');
     await secondPanel.getByLabel('화면비 가로', { exact: true }).fill('16');
@@ -76,7 +76,7 @@ test('e2e_eight_documents_review_settings_package_and_storyboard_import', async 
     await expect(page.locator('.project-tile')).toHaveCount(2);
     expect((await store.read('plant-doc-demo')).dataset.units).toHaveLength(4);
     expect((await store.read('PRJ-007')).dataset.units).toHaveLength(95);
-    await page.getByRole('textbox', { name: 'ACTION', exact: true }).fill('저장하지 않은 편집 내용');
+    await page.getByRole('textbox', { name: '행동·연출', exact: true }).fill('저장하지 않은 편집 내용');
     const opener = page.getByRole('button', { name: /제작 문서 8개/ });
     await opener.click();
     await secondPanel.getByLabel('제작 문서 폴더').fill(secondInput);
@@ -85,7 +85,7 @@ test('e2e_eight_documents_review_settings_package_and_storyboard_import', async 
     await expect(secondPanel.getByRole('button', { name: '생성 패키지 불러오기', exact: true })).toHaveCount(0);
     await page.keyboard.press('Escape');
     await expect(opener).toBeFocused();
-    await expect(page.getByRole('textbox', { name: 'ACTION', exact: true })).toHaveValue('저장하지 않은 편집 내용');
+    await expect(page.getByRole('textbox', { name: '행동·연출', exact: true })).toHaveValue('저장하지 않은 편집 내용');
     await opener.click();
     await expect(secondPanel).toContainText('연결과 제작 기준을 확인하세요');
     await expect(secondPanel).toContainText('이미 저장된 프로젝트입니다');
@@ -103,7 +103,7 @@ test('e2e_document_workflow_mobile_validation_changed_source_and_retry', async (
   try {
     await page.setViewportSize({ width: 375, height: 812 });
     await page.goto(await app.listen({ host: '127.0.0.1', port: 0 }));
-    await page.locator('.rail-document-entry').click();
+    await page.locator('.welcome').getByRole('button', { name: /제작 문서 8개/u }).click();
     const panel = page.getByRole('dialog');
     await panel.getByRole('button', { name: '문서 검토', exact: true }).click();
     await expect(panel.getByRole('alert')).toContainText('폴더 경로를 입력하세요');

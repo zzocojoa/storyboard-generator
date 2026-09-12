@@ -1,4 +1,7 @@
 import { assertNoErrors, contractError } from '../domain/errors.js';
+import { storyboardTextPreset } from '../domain/text-layout-settings.js';
+import { textLayoutControl } from '../domain/text-layout-control.js';
+import { storyboardReadingPreset } from '../domain/text-readability.js';
 import { createInitialTextMappingDecisions } from '../domain/mapping.js';
 import { createInitialPlacementInformationDecisions } from '../domain/placement-information.js';
 import { DatasetSchema, ProjectSchema } from '../domain/schema.js';
@@ -24,7 +27,7 @@ export function importPackage(input: unknown): Project {
   const issues: Issue[] = [...normalized.issues, ...validateDataset(dataset, snapshots)];
   assertNoErrors(issues, 'INVALID_SOURCE_DATASET');
   return ProjectSchema.parse({
-    schemaVersion: '1.9.0', projectId: dataset.projectId, title: dataset.title, revision: 0, profile: payload.handoff.profile,
+    schemaVersion: '1.21.0', projectId: dataset.projectId, title: dataset.title, revision: 0, profile: payload.handoff.profile, productionPlan: null, textLayout: storyboardTextPreset(), textLayoutControl: textLayoutControl('automatic'), textReadability: storyboardReadingPreset(),
     handoff: payload.handoff, sources: snapshots, dataset, importIssues: issues,
     textMappingDecisions, textPlacementInformationDecisions, shots: [], frames: [], audioCues: [], textCues: [], assets: [], generationRecords: [],
   });

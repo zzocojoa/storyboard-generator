@@ -1,4 +1,5 @@
-import { writeFile } from 'node:fs/promises';
+import { writeNodeFixture } from './node-process-fixture.js';
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { documentFingerprint, inspectDocuments } from '../src/documents/compile.js';
 import type { DocumentReviewInput } from '../src/documents/review-input.js';
@@ -30,11 +31,15 @@ export function completedReview(result: DocumentReviewResult, fingerprint: strin
 
 /** 모델 응답 대신 실제 자식 프로세스의 app-server 입출력·중단을 검사한다. */
 export async function writeReviewEngineFixture(root: string, result: DocumentReviewResult, behavior: 'success' | 'api-key' | 'invalid-json' | 'timeout' | 'tool-request', delayMs: number): Promise<string> {
-  const path: string = join(root, `engine-${behavior}-${delayMs}.mjs`);
-  await writeFile(path, `#!${process.execPath}\nimport {createInterface} from 'node:readline';
+  const path: string = join(root, `engine-${behavior}-${delayMs}-${randomUUID()}.mjs`);
+  await writeNodeFixture(path, `#!${process.execPath}\nimport {createInterface} from 'node:readline';
+import {appendFileSync} from 'node:fs';
+const trace=(event)=>appendFileSync(${JSON.stringify(path + '.rpc.jsonl')},JSON.stringify({event,pid:process.pid,at:Date.now()})+'\\n');
+trace('started');
 const result=${JSON.stringify(result)}; const behavior=${JSON.stringify(behavior)};
-const send=(value)=>process.stdout.write(JSON.stringify(value)+'\\n');
+const send=(value)=>{trace('send:'+(value.method ?? value.id));process.stdout.write(JSON.stringify(value)+'\\n');};
 createInterface({input:process.stdin}).on('line',(line)=>{const message=JSON.parse(line); const {id,method,params}=message;
+trace('received:'+method);
 if(method==='initialize') send({id,result:{}});
 if(method==='account/read') send({id,result:{account:{type:behavior==='api-key'?'apiKey':'chatgpt'}}});
 if(method==='config/read') send({id,result:{config:{mcp_servers:{unrelated:{enabled:true}}}}});
@@ -42,6 +47,6 @@ if(method==='thread/start') {if(params.environments.length!==0 || params.sandbox
 if(method==='turn/start') {send({id,result:{turn:{id:'fixture-turn',status:'inProgress'}}}); if(behavior==='timeout') return;
 setTimeout(()=>{if(behavior==='tool-request'){send({id:99,method:'item/permissions/requestApproval',params:{}});return;}send({method:'item/completed',params:{threadId:'fixture-thread',item:{type:'agentMessage',phase:'final_answer',text:behavior==='invalid-json'?'invalid':JSON.stringify(result)}}});send({method:'turn/completed',params:{threadId:'fixture-thread',turn:{status:'completed',error:null}}});},${delayMs});}
 });
-`, { mode: 0o755 });
+`);
   return path;
 }

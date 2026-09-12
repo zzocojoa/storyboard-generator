@@ -20,7 +20,7 @@ export const ProductionPresetSchema = z.strictObject({ id: z.uuid(), name: z.str
 export type ProductionPreset = z.infer<typeof ProductionPresetSchema>;
 export const ReviewAuditEntrySchema = z.strictObject({
   field: ReviewFieldSchema, key: z.string().min(1), value: z.string().min(1),
-  origin: z.enum(['document', 'inference', 'recommendation', 'preset', 'user']), reason: z.string().min(1).max(4000),
+  origin: z.enum(['document', 'inference', 'recommendation', 'preset', 'user', 'identity-document']), reason: z.string().min(1).max(4000),
   evidence: z.array(ReviewEvidenceSchema).max(12), confirmed: z.boolean(), reviewId: z.uuid().nullable(), model: z.string().min(1).nullable(),
 });
 export type ReviewAuditEntry = z.infer<typeof ReviewAuditEntrySchema>;

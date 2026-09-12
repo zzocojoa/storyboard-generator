@@ -6,6 +6,8 @@ import { parseJson, sha256Text } from '../importers/integrity.js';
 import { compileDocuments, documentFingerprint } from './compile.js';
 import { DOCUMENT_FILES, DocumentSettingsSchema } from './schema.js';
 import type { DocumentSettings, DocumentSources } from './schema.js';
+import { hasSectionLayout } from './section-format.js';
+import { verifyIdentityEvidence } from './identity.js';
 import { validateReviewAudit } from './review-validation.js';
 
 export function documentSources(snapshots: readonly Snapshot[]): DocumentSources {
@@ -24,17 +26,22 @@ export function buildDocumentPackage(sources: DocumentSources, input: unknown): 
   const settings: DocumentSettings = DocumentSettingsSchema.parse(input);
   assertNoErrors(validateTimebase(settings.timebase), 'INVALID_TIMEBASE');
   if (settings.sourceFingerprint !== documentFingerprint(sources)) throw contractError('INVALID_DOCUMENT_FINGERPRINT', '검토 이후 입력 문서가 변경되었습니다. 다시 미리보기를 실행하세요.', []);
-  if (settings.formatVersion === '1.1.0' && settings.reviewAudit === undefined) throw contractError('INVALID_DOCUMENT_REVIEW_AUDIT', '설정 1.1.0에는 입력값의 출처·확인 기록이 필요합니다.', []);
+  if (settings.formatVersion !== '1.0.0' && settings.reviewAudit === undefined) throw contractError('INVALID_DOCUMENT_REVIEW_AUDIT', '설정 1.1.0에는 입력값의 출처·확인 기록이 필요합니다.', []);
+  if (settings.identityEvidence !== undefined) {
+    if (settings.formatVersion !== '1.2.0') throw contractError('INVALID_IDENTITY_VERSION', '보충 인물 근거는 설정 1.2.0으로 저장하세요.', []);
+    verifyIdentityEvidence(sources, settings.bindings, settings.identityEvidence);
+  }
   if (settings.reviewAudit !== undefined) validateReviewAudit(sources, settings, settings.reviewAudit);
   const normalized = compileDocuments(sources, settings.bindings);
   const settingsContent: string = `${JSON.stringify(settings, null, 2)}\n`;
   const files: Snapshot[] = [...DOCUMENT_FILES.map((file): Snapshot => sources[file.key]), {
     id: 'document-settings', role: 'reference', path: 'document-settings.json', required: true, hashMode: 'bytes-sha256', sha256: sha256Text(settingsContent), content: settingsContent,
   }];
+  const markerFiles: string[] = hasSectionLayout(sources.edit) ? ['document-shooting'] : [];
   const authority: Handoff['authority'] = [
     { field: 'timeline', fileIds: ['document-edit'] }, { field: 'units', fileIds: ['document-broadcast'] },
-    { field: 'people', fileIds: ['document-broadcast', 'document-manifest', 'document-settings'] },
-    { field: 'scenes', fileIds: ['document-broadcast', 'document-manifest', 'document-settings'] },
+    { field: 'people', fileIds: ['document-broadcast', 'document-manifest', ...markerFiles, 'document-settings'] },
+    { field: 'scenes', fileIds: ['document-broadcast', 'document-manifest', ...markerFiles, 'document-settings'] },
     { field: 'screen-text', fileIds: ['document-broadcast'] }, { field: 'panel-turns', fileIds: ['document-panel', 'document-broadcast'] },
   ];
   const handoff: Handoff = HandoffSchema.parse({ contractVersion: '1.0.0', adapter: 'production-documents-v1', projectId: normalized.dataset.projectId,

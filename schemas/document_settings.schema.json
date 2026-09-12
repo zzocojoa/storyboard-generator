@@ -6,7 +6,8 @@
       "type": "string",
       "enum": [
         "1.0.0",
-        "1.1.0"
+        "1.1.0",
+        "1.2.0"
       ]
     },
     "sourceFingerprint": {
@@ -192,7 +193,7 @@
           "maxItems": 3000,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema2"
+            "$ref": "#/$defs/__schema3"
           }
         }
       },
@@ -200,6 +201,35 @@
         "sourceFingerprint",
         "preset",
         "entries"
+      ],
+      "additionalProperties": false
+    },
+    "identityEvidence": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "type": "string",
+          "const": "production-characters-v1"
+        },
+        "projectId": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "sourceFingerprint": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "characters": {
+          "$ref": "#/$defs/__schema5"
+        },
+        "footprint": {
+          "$ref": "#/$defs/__schema5"
+        }
+      },
+      "required": [
+        "format",
+        "projectId",
+        "sourceFingerprint",
+        "characters",
+        "footprint"
       ],
       "additionalProperties": false
     }
@@ -226,10 +256,7 @@
           "minLength": 1
         },
         "targetId": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 160,
-          "pattern": "^[^\\u0000-\\u001f]+$"
+          "$ref": "#/$defs/__schema2"
         }
       },
       "required": [
@@ -239,6 +266,12 @@
       "additionalProperties": false
     },
     "__schema2": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[^\\u0000-\\u001f]+$"
+    },
+    "__schema3": {
       "type": "object",
       "properties": {
         "field": {
@@ -265,7 +298,8 @@
             "inference",
             "recommendation",
             "preset",
-            "user"
+            "user",
+            "identity-document"
           ]
         },
         "reason": {
@@ -277,7 +311,7 @@
           "maxItems": 12,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema3"
+            "$ref": "#/$defs/__schema4"
           }
         },
         "confirmed": {
@@ -320,7 +354,7 @@
       ],
       "additionalProperties": false
     },
-    "__schema3": {
+    "__schema4": {
       "type": "object",
       "properties": {
         "fileId": {
@@ -341,6 +375,24 @@
         "fileId",
         "locator",
         "quote"
+      ],
+      "additionalProperties": false
+    },
+    "__schema5": {
+      "type": "object",
+      "properties": {
+        "sha256": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 262144
+        }
+      },
+      "required": [
+        "sha256",
+        "content"
       ],
       "additionalProperties": false
     }

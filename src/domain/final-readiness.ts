@@ -1,4 +1,7 @@
+import { storyboardUnitOrderIssues } from './emission-order.js';
+import { storyboardAudioIssues } from './audio-storyboard.js';
 import { contractError, issue } from './errors.js';
+import { audioInstructionOutputIssues } from './audio-instructions.js';
 import { currentVisualReferenceAssets } from './asset-references.js';
 import { approvalIssuesForShot } from './mapping.js';
 import { reviewTextOutput } from './output-policy.js';
@@ -19,6 +22,7 @@ export type FinalReadinessReport = {
     framesTotal: number; framesAccepted: number; audioTotal: number; audioPlayable: number;
   };
   issues: Issue[];
+  optionalAudioIssues: Issue[];
 };
 
 export function assetOutputIntegrityIssues(assetIds: readonly string[], integrity: AssetIntegrityStatuses): Issue[] {
@@ -60,7 +64,8 @@ export function reviewFinalReadiness(project: Project, integrity: AssetIntegrity
   ]);
   const emptyIssues: Issue[] = project.shots.length > 0 ? [] : [issue('SHOTS_REQUIRED_FOR_FINAL', 'conflict', project.projectId, 'shots', 'Final 출력할 컷을 먼저 생성하세요.', 'one or more shots', '0', [])];
   const issues: Issue[] = uniqueOutputIssues([...emptyIssues, ...validateProject(project, project.dataset).filter((value: Issue): boolean => value.severity === 'error'),
-    ...approvalIssues, ...textIssues, ...visualIssues.flat(), ...audioIssues.flat()]);
+    ...project.dataset.segments.flatMap((segment): Issue[] => storyboardUnitOrderIssues(project, segment.id)),
+    ...approvalIssues, ...textIssues, ...visualIssues.flat(), ...project.audioCues.flatMap((cue): Issue[] => storyboardAudioIssues(project, cue)), ...audioInstructionOutputIssues(project)]);
   const frames: StoryboardFrame[] = project.frames.filter((frame: StoryboardFrame): boolean => project.shots.some((shot: Shot): boolean => shot.id === frame.shotId && shot.visualMode === 'sourced'));
   const counts: FinalReadinessReport['counts'] = {
     textTotal: project.textCues.length, textConfirmed: project.textCues.filter((cue: TextCue): boolean => cue.timingStatus === 'confirmed').length,
@@ -74,7 +79,7 @@ export function reviewFinalReadiness(project: Project, integrity: AssetIntegrity
   const reviewed: boolean = project.shots.length > 0 && approvalIssues.length === 0 && counts.framesAccepted === counts.framesTotal;
   const textConfirmed: boolean = reviewed && textIssues.length === 0;
   const visualSafe: boolean = textConfirmed && counts.visualTimelineSafe === counts.shotsTotal;
-  return { projectId: project.projectId, revision: project.revision, finalReady: issues.length === 0, counts, issues,
+  return { projectId: project.projectId, revision: project.revision, finalReady: issues.length === 0, counts, issues, optionalAudioIssues: uniqueOutputIssues(audioIssues.flat()),
     stage: issues.length === 0 ? 'final-ready' : visualSafe ? 'visual-timeline-safe' : textConfirmed ? 'text-confirmed' : reviewed ? 'reviewed' : 'generated' };
 }
 

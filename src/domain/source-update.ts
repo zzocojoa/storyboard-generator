@@ -1,4 +1,7 @@
+import { audioCueSource, audioInstructionMatches } from './audio-source.js';
+import { carrySourceTextPresentation } from './text-presentation.js';
 import { assertNoErrors, contractError } from './errors.js';
+import { sourceProjectId } from './project-identity.js';
 import { reconcileTextCues } from './mapping.js';
 import { createInitialPlacementInformationDecisions, isIndependentTextRelation } from './placement-information.js';
 import type { AudioCue, Project, Segment, Shot, ShotSourceLink, SourceUnit, StoryboardFrame, TextCue, TextMappingDecision, TextPlacement, TextPlacementInformationDecision } from './schema.js';
@@ -38,7 +41,7 @@ function addPlacementSegments(project: Project, placementIds: readonly string[],
 }
 
 export function sourceImpact(current: Project, incoming: Project): SourceImpactReport {
-  if (current.projectId !== incoming.projectId) throw contractError('PROJECT_MISMATCH', `원본 갱신은 같은 프로젝트 ID에만 적용할 수 있습니다. current=${current.projectId}, incoming=${incoming.projectId}`, []);
+  if (sourceProjectId(current) !== sourceProjectId(incoming)) throw contractError('PROJECT_MISMATCH', `원본 갱신은 같은 이야기 ID에만 적용할 수 있습니다. current=${sourceProjectId(current)}, incoming=${sourceProjectId(incoming)}`, []);
   const unitIds: string[] = changedIds(current.dataset.units, incoming.dataset.units);
   const segmentIds: string[] = changedIds(current.dataset.segments, incoming.dataset.segments);
   const sceneIds: string[] = changedIds(current.dataset.scenes, incoming.dataset.scenes);
@@ -62,6 +65,12 @@ export function sourceImpact(current: Project, incoming: Project): SourceImpactR
   }
   for (const shot of current.shots) {
     if (shot.presence.some((presence): boolean => personIds.includes(presence.personId)) || (shot.visualLocationId !== null && locationIds.includes(shot.visualLocationId))) impacted.add(shot.segmentId);
+  }
+  for (const plan of current.productionPlan?.segments ?? []) {
+    const resources = current.productionPlan?.resources.filter((resource): boolean => plan.resourceIds.includes(resource.id)) ?? [];
+    if (resources.some((resource): boolean => resource.sourceUnitIds.some((id): boolean => unitIds.includes(id))
+      || resource.kind === 'character' && resource.subjectId !== null && personIds.includes(resource.subjectId)
+      || resource.kind === 'location' && resource.subjectId !== null && locationIds.includes(resource.subjectId))) impacted.add(plan.segmentId);
   }
   if (JSON.stringify(current.handoff.profile) !== JSON.stringify(incoming.handoff.profile)) {
     for (const segment of [...current.dataset.segments, ...incoming.dataset.segments]) impacted.add(segment.id);
@@ -161,17 +170,28 @@ export function applySourceUpdate(current: Project, incoming: Project, prefix: s
   const preservedFrames: StoryboardFrame[] = current.frames.filter((frame: StoryboardFrame): boolean => preservedShots.some((shot: Shot): boolean => shot.id === frame.shotId));
   const replacementFrames: StoryboardFrame[] = remapFrames(incomingImpactedFrames, shotIds, frameIds);
   const preservedAudio: AudioCue[] = current.audioCues.filter((cue: AudioCue): boolean => {
-    const unit = current.dataset.units.find((candidate): boolean => candidate.id === cue.unitId);
-    return unit !== undefined && !impacted.has(unit.segmentId) && incoming.dataset.units.some((candidate): boolean => candidate.id === unit.id);
+    const source = audioCueSource(current, cue);
+    return source !== null && !impacted.has(source.segmentId) && (cue.instructionId === undefined
+      ? incoming.dataset.units.some((candidate): boolean => candidate.id === source.id)
+      : incoming.dataset.instructions.some((candidate): boolean => candidate.id === source.id && current.dataset.instructions.some((before): boolean => before.id === source.id && audioInstructionMatches(candidate, before))));
   });
   const replacementAudio: AudioCue[] = incoming.audioCues.filter((cue: AudioCue): boolean => impacted.has(incoming.dataset.units.find((unit): boolean => unit.id === cue.unitId)?.segmentId ?? '')).map((cue: AudioCue, index: number): AudioCue => ({ ...cue, id: `${prefix}:audio:${index + 1}` }));
   const preservedText: TextCue[] = current.textCues.filter((cue: TextCue): boolean => !impacted.has(cue.segmentId) && incoming.dataset.segments.some((segment: Segment): boolean => segment.id === cue.segmentId));
-  const replacementText: TextCue[] = incoming.textCues.filter((cue: TextCue): boolean => impacted.has(cue.segmentId)).map((cue: TextCue, index: number): TextCue => ({ ...cue, id: `${prefix}:text:${index + 1}` }));
+  const replacementText: TextCue[] = incoming.textCues.filter((cue: TextCue): boolean => impacted.has(cue.segmentId)).map((cue: TextCue, index: number): TextCue => ({ ...carrySourceTextPresentation(current, cue), id: `${prefix}:text:${index + 1}` }));
   const textMappingDecisions: TextMappingDecision[] = mergeTextMappingDecisions(current, incoming);
   const textPlacementInformationDecisions: TextPlacementInformationDecision[] = mergePlacementInformationDecisions(current, incoming, textMappingDecisions);
   const combinedText: TextCue[] = [...preservedText, ...replacementText];
   const holdMs: number = Math.max(1, ...combinedText.map((cue: TextCue): number => cue.endMs - cue.startMs));
-  const base: Project = { ...incoming, revision: current.revision, profile: current.profile,
+  const base: Project = { ...incoming, projectId: current.projectId,
+    ...(current.voiceCasting === undefined ? {} : { voiceCasting: current.voiceCasting }),
+    ...(current.storyboardIdentity === undefined ? {} : { storyboardIdentity: current.storyboardIdentity, title: current.title }),
+    revision: current.revision, profile: current.profile, ...(current.textTypography === undefined ? {} : { textTypography: current.textTypography }), textLayout: current.textLayout, textLayoutControl: current.textLayoutControl, textReadability: current.textReadability,
+    // 이전 기준 자산과 근거는 감사용으로 보존하고 바뀐 구간의 제작 연결만 다시 계획하게 한다.
+    productionPlan: current.productionPlan === null ? null : { resources: current.productionPlan.resources,
+      segments: current.productionPlan.segments.filter((plan): boolean => !impacted.has(plan.segmentId) && incoming.dataset.segments.some((segment): boolean => segment.id === plan.segmentId)) },
+    ...(current.audioInstructionDecisions === undefined ? {} : { audioInstructionDecisions: current.audioInstructionDecisions.filter((decision): boolean =>
+      !impacted.has(decision.sourceSnapshot.segmentId) && incoming.dataset.instructions.some((instruction): boolean => audioInstructionMatches(instruction, decision.sourceSnapshot))
+      && decision.cueIds.every((id): boolean => preservedAudio.some((cue): boolean => cue.id === id))) }),
     shots, frames: [...preservedFrames, ...replacementFrames], audioCues: [...preservedAudio, ...replacementAudio], textCues: [...preservedText, ...replacementText],
     textMappingDecisions, textPlacementInformationDecisions, assets: current.assets, generationRecords: current.generationRecords };
   const withText: Project = ProjectSchema.parse({ ...base, textCues: reconcileTextCues(base, textMappingDecisions, holdMs) });

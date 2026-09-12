@@ -1,15 +1,31 @@
+import type { TextPresentationValues } from '../../src/domain/text-presentation.js';
+import type { SpeechRetakeInput } from '../../src/automation/speech-retake-schema.js';
+import { BackupPreviewSchema, BackupResultSchema } from '../../src/backup/schema.js';
+import type { BackupPreview, BackupResult, BackupSelection } from '../../src/backup/schema.js';
+import { InstalledSpeechVoiceSchema } from '../../src/domain/speech-voice.js';
+import type { InstalledSpeechVoice } from '../../src/domain/speech-voice.js';
+import { ReviewBundlePreviewSchema, ReviewBundleResultSchema } from '../../src/exporters/review-delivery-schema.js';
+import type { ReviewBundleInput, ReviewBundlePreview, ReviewBundleResult, ReviewDeliveryAttempt, ReviewDeliveryCredential } from '../../src/exporters/review-delivery-schema.js';
 import { CodexRequestSchema } from '../../src/codex/request-schema.js';
+import { AutomationOverviewSchema, AutomationViewSchema } from '../../src/automation/run-view.js';
+import type { AutomationOverview, AutomationView } from '../../src/automation/run-view.js';
+import type { AutomationSettings } from '../../src/automation/run-schema.js';
+import { AutomationDiskReportSchema } from '../../src/automation/disk-space-schema.js';
+import type { AutomationDiskReport } from '../../src/automation/disk-space-schema.js';
 import { ApplyStatusSchema } from '../../src/codex/apply-schema.js';
 import { BuildManifestSchema } from '../../src/build-schema.js';
 import { z } from 'zod';
 import { DocumentPreviewSchema } from '../../src/documents/schema.js';
 import type { DocumentBindings, DocumentPreview, DocumentSettings } from '../../src/documents/schema.js';
+import { IdentityPreviewSchema, SavedIdentityPreviewSchema } from '../../src/documents/identity-schema.js';
+import type { IdentityBasis, IdentityEvidence, IdentityPreview, SavedIdentityPreview } from '../../src/documents/identity-schema.js';
 import type { DocumentReviewInput } from '../../src/documents/review-input.js';
 import { ProductionPresetSchema, ReviewRuntimeStatusSchema, ReviewStateSchema } from '../../src/documents/review-model.js';
 import type { ProductionFields, ProductionPreset, ReviewRuntimeStatus, ReviewState } from '../../src/documents/review-model.js';
 import { IssueSchema, ProjectSchema } from '../../src/domain/schema.js';
 import type { FinalReadinessReport } from '../../src/domain/final-readiness.js';
 import type { Project } from '../../src/domain/schema.js';
+import type { IndependentStoryboardInput } from '../../src/domain/storyboard-creation.js';
 
 const RequestFailureSchema = z.strictObject({ id: z.uuid(), kind: z.enum(['proposal', 'image', 'speech']), projectId: z.string(), targetId: z.string(),
   error: z.strictObject({ code: z.string(), message: z.string() }).nullable() });
@@ -46,6 +62,8 @@ export type AppStatus = z.infer<typeof StatusSchema>;
 export type ProjectSummary = z.infer<typeof SummarySchema>;
 export type CodexRequest = z.infer<typeof CodexRequestSchema>;
 export type SourceImpact = z.infer<typeof SourceImpactSchema>;
+const ReviewedSourceImpactSchema = z.strictObject({ impact: SourceImpactSchema, basisSha256: z.string().regex(/^[a-f0-9]{64}$/u) });
+export type ReviewedSourceImpact = z.infer<typeof ReviewedSourceImpactSchema>;
 export type AssetIntegrityIssue = { projectId: string; assetId: string; outputTargetIds: string[]; code: string; message: string };
 export type ApiErrorCategory = 'validation' | 'not-found' | 'conflict' | 'locked' | 'unavailable' | 'internal';
 export type ApiErrorScope = 'request' | 'project' | 'asset' | 'service';
@@ -90,6 +108,7 @@ export class ApiError extends Error {
 export function apiErrorMessage(error: unknown): string {
   if (!(error instanceof ApiError)) return error instanceof Error ? error.message : String(error);
   if (error.code === 'NETWORK_REQUEST_FAILED') return error.message;
+  if (error.code.startsWith('DOCUMENT_REVIEW_')) return error.message;
   if (error.code === 'FINAL_OUTPUT_NOT_READY') return `FINAL OUTPUT NOT READY\n${error.message}`;
   if (error.code === 'PROJECT_BUSY') return '프로젝트 생성 또는 다른 작업이 진행 중입니다. 완료 후 다시 불러오거나 재시도하세요.';
   if (error.code === 'DOCUMENT_OUTPUT_EXISTS') return '출력 폴더가 이미 존재합니다. 다른 새 폴더를 지정하세요.\n' + error.message;
@@ -115,6 +134,20 @@ export function shouldRetryApiError(error: unknown): boolean {
   return error instanceof ApiError && error.retryable && error.category !== 'locked';
 }
 
+export function responseApiError(response: Response, data: unknown): ApiError {
+  const parsed = ErrorResponseSchema.safeParse(data);
+  if (parsed.success) return new ApiError(parsed.data.error.code, parsed.data.error.message, response.status,
+    parsed.data.error.category, parsed.data.error.retryable, parsed.data.error.operatorActionRequired, parsed.data.error.issues,
+    { scope: parsed.data.error.scope, projectId: parsed.data.error.projectId, resourceId: parsed.data.error.resourceId,
+      mutationBlocked: parsed.data.error.mutationBlocked });
+  return new ApiError(`HTTP_${response.status}`, `요청이 실패했습니다. status=${response.status}`, response.status,
+    response.status === 404 ? 'not-found' : response.status === 409 ? 'conflict' : response.status === 423 ? 'locked'
+      : response.status === 503 ? 'unavailable' : response.status >= 500 ? 'internal' : 'validation',
+    response.status === 409 || response.status === 503, response.status === 423, [],
+    { scope: response.status === 423 ? 'project' : response.status >= 500 ? 'service' : 'request',
+      projectId: null, resourceId: null, mutationBlocked: response.status === 423 });
+}
+
 async function request(path: string, init: RequestInit): Promise<unknown> {
   let response: Response;
   try { response = await fetch(path, init); }
@@ -125,23 +158,44 @@ async function request(path: string, init: RequestInit): Promise<unknown> {
   }
   const data: unknown = await response.json();
   if (!response.ok) {
-    const parsed = ErrorResponseSchema.safeParse(data);
-    if (parsed.success) throw new ApiError(parsed.data.error.code, parsed.data.error.message, response.status,
-      parsed.data.error.category, parsed.data.error.retryable, parsed.data.error.operatorActionRequired, parsed.data.error.issues,
-      { scope: parsed.data.error.scope, projectId: parsed.data.error.projectId, resourceId: parsed.data.error.resourceId,
-        mutationBlocked: parsed.data.error.mutationBlocked });
-    throw new ApiError(`HTTP_${response.status}`, `요청이 실패했습니다. status=${response.status}`, response.status,
-      response.status === 404 ? 'not-found' : response.status === 409 ? 'conflict' : response.status === 423 ? 'locked'
-        : response.status === 503 ? 'unavailable' : response.status >= 500 ? 'internal' : 'validation',
-      response.status === 409 || response.status === 503, response.status === 423, [],
-      { scope: response.status === 423 ? 'project' : response.status >= 500 ? 'service' : 'request',
-        projectId: null, resourceId: null, mutationBlocked: response.status === 423 });
+    throw responseApiError(response, data);
   }
   return data;
 }
 
 function json(method: string, body: unknown): RequestInit {
   return { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+}
+
+export async function fetchAutomation(projectId: string): Promise<AutomationOverview> {
+  return AutomationOverviewSchema.parse(await request(`/api/projects/${encodeURIComponent(projectId)}/automation`, {}));
+}
+export async function fetchInstalledSpeechVoices(): Promise<InstalledSpeechVoice[]> {
+  return z.strictObject({ voices: z.array(InstalledSpeechVoiceSchema).max(1024) }).parse(await request('/api/automation/speech-voices', {})).voices;
+}
+
+export async function fetchTextFonts(): Promise<TextFontCatalog> {
+  return TextFontCatalogSchema.parse(await request('/api/text-fonts', {}));
+}
+
+export async function previewTextTypography(projectId: string, expectedRevision: number, textTypography: TextTypography, atMs: number): Promise<TextLayoutPreview> {
+  return TextLayoutPreviewSchema.parse(await request(`/api/projects/${encodeURIComponent(projectId)}/text-typography/preview`, json('POST', { expectedRevision, textTypography, atMs })));
+}
+
+export async function inspectAutomationStorage(projectId: string, maxStagedBytes: number): Promise<AutomationDiskReport> {
+  return AutomationDiskReportSchema.parse(await request(`/api/projects/${encodeURIComponent(projectId)}/automation/storage`, json('POST', { maxStagedBytes })));
+}
+export async function startAutomation(projectId: string, expectedRevision: number, segmentIds: string[], settings: AutomationSettings): Promise<AutomationView> {
+  return z.strictObject({ run: AutomationViewSchema }).parse(await request(`/api/projects/${encodeURIComponent(projectId)}/automation`, json('POST', { expectedRevision, segmentIds, settings }))).run;
+}
+export async function pauseAutomation(projectId: string, id: string): Promise<AutomationView> {
+  return AutomationViewSchema.parse((z.strictObject({ run: AutomationViewSchema }).parse(await request(`/api/projects/${encodeURIComponent(projectId)}/automation/${encodeURIComponent(id)}/pause`, json('POST', {})))).run);
+}
+export async function resumeAutomation(projectId: string, id: string): Promise<AutomationView> {
+  return z.strictObject({ run: AutomationViewSchema }).parse(await request(`/api/projects/${encodeURIComponent(projectId)}/automation/${encodeURIComponent(id)}/resume`, json('POST', {}))).run;
+}
+export async function cancelAutomation(projectId: string, id: string): Promise<AutomationView> {
+  return z.strictObject({ run: AutomationViewSchema }).parse(await request(`/api/projects/${encodeURIComponent(projectId)}/automation/${encodeURIComponent(id)}/cancel`, json('POST', {}))).run;
 }
 
 export async function fetchStatus(): Promise<AppStatus> {
@@ -156,6 +210,28 @@ export async function fetchProject(projectId: string): Promise<Project> {
   return z.strictObject({ project: ProjectSchema }).parse(await request(`/api/projects/${encodeURIComponent(projectId)}`, {})).project;
 }
 
+export async function previewReviewBundle(projectId: string, input: ReviewBundleInput): Promise<ReviewBundlePreview> {
+  return ReviewBundlePreviewSchema.parse(await request(`/api/projects/${encodeURIComponent(projectId)}/review-bundles/preview`, json('POST', input)));
+}
+
+export async function previewProjectBackup(projectId: string, expectedRevision: number, selection: BackupSelection): Promise<BackupPreview> {
+  return BackupPreviewSchema.parse(await request(`/api/projects/${encodeURIComponent(projectId)}/backups/preview`, json('POST', { expectedRevision, selection })));
+}
+export async function createProjectBackup(projectId: string, expectedRevision: number, selection: BackupSelection, basisSha256: string): Promise<BackupResult> {
+  return BackupResultSchema.parse(await request(`/api/projects/${encodeURIComponent(projectId)}/backups`, json('POST', { expectedRevision, selection, basisSha256 })));
+}
+export async function verifyProjectBackup(projectId: string, path: string): Promise<BackupResult> {
+  return BackupResultSchema.parse(await request(`/api/projects/${encodeURIComponent(projectId)}/backups/verify`, json('POST', { path })));
+}
+
+export async function createReviewBundle(projectId: string, input: ReviewBundleInput, basisSha256: string, credential: ReviewDeliveryCredential): Promise<ReviewBundleResult> {
+  return ReviewBundleResultSchema.parse(await request(`/api/projects/${encodeURIComponent(projectId)}/review-bundles`, json('POST', { input, basisSha256, credential })));
+}
+
+export async function verifyReviewBundle(attempt: ReviewDeliveryAttempt): Promise<ReviewBundleResult> {
+  return ReviewBundleResultSchema.parse(await request(`/api/projects/${encodeURIComponent(attempt.projectId)}/review-bundles/verify`, json('POST', attempt)));
+}
+
 export async function fetchAssetIntegrity(projectId: string): Promise<AssetIntegrityIssue[]> {
   const IssueSchema = z.strictObject({ projectId: z.string(), assetId: z.string(), outputTargetIds: z.array(z.string()), code: z.string(), message: z.string() });
   return z.strictObject({ issues: z.array(IssueSchema) })
@@ -166,6 +242,10 @@ export async function importProject(handoffPath: string, proposedTextHoldMs: num
   return z.strictObject({ project: ProjectSchema }).parse(await request('/api/projects/import', json('POST', { handoffPath, proposedTextHoldMs }))).project;
 }
 
+export async function importIndependentStoryboard(input: IndependentStoryboardInput): Promise<Project> {
+  return z.strictObject({ project: ProjectSchema }).parse(await request('/api/projects/import-independent', json('POST', input))).project;
+}
+
 export async function previewDocumentPackage(directory: string, bindings: DocumentBindings): Promise<DocumentPreview> {
   return z.strictObject({ preview: DocumentPreviewSchema }).parse(await request('/api/document-packages/preview', json('POST', { directory, bindings }))).preview;
 }
@@ -174,13 +254,17 @@ export async function createDocumentPackage(directory: string, output: string, s
   return z.strictObject({ handoffPath: z.string(), projectId: z.string() }).parse(await request('/api/document-packages', json('POST', { directory, output, settings })));
 }
 
+export async function verifyDocumentPackage(directory: string, output: string, settings: DocumentSettings): Promise<{ handoffPath: string; projectId: string }> {
+  return z.strictObject({ handoffPath: z.string(), projectId: z.string() }).parse(await request('/api/document-packages/verify', json('POST', { directory, output, settings })));
+}
+
 export async function documentReviewStatus(): Promise<ReviewRuntimeStatus> { return ReviewRuntimeStatusSchema.parse(await request('/api/document-reviews/status', {})); }
 export async function listDocumentPresets(): Promise<ProductionPreset[]> { return z.strictObject({ presets: z.array(ProductionPresetSchema) }).parse(await request('/api/document-presets', {})).presets; }
 export async function saveDocumentPreset(name: string, fields: ProductionFields): Promise<ProductionPreset> {
   return z.strictObject({ preset: ProductionPresetSchema }).parse(await request('/api/document-presets', json('POST', { name, fields }))).preset;
 }
-export async function startDocumentReview(input: DocumentReviewInput): Promise<ReviewState> {
-  return z.strictObject({ review: ReviewStateSchema }).parse(await request('/api/document-reviews', json('POST', input))).review;
+export async function startDocumentReview(id: string, input: DocumentReviewInput): Promise<ReviewState> {
+  return z.strictObject({ review: ReviewStateSchema }).parse(await request(`/api/document-reviews/${encodeURIComponent(id)}/start`, json('POST', input))).review;
 }
 export async function readDocumentReview(id: string): Promise<ReviewState> { return z.strictObject({ review: ReviewStateSchema }).parse(await request(`/api/document-reviews/${encodeURIComponent(id)}`, {})).review; }
 export async function cancelDocumentReview(id: string): Promise<ReviewState> { return z.strictObject({ review: ReviewStateSchema }).parse(await request(`/api/document-reviews/${encodeURIComponent(id)}/cancel`, json('POST', {}))).review; }
@@ -200,6 +284,14 @@ export async function uploadAudioAsset(projectId: string, cueId: string, expecte
   return z.strictObject({ project: ProjectSchema, audio: z.strictObject({ durationMs: z.number(), sampleRate: z.number(), channels: z.number(), codec: z.string(), sha256: z.string() }) }).parse(data).project;
 }
 
+export async function prepareExternalAudio(projectId: string, cueId: string, expectedRevision: number, file: File): Promise<Project> {
+  const form: FormData = new FormData();
+  form.append('expectedRevision', String(expectedRevision));
+  form.append('file', file, file.name);
+  const data: unknown = await request(`/api/projects/${encodeURIComponent(projectId)}/audio/${encodeURIComponent(cueId)}/prepare`, { method: 'POST', body: form });
+  return z.strictObject({ project: ProjectSchema, audio: z.strictObject({ durationMs: z.number(), sampleRate: z.number(), channels: z.number(), codec: z.string(), sha256: z.string() }) }).parse(data).project;
+}
+
 export async function normalizeAudioAsset(projectId: string, cueId: string, expectedRevision: number): Promise<Project> {
   const data: unknown = await request(`/api/projects/${encodeURIComponent(projectId)}/audio/${encodeURIComponent(cueId)}/normalize`, json('POST', { expectedRevision }));
   return z.strictObject({ project: ProjectSchema, audio: z.strictObject({ durationMs: z.number(), sampleRate: z.number(), channels: z.number(), codec: z.string(), sha256: z.string() }),
@@ -210,13 +302,13 @@ export async function queueCodexRequest(projectId: string, path: string, expecte
   return z.strictObject({ request: CodexRequestSchema }).parse(await request(`/api/projects/${encodeURIComponent(projectId)}${path}`, json('POST', { expectedRevision }))).request;
 }
 
-export async function previewSourceUpdate(projectId: string, handoffPath: string, proposedTextHoldMs: number, expectedRevision: number): Promise<SourceImpact> {
-  const data: unknown = await request(`/api/projects/${encodeURIComponent(projectId)}/source-impact`, json('POST', { handoffPath, proposedTextHoldMs, expectedRevision }));
-  return z.strictObject({ impact: SourceImpactSchema }).parse(data).impact;
+export async function previewSourceUpdate(projectId: string, handoffPath: string, proposedTextHoldMs: number, expectedRevision: number): Promise<ReviewedSourceImpact> {
+  const data: unknown = await request(`/api/projects/${encodeURIComponent(projectId)}/source-update/preview`, json('POST', { handoffPath, proposedTextHoldMs, expectedRevision }));
+  return ReviewedSourceImpactSchema.parse(data);
 }
 
-export async function updateProjectSource(projectId: string, handoffPath: string, proposedTextHoldMs: number, expectedRevision: number): Promise<Project> {
-  const data: unknown = await request(`/api/projects/${encodeURIComponent(projectId)}/source-update`, json('POST', { handoffPath, proposedTextHoldMs, expectedRevision }));
+export async function updateProjectSource(projectId: string, handoffPath: string, proposedTextHoldMs: number, expectedRevision: number, basisSha256: string): Promise<Project> {
+  const data: unknown = await request(`/api/projects/${encodeURIComponent(projectId)}/source-update/apply`, json('POST', { handoffPath, proposedTextHoldMs, expectedRevision, basisSha256 }));
   return z.strictObject({ project: ProjectSchema }).parse(data).project;
 }
 
@@ -225,6 +317,32 @@ export async function fetchFinalReadiness(projectId: string): Promise<FinalReadi
     stage: z.enum(['generated', 'reviewed', 'text-confirmed', 'visual-timeline-safe', 'final-ready']), finalReady: z.boolean(),
     counts: z.strictObject({ textTotal: z.number(), textConfirmed: z.number(), textProposed: z.number(), shotsTotal: z.number(), shotsApproved: z.number(),
       visualTimelineSafe: z.number(), visualCoverageGapCount: z.number(), framesTotal: z.number(), framesAccepted: z.number(), audioTotal: z.number(), audioPlayable: z.number() }),
-    issues: z.array(IssueSchema),
+    issues: z.array(IssueSchema), optionalAudioIssues: z.array(IssueSchema),
   }).parse(await request(`/api/projects/${encodeURIComponent(projectId)}/final-readiness`, {}));
+}
+
+export type IdentityRequest = { directory: string; sourceFingerprint: string; bindings: DocumentBindings; charactersPath: string; footprintPath: string };
+export async function previewDocumentIdentity(input: IdentityRequest): Promise<IdentityPreview> {
+  return IdentityPreviewSchema.parse(await request('/api/document-identities/preview', json('POST', input)));
+}
+export async function validateDocumentIdentity(input: IdentityRequest, evidence: IdentityEvidence): Promise<IdentityPreview> {
+  return IdentityPreviewSchema.parse(await request('/api/document-identities/validate', json('POST', { ...input, evidence })));
+}
+export async function savedDocumentIdentity(input: IdentityBasis): Promise<SavedIdentityPreview | null> {
+  return z.strictObject({ saved: SavedIdentityPreviewSchema.nullable() }).parse(await request('/api/document-identities/saved/preview', json('POST', input))).saved;
+}
+export async function validateSavedDocumentIdentity(input: IdentityBasis, reviewId: string): Promise<SavedIdentityPreview> {
+  return SavedIdentityPreviewSchema.parse(await request('/api/document-identities/saved/validate', json('POST', { ...input, reviewId })));
+}
+
+export async function startSpeechRetake(projectId: string, expectedRevision: number, input: SpeechRetakeInput, settings: AutomationSettings): Promise<AutomationView> {
+  return z.strictObject({ run: AutomationViewSchema }).parse(await request(`/api/projects/${encodeURIComponent(projectId)}/automation/speech-retakes`, json('POST', { expectedRevision, input, settings }))).run;
+}
+import { TextFontCatalogSchema } from '../../src/domain/text-typography.js';
+import type { TextFontCatalog, TextTypography } from '../../src/domain/text-typography.js';
+import { TextLayoutPreviewSchema } from '../../src/rendering/text-response.js';
+import type { TextLayoutPreview } from '../../src/rendering/text-response.js';
+
+export async function previewTextPresentation(projectId: string, cueId: string, expectedRevision: number, presentation: TextPresentationValues, atMs: number, signal: AbortSignal | null): Promise<TextLayoutPreview> {
+  return TextLayoutPreviewSchema.parse(await request(`/api/projects/${encodeURIComponent(projectId)}/text/${encodeURIComponent(cueId)}/presentation/preview`, { ...json('POST', { expectedRevision, presentation, atMs }), signal, cache: 'no-store' }));
 }

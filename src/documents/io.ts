@@ -1,5 +1,4 @@
-import { constants } from 'node:fs';
-import { lstat, mkdir, open, realpath } from 'node:fs/promises';
+import { mkdir, realpath } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 import { contractError } from '../domain/errors.js';
 import type { PackagePayload, Snapshot } from '../domain/schema.js';
@@ -8,6 +7,7 @@ import { sha256Text } from '../importers/integrity.js';
 import { writeNewText } from '../io/project.js';
 import { isMissingFile } from '../io/package.js';
 import { buildDocumentPackage, documentSources } from './package.js';
+import { readDocumentText } from './read-file.js';
 import { DOCUMENT_FILES } from './schema.js';
 import type { DocumentSources } from './schema.js';
 
@@ -18,26 +18,8 @@ export async function readDocumentSources(directory: string): Promise<DocumentSo
   catch (error: unknown) { if (!isMissingFile(error)) throw error; throw contractError('MISSING_DOCUMENT_DIRECTORY', `${directory}: 제작 문서 폴더를 찾을 수 없습니다.`, []); }
   const snapshots: Snapshot[] = await Promise.all(DOCUMENT_FILES.map(async (file): Promise<Snapshot> => {
     const path: string = resolve(root, file.name);
-    const info = await lstat(path).catch((error: unknown) => { if (!isMissingFile(error)) throw error; throw contractError('MISSING_DOCUMENT_FILE', `${path}: 필수 제작 파일이 없습니다.`, []); });
-    if (!info.isFile() || info.isSymbolicLink() || info.size > 4 * 1024 * 1024) throw contractError('INVALID_DOCUMENT_FILE', `${path}: 4MB 이하의 일반 UTF-8 파일이 필요합니다. symlink는 허용하지 않습니다.`, []);
-    const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-    try {
-      const before = await handle.stat();
-      if (before.ino !== info.ino || before.dev !== info.dev || before.size !== info.size) throw contractError('INVALID_DOCUMENT_CHANGED', `${path}: 읽는 동안 파일이 변경되었습니다.`, []);
-      const bytes: Buffer = Buffer.alloc(before.size + 1);
-      let bytesRead: number = 0;
-      while (bytesRead < bytes.length) {
-        const chunk = await handle.read(bytes, bytesRead, bytes.length - bytesRead, bytesRead);
-        if (chunk.bytesRead === 0) break;
-        bytesRead += chunk.bytesRead;
-      }
-      const after = await handle.stat();
-      if (bytesRead !== before.size || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) throw contractError('INVALID_DOCUMENT_CHANGED', `${path}: 읽는 동안 파일이 변경되었습니다.`, []);
-      let content: string;
-      try { content = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes.subarray(0, bytesRead)); }
-      catch (error: unknown) { if (!(error instanceof TypeError)) throw error; throw contractError('INVALID_UTF8', `${path}: ${error.message}`, []); }
-      return { id: `document-${file.key}`, role: file.role, path: `09_PRODUCTION/${file.name}`, required: true, hashMode: 'bytes-sha256', sha256: sha256Text(content), content };
-    } finally { await handle.close(); }
+    const content: string = await readDocumentText(path, 4 * 1024 * 1024);
+    return { id: `document-${file.key}`, role: file.role, path: `09_PRODUCTION/${file.name}`, required: true, hashMode: 'bytes-sha256', sha256: sha256Text(content), content };
   }));
   return documentSources(snapshots);
 }

@@ -1,3 +1,4 @@
+import { nodeFixtureSource } from '../node-process-fixture.js';
 import { cp, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -16,7 +17,7 @@ test('e2e_codex_document_review_autofills_confirms_presets_and_creates_audited_p
   const result = syntheticReviewResult(await readDocumentSources(input));
   const executable: string = await writeReviewEngineFixture(root, result, 'success', 300);
   const store = new ProjectStore(join(root, 'data'));
-  const app = await createApp({ host: '127.0.0.1', port: 4317, dataRoot: join(root, 'data'), webRoot: resolve('dist/web'),
+  const app = await createApp({ host: '127.0.0.1', port: 4317, dataRoot: join(root, 'data'), webRoot: resolve(process.env.CUTROOM_E2E_WEB_ROOT ?? 'dist/web'),
     pdfFontPath: resolve('assets/fonts/NanumGothic-Regular.ttf'), audioNormalization: TEST_AUDIO_NORMALIZATION_OPTIONS,
     codex: { requestRoot: join(root, 'requests'), speechVoice: 'Yuna' }, documentReview: { executable, requestRoot: join(root, 'reviews'), timeoutMs: 3000 } },
   store, new CodexRequestStore(join(root, 'requests'), readBuildManifest()));
@@ -28,6 +29,7 @@ test('e2e_codex_document_review_autofills_confirms_presets_and_creates_audited_p
     await panel.getByRole('button', { name: '문서 검토', exact: true }).click();
     await panel.getByRole('button', { name: 'Codex로 검토하고 채우기', exact: true }).click();
     await expect(panel.getByRole('button', { name: '검토 취소', exact: true })).toBeVisible();
+    await expect(panel.getByRole('navigation', { name: '패키지 제작 단계' }).getByRole('button', { name: '1 문서 확인', exact: true })).toBeDisabled();
     await panel.getByLabel('프레임레이트', { exact: true }).selectOption('25/1');
     await expect(panel.locator('.document-review-note')).toContainText('입력값을 채웠습니다');
     await expect(panel.getByLabel('인물 ID: 민아', { exact: true })).toHaveValue('host');
@@ -35,7 +37,7 @@ test('e2e_codex_document_review_autofills_confirms_presets_and_creates_audited_p
     await expect(panel.getByLabel('프레임레이트', { exact: true })).toHaveValue('25/1');
     await expect(panel.getByLabel('화면비 가로', { exact: true })).toHaveValue('16');
     const invalidEngine: string = await writeReviewEngineFixture(root, result, 'invalid-json', 0);
-    await cp(invalidEngine, executable);
+    await cp(nodeFixtureSource(invalidEngine), nodeFixtureSource(executable));
     await panel.getByRole('button', { name: '현재 값으로 다시 검토', exact: true }).click();
     await expect(panel.locator('.document-review-error')).toContainText('JSON이 아닙니다');
     await expect(panel.getByLabel('인물 ID: 민아', { exact: true })).toHaveValue('host');
@@ -53,6 +55,18 @@ test('e2e_codex_document_review_autofills_confirms_presets_and_creates_audited_p
     await panel.getByLabel('패키지 버전', { exact: true }).fill('codex-reviewed');
     await panel.getByRole('button', { name: '패키지 생성', exact: true }).click();
     await expect(panel.getByRole('status')).toContainText('패키지 생성 완료');
+    const steps = panel.getByRole('navigation', { name: '패키지 제작 단계' });
+    await steps.getByRole('button', { name: '1 문서 확인', exact: true }).click();
+    await steps.getByRole('button', { name: '3 생성·불러오기', exact: true }).click();
+    await expect(panel.locator('.document-success')).toContainText('storyboard_handoff.json');
+    await steps.getByRole('button', { name: '2 연결·설정', exact: true }).click();
+    await panel.getByLabel('인물 ID: 민아', { exact: true }).selectOption('helper');
+    await steps.getByRole('button', { name: '3 생성·불러오기', exact: true }).click();
+    await expect(panel.getByRole('alert')).toContainText('근거를 확인한 뒤 진행');
+    await panel.getByLabel('인물 ID: 민아', { exact: true }).selectOption('host');
+    await panel.getByRole('button', { name: '입력된 제안 모두 확인', exact: true }).click();
+    await steps.getByRole('button', { name: '3 생성·불러오기', exact: true }).click();
+    await expect(panel.locator('.document-package-changed')).toContainText('새 패키지를 저장');
     const settings = JSON.parse(await readFile(join(root, 'package', 'document-settings.json'), 'utf8'));
     expect(settings.formatVersion).toBe('1.1.0');
     expect(settings.reviewAudit.entries.some((entry: { origin: string; confirmed: boolean }): boolean => entry.origin === 'inference' && entry.confirmed)).toBe(true);
@@ -78,7 +92,7 @@ test('e2e_codex_document_review_cancels_and_preserves_connection_edits_during_re
   const input: string = join(root, 'input'); await cp('tests/fixtures/documents', input, { recursive: true });
   const result = syntheticReviewResult(await readDocumentSources(input));
   const executable: string = await writeReviewEngineFixture(root, result, 'success', 500);
-  const app = await createApp({ host: '127.0.0.1', port: 4317, dataRoot: join(root, 'data'), webRoot: resolve('dist/web'),
+  const app = await createApp({ host: '127.0.0.1', port: 4317, dataRoot: join(root, 'data'), webRoot: resolve(process.env.CUTROOM_E2E_WEB_ROOT ?? 'dist/web'),
     pdfFontPath: resolve('assets/fonts/NanumGothic-Regular.ttf'), audioNormalization: TEST_AUDIO_NORMALIZATION_OPTIONS,
     codex: { requestRoot: join(root, 'requests'), speechVoice: 'Yuna' }, documentReview: { executable, requestRoot: join(root, 'reviews'), timeoutMs: 3000 } },
   new ProjectStore(join(root, 'data')), new CodexRequestStore(join(root, 'requests'), readBuildManifest()));

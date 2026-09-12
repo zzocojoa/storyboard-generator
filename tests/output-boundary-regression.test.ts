@@ -1,3 +1,4 @@
+import { legacyTextProject } from './legacy-text-helpers.js';
 import { testGeneratorBuild } from './helpers.js';
 import { describe, expect, it } from 'vitest';
 import { audioOverhangAfterMs, audioOverhangBeforeMs, audioTimingIssues } from '../src/domain/audio.js';
@@ -59,7 +60,7 @@ function frameProject(project: Project, shot: Shot, frameId: string): Project {
 }
 
 function legacy13(project: Project): { [key: string]: unknown } {
-  const legacy = JSON.parse(JSON.stringify(project)) as { schemaVersion: string; audioCues: { [key: string]: unknown }[]; textCues: { [key: string]: unknown }[] };
+  const legacy = JSON.parse(JSON.stringify(legacyTextProject(project))) as { schemaVersion: string; audioCues: { [key: string]: unknown }[]; textCues: { [key: string]: unknown }[] };
   legacy.schemaVersion = '1.3.0';
   legacy.audioCues.forEach((cue): void => { delete cue.timingRelation; });
   legacy.textCues.forEach((cue): void => { delete cue.authority; delete cue.mappingDecisionId; });
@@ -344,7 +345,7 @@ describe('J-cut and L-cut contract', (): void => {
 describe('1.3 to 1.4 migration', (): void => {
   it('migration_1_3_to_1_4_defaults_audio_to_within_segment', async (): Promise<void> => {
     const migrated: Project = parseProject(legacy13(await outline()));
-    expect(migrated.schemaVersion).toBe('1.9.0');
+    expect(migrated.schemaVersion).toBe('1.21.0');
     expect(migrated.audioCues.every((cue: AudioCue): boolean => cue.timingRelation === 'within-segment')).toBe(true);
   });
 

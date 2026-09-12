@@ -2,6 +2,7 @@ import { attachAudioAsset } from './audio-asset.js';
 import type { AudioNormalizer } from './audio-normalizer.js';
 import { assertNoErrors, contractError } from './errors.js';
 import { inspectImageBytes, wavDurationMs } from './media-inspection.js';
+import { productionLocations } from './production-resources.js';
 import type { Asset, AudioCue, GenerationRecord, GeneratorBuildProvenance, Project, StoryboardFrame } from './schema.js';
 import { ProjectSchema } from './schema.js';
 import { validateProject } from './validation.js';
@@ -103,7 +104,7 @@ export async function addReferenceAsset(project: Project, input: ReferenceAssetI
   if (project.assets.some((asset: Asset): boolean => asset.id === input.id)) throw contractError('DUPLICATE_ASSET_ID', `자산 ID가 이미 존재합니다: ${input.id}`, []);
   const inspected = await inspectImageBytes(input.bytes, input.mimeType);
   const validSubject: boolean = input.kind === 'character' ? input.subjectId !== null && project.dataset.people.some((person): boolean => person.id === input.subjectId)
-    : input.kind === 'location' ? input.subjectId !== null && project.dataset.locations.some((location): boolean => location.id === input.subjectId) : true;
+    : input.kind === 'location' ? input.subjectId !== null && productionLocations(project).some((location): boolean => location.id === input.subjectId) : true;
   if (!validSubject) throw contractError('INVALID_REFERENCE_SUBJECT', `${input.kind}: 연결 대상을 프로젝트에서 찾을 수 없습니다. subjectId=${input.subjectId ?? 'null'}`, []);
   const extension: string = inspected.mimeType === 'image/png' ? 'png' : inspected.mimeType === 'image/jpeg' ? 'jpg' : 'webp';
   const relativePath: string = `assets/${sha256Text(input.id)}.${extension}`;

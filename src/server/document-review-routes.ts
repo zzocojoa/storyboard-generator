@@ -23,9 +23,15 @@ export function registerDocumentReviewRoutes(app: FastifyInstance, service: Docu
     const body = z.strictObject({ name: z.string(), fields: ProductionFieldsSchema }).parse(request.body);
     return { preset: await requireReviewService(service).savePreset(body.name, body.fields) };
   });
-  app.post('/api/document-reviews', { bodyLimit: 1024 * 1024 }, async (request, reply): Promise<object> => {
+  app.post('/api/document-reviews', { bodyLimit: 4 * 1024 * 1024 }, async (request, reply): Promise<object> => {
     requireLocalOrigin(request);
     const review = await requireReviewService(service).start(DocumentReviewInputSchema.parse(request.body));
+    reply.status(202); return { review };
+  });
+  app.post('/api/document-reviews/:id/start', { bodyLimit: 4 * 1024 * 1024 }, async (request, reply): Promise<object> => {
+    requireLocalOrigin(request);
+    const { id } = z.strictObject({ id: z.uuid() }).parse(request.params);
+    const review = await requireReviewService(service).startIdentified(id, DocumentReviewInputSchema.parse(request.body));
     reply.status(202); return { review };
   });
   app.get('/api/document-reviews/:id', async (request): Promise<object> => {
@@ -37,7 +43,7 @@ export function registerDocumentReviewRoutes(app: FastifyInstance, service: Docu
     const { id } = z.strictObject({ id: z.uuid() }).parse(request.params);
     return { review: await requireReviewService(service).cancel(id) };
   });
-  app.post('/api/document-reviews/:id/validate', async (request): Promise<object> => {
+  app.post('/api/document-reviews/:id/validate', { bodyLimit: 4 * 1024 * 1024 }, async (request): Promise<object> => {
     requireLocalOrigin(request);
     const { id } = z.strictObject({ id: z.uuid() }).parse(request.params);
     return { review: await requireReviewService(service).validate(id, DocumentReviewInputSchema.parse(request.body)) };

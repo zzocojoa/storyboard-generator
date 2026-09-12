@@ -8,9 +8,12 @@ import type { CandidateEvidence, DocumentBindings, DocumentPreview, DocumentSour
 import { DOCUMENT_FILES, DocumentPreviewSchema } from './schema.js';
 import { parseDocumentManifest, parseNarration, parsePanels, verifyShootingManifest } from './supporting.js';
 import type { DocumentManifest, NarrationRow, PanelBlock } from './supporting.js';
+import { hasSectionLayout } from './section-format.js';
+import { inspectSectionDocuments } from './section-inspection.js';
+import type { SectionInspection } from './section-inspection.js';
 
-type Inspection = { preview: DocumentPreview; broadcast: ReadableDocument; reenactment: ReadableDocument;
-  manifest: DocumentManifest; segments: Segment[]; narration: NarrationRow[]; panels: PanelBlock[] };
+export type Inspection = { preview: DocumentPreview; broadcast: ReadableDocument; reenactment: ReadableDocument;
+  manifest: DocumentManifest; segments: Segment[]; narration: NarrationRow[]; panels: PanelBlock[]; section?: SectionInspection };
 
 export function documentFingerprint(sources: DocumentSources): string {
   return sha256Text(JSON.stringify(DOCUMENT_FILES.map((file) => ({ key: file.key, sha256: sha256Text(sources[file.key].content) }))));
@@ -59,6 +62,7 @@ function candidateEvidence(sources: DocumentSources, manifest: DocumentManifest,
 
 /** 유일한 원문 연결과 명시적 결정으로만 후보를 좁힌다. 표의 행 순서는 ID 대응 근거로 쓰지 않는다. */
 export function inspectDocuments(sources: DocumentSources, bindings: DocumentBindings): Inspection {
+  if (hasSectionLayout(sources.edit)) return inspectSectionDocuments(sources, bindings);
   const manifest: DocumentManifest = parseDocumentManifest(sources);
   verifyShootingManifest(sources.shooting, manifest);
   const broadcast: ReadableDocument = parseBroadcast(sources.broadcast);
@@ -148,6 +152,7 @@ function contextInstructions(sources: DocumentSources, inspection: Inspection): 
       id: `document-context:${segment.id}:${entry.key}`, segmentId: segment.id, kind: entry.key === '배경 음악' ? 'music' : 'ambience', text: entry.text, sourceRefs: entry.sourceRefs,
     })));
   });
+  if (inspection.section !== undefined) return local;
   const global: Instruction[] = (['shooting', 'edit', 'narration', 'panel', 'subtitles'] as const).flatMap((key): Instruction[] => documentRows(sources[key])
     .filter((row): boolean => row.text !== '' && !/^(?:#|\||<!--|- `|- \d)/u.test(row.text))
     .flatMap((row): Instruction[] => inspection.segments.map((segment: Segment): Instruction => ({ id: `document-global:${key}:${row.line}:${segment.id}`,
@@ -185,7 +190,9 @@ export function compileDocuments(sources: DocumentSources, bindings: DocumentBin
       : unit.kind === 'PANEL' ? inspection.panels.filter((block: PanelBlock): boolean => block.segmentId === segmentId).flatMap((block: PanelBlock) => block.turns.filter((turn): boolean => turn.text === unit.text).flatMap((turn) => turn.sourceRefs)) : [];
     return { id: unit.id, segmentId, order: index + 1, kind: unit.kind, text: unit.text,
       speakerId: unit.speakerName === null ? null : people.find((person: Person): boolean => person.name === unit.speakerName)?.id ?? null,
-      informationIds: [`document-information:${unit.id}`], sourceRefs: [...refs, ...spokenRefs] };
+      informationIds: [`document-information:${unit.id}`], sourceRefs: [...refs, ...spokenRefs, ...(inspection.section?.markedUnits[index]?.sourceRefs ?? []), ...(inspection.section?.subtitleRefs[unit.id] ?? [])],
+      ...(unit.delivery === undefined ? {} : { delivery: unit.delivery }),
+      ...(inspection.section?.subtitleRefs[unit.id] === undefined ? {} : { subtitleSourceRefs: inspection.section.subtitleRefs[unit.id] }) };
   });
   for (const [index, unit] of units.entries()) {
     const previous: SourceUnit | undefined = units[index - 1];
@@ -195,11 +202,10 @@ export function compileDocuments(sources: DocumentSources, bindings: DocumentBin
   const informationRules: InformationRule[] = units.map((unit: SourceUnit): InformationRule => ({ id: unit.informationIds[0] as string, segmentId: unit.segmentId,
     baseNotBeforeMs: (segments.find((segment: Segment): boolean => segment.id === unit.segmentId) as Segment).startMs,
     notBeforeUnitId: unit.id, notBeforeUnitOrder: unit.order, precision: 'unit-order', sourceRefs: unit.sourceRefs }));
-  const shooting = importShooting(sources.shooting, segments);
-  const edit = importEdit(sources.edit, segments);
+  const instructions: Instruction[] = inspection.section?.instructions ?? [...importShooting(sources.shooting, segments).instructions, ...importEdit(sources.edit, segments).instructions];
   const subtitles = documentRows(sources.subtitles).some((row): boolean => /^- \d/u.test(row.text)) ? importSubtitles(sources.subtitles, units) : { placements: [], issues: [] };
   const dataset: Dataset = { projectId: manifest.project_id, title: broadcast.title, people, locations, scenes, segments, units, informationRules,
-    instructions: [...shooting.instructions, ...edit.instructions, ...contextInstructions(sources, inspection)], textPlacements: subtitles.placements };
+    instructions: [...instructions, ...contextInstructions(sources, inspection)], textPlacements: subtitles.placements };
   assertNoErrors(validateDataset(dataset, Object.values(sources)), 'INVALID_DOCUMENT_DATASET');
   const notices: Issue[] = preview.notices.map((text: string): Issue => issue('DOCUMENT_IMPORT_REVIEW', 'warning', manifest.project_id, 'documents', text, null, null, []));
   return { dataset, issues: [...subtitles.issues, ...notices] };

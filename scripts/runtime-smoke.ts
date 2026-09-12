@@ -171,7 +171,7 @@ async function runPrimarySmoke(root: string): Promise<{ ports: number[]; checks:
     }), 200));
     project = updated; checks.push('source-update:200');
     const exportedJson: HttpResult = await expectStatus(running.url, `/api/projects/${encodeURIComponent(project.projectId)}/export.json`, {}, 200);
-    assert.equal((JSON.parse(exportedJson.bytes.toString('utf8')) as Project).schemaVersion, '1.9.0');
+    assert.equal((JSON.parse(exportedJson.bytes.toString('utf8')) as Project).schemaVersion, '1.13.0');
     await expectStatus(running.url, `/api/projects/${encodeURIComponent(project.projectId)}/export.csv`, {}, 200);
     const exportedPdf: HttpResult = await expectStatus(running.url, `/api/projects/${encodeURIComponent(project.projectId)}/export.pdf`, {}, 200);
     assert.equal(exportedPdf.bytes.subarray(0, 5).toString('ascii'), '%PDF-'); checks.push('json:200', 'csv:200', 'pdf:200');

@@ -66,7 +66,12 @@ it('document_review_engine_enforces_chatgpt_tools_json_and_execution_limits', as
   try {
     for (const [behavior, error] of [['api-key', 'DOCUMENT_REVIEW_LOGIN_REQUIRED'], ['invalid-json', 'DOCUMENT_REVIEW_INVALID_JSON'], ['tool-request', 'DOCUMENT_REVIEW_TOOL_REQUEST'], ['timeout', 'DOCUMENT_REVIEW_TIMEOUT']] as const) {
       const engine = new CodexAppReviewEngine(await writeReviewEngineFixture(root, syntheticReviewResult(sources), behavior, 0), behavior === 'timeout' ? 150 : 2000);
-      await expect(engine.run('입력', new AbortController().signal)).rejects.toMatchObject({ code: error });
+      const execution = engine.run('진단 로그에 포함하지 않을 원문', new AbortController().signal);
+      await expect(execution).rejects.toMatchObject({ code: error });
+      if (behavior === 'timeout') {
+        await expect(execution).rejects.toThrow(/"stage":/u);
+        await expect(execution).rejects.not.toThrow('진단 로그에 포함하지 않을 원문');
+      }
     }
     const engine = new CodexAppReviewEngine(await writeReviewEngineFixture(root, syntheticReviewResult(sources), 'success', 0), 2000);
     expect((await engine.run('입력', new AbortController().signal)).model).toBe('test-codex-model');

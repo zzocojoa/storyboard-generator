@@ -1,4 +1,11 @@
+import { TextTypographySchema } from './text-typography.js';
+import { TextPresentationSchema } from './text-presentation.js';
+import { SpeechVoiceSchema } from './speech-voice-value.js';
+import { AudioMixSchema } from './audio-mix.js';
 import { z } from 'zod';
+import { TextLayoutPresetSchema } from './text-layout-settings.js';
+import { TextLayoutControlSchema } from './text-layout-control.js';
+import { TextReadabilityPolicySchema } from './text-readability.js';
 
 export const IdSchema = z.string().min(1).max(160).regex(/^[^\u0000-\u001f]+$/u);
 export const MillisecondsSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
@@ -61,6 +68,8 @@ export const UnitSchema = z.strictObject({
   id: IdSchema, segmentId: IdSchema, order: z.number().int().positive(), kind: UnitKindSchema,
   text: z.string().min(1), speakerId: IdSchema.nullable(), informationIds: z.array(IdSchema),
   sourceRefs: z.array(SourceRefSchema).min(1),
+  delivery: z.literal('inner-monologue').optional(),
+  subtitleSourceRefs: z.array(SourceRefSchema).min(1).optional(),
 });
 export const InformationRuleSchema = z.strictObject({
   id: IdSchema, segmentId: IdSchema, baseNotBeforeMs: MillisecondsSchema,
@@ -195,9 +204,20 @@ export const FrameSchema = z.strictObject({
 });
 export const AudioTimingRelationSchema = z.enum(['within-segment', 'j-cut', 'l-cut']);
 export const AudioCueSchema = z.strictObject({
-  id: IdSchema, unitId: IdSchema, kind: z.enum(['dialogue', 'voiceover', 'panel', 'sfx', 'music']),
-  startMs: MillisecondsSchema, endMs: MillisecondsSchema, timingStatus: z.enum(['proposed', 'measured']),
-  timingRelation: AudioTimingRelationSchema, assetId: IdSchema.nullable(),
+  id: IdSchema, unitId: IdSchema.nullable(), instructionId: IdSchema.optional(), kind: z.enum(['dialogue', 'voiceover', 'panel', 'sfx', 'music']),
+  startMs: MillisecondsSchema, endMs: MillisecondsSchema, timingStatus: z.enum(['proposed', 'prepared', 'measured']),
+  timingRelation: AudioTimingRelationSchema, assetId: IdSchema.nullable(), mix: AudioMixSchema.optional(),
+}).superRefine((cue, context): void => {
+  if ((cue.unitId === null) !== (cue.instructionId !== undefined)) context.addIssue({ code: 'custom', path: ['instructionId'], message: '오디오 원문은 Unit 또는 음향 지시 중 하나에만 연결해야 합니다.' });
+  if (cue.instructionId !== undefined && !['sfx', 'music'].includes(cue.kind)) context.addIssue({ code: 'custom', path: ['kind'], message: '음향 지시를 발화로 합성할 수 없습니다.' });
+});
+export const AudioInstructionEvidenceSchema = z.strictObject({ unitId: IdSchema, quote: z.string().trim().min(1) });
+export const AudioInstructionDecisionSchema = z.strictObject({
+  instructionId: IdSchema, sourceSnapshot: InstructionSchema,
+  resolution: z.enum(['none', 'required']), cueIds: z.array(IdSchema), informationIds: z.array(IdSchema),
+  reason: z.string().trim().min(1), reviewStatus: z.enum(['proposed', 'confirmed']),
+  origin: z.enum(['automatic', 'manual']), generationId: IdSchema.nullable(),
+  sourceEvidence: z.array(AudioInstructionEvidenceSchema).max(64).optional(),
 });
 export const TextCueAuthoritySchema = z.enum(['placement', 'mapping-decision', 'source-unit', 'review-required']);
 const TextCueFieldsSchema = z.strictObject({
@@ -205,6 +225,7 @@ const TextCueFieldsSchema = z.strictObject({
   mappingDecisionId: IdSchema.nullable(), authority: TextCueAuthoritySchema,
   text: z.string(), startMs: MillisecondsSchema, endMs: MillisecondsSchema,
   kind: z.enum(['overlay', 'prop-text', 'dialogue-subtitle']), timingStatus: z.enum(['proposed', 'confirmed']),
+  presentation: TextPresentationSchema.optional(),
 });
 export const TextCueSchema = TextCueFieldsSchema.superRefine((cue, context): void => {
   const addIssue = (message: string, path: string): void => context.addIssue({ code: 'custom', message, path: [path] });
@@ -243,12 +264,37 @@ export const GenerationSchema = z.strictObject({
   referenceHashes: z.array(HashSchema), resultAssetIds: z.array(IdSchema), shotIds: z.array(IdSchema), createdAt: z.iso.datetime(),
   generatorBuild: GeneratorBuildProvenanceSchema.nullable(),
 });
+export const ProductionResourceSchema = z.strictObject({
+  id: IdSchema, kind: z.enum(['character', 'location', 'prop']), subjectId: IdSchema.nullable(),
+  name: z.string().trim().min(1).max(200), description: z.string().trim().min(1).max(4000),
+  reason: z.string().trim().min(1).max(4000), sourceRefs: z.array(SourceRefSchema).min(1),
+  sourceUnitIds: z.array(IdSchema), generationId: IdSchema, referenceAssetId: IdSchema.nullable(),
+});
+export const ProductionSegmentSchema = z.strictObject({
+  segmentId: IdSchema, resourceIds: z.array(IdSchema), visualLocationId: IdSchema.nullable(),
+  continuityGroup: z.string().trim().min(1).max(200), entryState: z.string().max(4000), exitState: z.string().max(4000),
+  reason: z.string().trim().min(1).max(4000), generationId: IdSchema,
+});
+export const ProductionPlanSchema = z.strictObject({
+  resources: z.array(ProductionResourceSchema), segments: z.array(ProductionSegmentSchema),
+});
+export const VoiceCastingSchema = z.strictObject({
+  version: z.literal('1.0.0'), sourceHash: HashSchema, generationId: IdSchema,
+  assignments: z.array(z.strictObject({
+    speakerId: IdSchema.nullable(), voice: SpeechVoiceSchema, locale: z.string().min(2).max(50),
+    reason: z.string().trim().min(1).max(4000), sourceUnitIds: z.array(IdSchema).min(1),
+  })).min(1).max(1024),
+});
+export type VoiceCasting = z.infer<typeof VoiceCastingSchema>;
 export const ProjectSchema = z.strictObject({
-  schemaVersion: z.literal('1.9.0'), projectId: IdSchema, title: z.string().min(1), revision: z.number().int().nonnegative(),
-  profile: ProfileSchema,
+  schemaVersion: z.literal('1.21.0'), projectId: IdSchema, title: z.string().min(1), revision: z.number().int().nonnegative(),
+  voiceCasting: VoiceCastingSchema.optional(), textTypography: TextTypographySchema.optional(),
+  storyboardIdentity: z.strictObject({ sourceProjectId: IdSchema, creationFingerprint: HashSchema }).optional(),
+  profile: ProfileSchema, productionPlan: ProductionPlanSchema.nullable(), textLayout: TextLayoutPresetSchema, textLayoutControl: TextLayoutControlSchema, textReadability: TextReadabilityPolicySchema,
   handoff: HandoffSchema, sources: z.array(SnapshotSchema), dataset: DatasetSchema, importIssues: z.array(IssueSchema),
   textMappingDecisions: z.array(TextMappingDecisionSchema),
   textPlacementInformationDecisions: z.array(TextPlacementInformationDecisionSchema),
+  audioInstructionDecisions: z.array(AudioInstructionDecisionSchema).optional(),
   shots: z.array(ShotSchema), frames: z.array(FrameSchema), audioCues: z.array(AudioCueSchema), textCues: z.array(TextCueSchema),
   assets: z.array(AssetSchema), generationRecords: z.array(GenerationSchema),
 });
@@ -286,9 +332,13 @@ export type LockedField = z.infer<typeof LockedFieldSchema>;
 export type StoryboardFrame = z.infer<typeof FrameSchema>;
 export type AudioTimingRelation = z.infer<typeof AudioTimingRelationSchema>;
 export type AudioCue = z.infer<typeof AudioCueSchema>;
+export type AudioInstructionDecision = z.infer<typeof AudioInstructionDecisionSchema>;
 export type TextCueAuthority = z.infer<typeof TextCueAuthoritySchema>;
 export type TextCue = z.infer<typeof TextCueSchema>;
 export type Asset = z.infer<typeof AssetSchema>;
 export type GenerationRecord = z.infer<typeof GenerationSchema>;
 export type GeneratorBuildProvenance = z.infer<typeof GeneratorBuildProvenanceSchema>;
 export type Project = z.infer<typeof ProjectSchema>;
+export type ProductionResource = z.infer<typeof ProductionResourceSchema>;
+export type ProductionSegment = z.infer<typeof ProductionSegmentSchema>;
+export type ProductionPlan = z.infer<typeof ProductionPlanSchema>;

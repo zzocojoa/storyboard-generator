@@ -6,18 +6,24 @@ import { contractError } from './domain/errors.js';
 import type { BuildInput } from './build-fingerprint.js';
 
 export type BuildGitState = { gitStateAvailable: boolean; headCommitSha: string | null; worktreeDirty: boolean | null; generationInputsDirty: boolean | null };
-const generationDirectories: readonly string[] = ['.agents/skills/storyboard-workbench', 'src/codex', 'src/proposal', 'src/domain', 'schemas', 'src/prompts'];
+const generationDirectories: readonly string[] = ['.agents/skills/storyboard-workbench', 'src/codex', 'src/proposal', 'src/automation', 'src/domain', 'src/rendering', 'schemas', 'src/prompts'];
 const generationFiles: readonly string[] = ['AGENTS.md', 'package-lock.json', 'package.json'];
+
+/** 프로젝트가 예약한 로컬 실행·검증 출력은 소스와 생성 계약에서 제외한다. */
+function isLocalOutputPath(path: string): boolean {
+  return path.replace(/\\/gu, '/').split('/').includes('.local');
+}
 
 export function isGenerationContractPath(path: string): boolean {
   const normalized: string = path.replace(/\\/gu, '/');
-  return generationFiles.includes(normalized) || generationDirectories.some((directory: string): boolean => normalized === directory || normalized.startsWith(`${directory}/`));
+  return !isLocalOutputPath(normalized) && (generationFiles.includes(normalized) || generationDirectories.some((directory: string): boolean => normalized === directory || normalized.startsWith(`${directory}/`)));
 }
 
 async function directoryInputs(root: string, directory: string): Promise<BuildInput[]> {
   const entries = await readdir(join(root, directory), { withFileTypes: true });
   const inputs: BuildInput[][] = await Promise.all(entries.map(async (entry): Promise<BuildInput[]> => {
     const path: string = `${directory}/${entry.name}`;
+    if (isLocalOutputPath(path)) return [];
     if (entry.isDirectory()) return directoryInputs(root, path);
     if (!entry.isFile()) throw contractError('INVALID_BUILD_INPUT_TYPE', `${path}: Build 입력은 일반 파일이어야 합니다.`, []);
     return [{ path, bytes: await readFile(join(root, path)) }];

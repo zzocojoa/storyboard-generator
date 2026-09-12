@@ -1,3 +1,4 @@
+import { legacyTextProject } from './legacy-text-helpers.js';
 import { describe, expect, it } from 'vitest';
 import { mergeShots, reorderShots, splitShot } from '../src/domain/edit.js';
 import { addStoryboardFrame, updateStoryboardFrame } from '../src/domain/frame.js';
@@ -375,13 +376,13 @@ describe('정보 공개 시점 안전장치 결함 재현', (): void => {
 
   it('migration_1_2_to_1_3_is_conservative', async (): Promise<void> => {
     const project: Project = await nativeOutline();
-    const legacy = JSON.parse(JSON.stringify(project)) as { schemaVersion: string; shots: Array<{ approvalStatus: string; sourceLinks: Array<Record<string, unknown>> }>; textMappingDecisions: Array<Record<string, unknown>> };
+    const legacy = JSON.parse(JSON.stringify(legacyTextProject(project))) as { schemaVersion: string; shots: Array<{ approvalStatus: string; sourceLinks: Array<Record<string, unknown>> }>; textMappingDecisions: Array<Record<string, unknown>> };
     legacy.schemaVersion = '1.2.0';
     legacy.shots[0]!.approvalStatus = 'approved';
     for (const shot of legacy.shots) for (const link of shot.sourceLinks) delete link.temporalAnchor;
     legacy.textMappingDecisions[0] = { ...(legacy.textMappingDecisions[0] as Record<string, unknown>), canonicalUnitId: null, relation: 'separate-element', status: 'confirmed', renderCanonicalSeparately: true, canonicalStartMs: 100, canonicalEndMs: 200 };
     const migrated: Project = parseProject(legacy);
-    expect(migrated.schemaVersion).toBe('1.9.0');
+    expect(migrated.schemaVersion).toBe('1.21.0');
     expect(migrated.shots.every((shot: Shot): boolean => shot.approvalStatus === 'proposed' && shot.sourceLinks.every((link: ShotSourceLink): boolean => link.status === 'mapping-required' && link.temporalAnchor.kind === 'unresolved' && link.temporalAnchor.basis === 'migration'))).toBe(true);
     expect(migrated.textMappingDecisions[0]).toEqual(expect.objectContaining({ canonicalUnitId: null, relation: 'standalone-placement', status: 'unresolved', renderCanonicalSeparately: false, canonicalStartMs: null, canonicalEndMs: null }));
   });
@@ -390,7 +391,7 @@ describe('정보 공개 시점 안전장치 결함 재현', (): void => {
     const project: Project = await nativeOutline();
     const asset: Asset = { id: 'preserved-asset', kind: 'prop', subjectId: null, path: 'assets/preserved.png', mimeType: 'image/png', sha256: '4'.repeat(64), description: '보존 자산', durationMs: null, version: 1 };
     const enriched: Project = { ...project, assets: [asset], generationRecords: [{ id: 'preserved-generation', provider: 'codex-app', model: 'codex-imagegen', generatorBuild: null, modelVersion: null, requestId: null, prompt: '보존', templateVersion: '1.0.0', seed: null, referenceHashes: [], resultAssetIds: [asset.id], shotIds: [], createdAt: '2026-09-06T00:00:00.000Z' }] };
-    const legacy = JSON.parse(JSON.stringify(enriched)) as { schemaVersion: string; shots: Array<{ sourceLinks: Array<Record<string, unknown>> }> };
+    const legacy = JSON.parse(JSON.stringify(legacyTextProject(enriched))) as { schemaVersion: string; shots: Array<{ sourceLinks: Array<Record<string, unknown>> }> };
     legacy.schemaVersion = '1.2.0';
     for (const shot of legacy.shots) for (const link of shot.sourceLinks) delete link.temporalAnchor;
     const migrated: Project = parseProject(legacy);
