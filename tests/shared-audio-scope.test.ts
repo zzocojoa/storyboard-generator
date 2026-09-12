@@ -13,6 +13,8 @@ import { applySourceUpdate } from '../src/domain/source-update.js';
 import { migrateProjectInput } from '../src/io/project.js';
 import { audioInstructionFixture } from './audio-instruction-helpers.js';
 import { automaticPlanProvenance } from './automatic-plan-helpers.js';
+import { createPdfTextProjection } from '../src/exporters/pdf.js';
+import { redactPdfProjection, reviewRedactionPatterns } from '../src/exporters/review-redaction.js';
 
 async function sharedProject(): Promise<Project> {
   const project: Project = await audioInstructionFixture();
@@ -153,4 +155,69 @@ it('shared_audio_manual_scope_is_respected_and_local_source_text_does_not_repeat
   const local = agreed.audioInstructionDecisions!.find((decision): boolean => decision.instructionId === 'ambient-instruction')!;
   expect(audioInstructionSourceText(local.sourceSnapshot, local)).toBe(source.dataset.units.find((unit): boolean => unit.id === '동작')!.text);
   expect(local.sourceSnapshot.text).toBe('물 흐르는 소리');
+});
+
+it('pdf_shared_audio_directions_distinguish_applied_and_excluded_segments_with_originals_and_review_state', async (): Promise<void> => {
+  const project = await sharedProject();
+  const other = project.dataset.instructions.find((value): boolean => value.id === 'shared-ambient-other')!;
+  const excluded = compileAudioInstructionPlan(project, other.segmentId, scopedPlan(project, other.segmentId), automaticPlanProvenance());
+  const generated = compileAudioInstructionPlan(excluded, 'demonstration', scopedPlan(excluded, 'demonstration'), { ...automaticPlanProvenance(), generationId: 'pdf-scope' });
+  const before: string = JSON.stringify(generated);
+  const projection = await createPdfTextProjection(generated, { maturity: 'draft', channel: 'pdf-export' }, {});
+  const entries = projection.items.flatMap((item) => item.audioEntries);
+  const applied = entries.find((entry): boolean => entry.id === 'ambient-instruction')!;
+  const omitted = entries.find((entry): boolean => entry.id === other.id)!;
+  expect(applied.body).toBe('물 흐르는 소리'); expect(omitted.body).toBe(other.text);
+  expect(applied.label).toContain('음향 배치'); expect(omitted.label).toContain('추가 음향 배치 없음');
+  expect(applied.statusText).toContain('현재 구간: 음향 배치');
+  expect(omitted.statusText).toContain('현재 구간: 추가 음향 배치 없음');
+  for (const entry of [applied, omitted]) {
+    expect(entry.statusText).toContain('공통 지시 적용 구간: demonstration');
+    expect(entry.statusText).toContain(sharedScope(project).reason);
+    expect(entry.statusText).toContain('DIRECTION · REVIEW REQUIRED');
+    expect(entry.statusText).not.toContain('REVIEWED DIRECTION');
+  }
+  expect(JSON.stringify(generated)).toBe(before);
+  const confirmed = confirmAudioInstruction(generated, 'ambient-instruction');
+  const reviewed = await createPdfTextProjection(confirmed, { maturity: 'draft', channel: 'pdf-export' }, {});
+  expect(reviewed.items.flatMap((item) => item.audioEntries).find((entry): boolean => entry.id === applied.id)!.statusText).toContain('REVIEWED DIRECTION');
+});
+
+it('pdf_shared_audio_directions_never_present_missing_stale_or_invalid_scope_as_reviewed', async (): Promise<void> => {
+  const project = await sharedProject();
+  const generated = compileAudioInstructionPlan(project, 'demonstration', scopedPlan(project, 'demonstration'), automaticPlanProvenance());
+  const confirmed = confirmAudioInstruction(generated, 'ambient-instruction');
+  const variants: Project[] = [project,
+    { ...confirmed, audioInstructionDecisions: confirmed.audioInstructionDecisions!.map(({ sharedScope: _scope, ...decision }) => decision) },
+    { ...confirmed, audioInstructionDecisions: confirmed.audioInstructionDecisions!.map((decision) => decision.instructionId !== 'ambient-instruction' ? decision : {
+      ...decision, sharedScope: { ...sharedScope(project), requiredSegmentIds: [] },
+    }) },
+    { ...confirmed, dataset: { ...confirmed.dataset, instructions: confirmed.dataset.instructions.map((instruction) => instruction.id === 'ambient-instruction' ? { ...instruction, text: '변경된 현재 원문' } : instruction) } },
+  ];
+  for (const variant of variants) {
+    const before: string = JSON.stringify(variant);
+    const projection = await createPdfTextProjection(variant, { maturity: 'draft', channel: 'pdf-export' }, {});
+    const entry = projection.items.flatMap((item) => item.audioEntries).find((value): boolean => value.id === 'ambient-instruction')!;
+    expect(entry.statusText).toContain('DIRECTION · REVIEW REQUIRED');
+    expect(entry.statusText).not.toContain('REVIEWED DIRECTION');
+    expect(entry.statusText).not.toContain('현재 구간: 음향 배치');
+    expect(entry.body).toBe(variant.dataset.instructions.find((value): boolean => value.id === entry.id)!.text);
+    expect(JSON.stringify(variant)).toBe(before);
+  }
+});
+
+it('pdf_shared_audio_scope_reasons_use_external_redaction_without_modifying_saved_evidence', async (): Promise<void> => {
+  const project = await sharedProject(); const plan = scopedPlan(project, 'demonstration');
+  const generated = compileAudioInstructionPlan(project, 'demonstration', { ...plan, decisions: plan.decisions.map((decision) => ({
+    ...decision, reason: '문의 scope@example.com', sharedScope: decision.sharedScope === null ? null : { ...sharedScope(project), reason: '구간 검토 /Users/private/source.txt' },
+  })) }, automaticPlanProvenance());
+  const before: string = JSON.stringify(generated);
+  const projection = await createPdfTextProjection(generated, { maturity: 'draft', channel: 'pdf-export' }, {});
+  const redacted = redactPdfProjection(projection, reviewRedactionPatterns([]));
+  const entry = redacted.projection.items.flatMap((item) => item.audioEntries).find((value): boolean => value.id === 'ambient-instruction')!;
+  expect(entry.statusText).toContain('현재 구간: 음향 배치');
+  expect(entry.statusText).not.toContain('scope@example.com'); expect(entry.statusText).not.toContain('/Users/private/source.txt');
+  expect(redacted.entries).toContainEqual(expect.objectContaining({ category: 'email', fieldPath: expect.stringContaining('/statusText') }));
+  expect(redacted.entries).toContainEqual(expect.objectContaining({ category: 'absolute-path', fieldPath: expect.stringContaining('/statusText') }));
+  expect(JSON.stringify(generated)).toBe(before);
 });

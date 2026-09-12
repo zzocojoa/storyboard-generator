@@ -1,5 +1,6 @@
 import { storyboardAudioIssues } from '../domain/audio-storyboard.js';
-import { audioInstructions } from '../domain/audio-instructions.js';
+import { audioInstructions, audioInstructionStructureIssues } from '../domain/audio-instructions.js';
+import { audioInstructionContentIssues } from '../domain/audio-instruction-evidence.js';
 import { audioCueSource } from '../domain/audio-source.js';
 import type { TextTypography } from '../domain/text-typography.js';
 import type { TextFontSource } from '../rendering/text-font-source.js';
@@ -37,6 +38,30 @@ export type PdfFramePageItem = {
 };
 export type PdfProjection = { title: string; outputLabel: string; aspectWidth: number; aspectHeight: number; revision: number; textLayout: TextLayoutPreset; textTypography?: TextTypography; items: PdfFramePageItem[]; format?: PdfFormat; selectionLabel?: string };
 type PdfImageLoader = (assetId: string) => Promise<Buffer | null>;
+type PdfInstructionEntry = { segmentId: string; entry: PdfTrackEntry };
+
+/** 공통 원문을 보존하면서 현재 구간의 배치 결론과 미검토 상태를 함께 전달한다. */
+function audioInstructionEntries(project: Project): PdfInstructionEntry[] {
+  const structureIssues: Issue[] = audioInstructionStructureIssues(project);
+  return audioInstructions(project).map((instruction): PdfInstructionEntry => {
+    const decision = (project.audioInstructionDecisions ?? []).find((value): boolean => value.instructionId === instruction.id);
+    const issues: Issue[] = [...structureIssues.filter((value): boolean => value.entityId === instruction.id),
+      ...(decision === undefined ? [] : audioInstructionContentIssues(project, instruction, decision))];
+    const codes: string[] = [...new Set(issues.map((value): string => value.code))];
+    const conclusion: string = decision === undefined ? '미판정' : codes.length > 0 ? '적용 판정 재검토'
+      : decision.resolution === 'required' ? '음향 배치' : '추가 음향 배치 없음';
+    const status: string[] = decision === undefined ? ['DIRECTION · REVIEW REQUIRED', '현재 구간: 미판정']
+      : codes.length > 0 ? ['DIRECTION · REVIEW REQUIRED', `적용 판정 재검토: ${codes.join(', ')}`]
+      : [decision.reviewStatus === 'confirmed' ? 'REVIEWED DIRECTION' : 'DIRECTION · REVIEW REQUIRED',
+        `현재 구간: ${conclusion}`,
+        ...(decision.sharedScope === undefined || decision.sharedScope === null ? [] : [
+          `공통 지시 적용 구간: ${decision.sharedScope.requiredSegmentIds.join(', ') || '없음'}`,
+          `공통 적용 근거: ${decision.sharedScope.reason}`]),
+        `판단 근거: ${decision.reason}`];
+    return { segmentId: instruction.segmentId, entry: { id: instruction.id, label: `${instruction.kind.toUpperCase()} DIRECTION · ${conclusion}`,
+      timeText: `SEGMENT ${instruction.segmentId}`, body: instruction.text, statusText: status.join('\n') } };
+  });
+}
 
 function trackTimeText(project: Project, startMs: number, endMs: number): string {
   return `${formatAbsoluteProjectTimecode(startMs, project.handoff.timebase)} - ${formatAbsoluteProjectTimecode(endMs, project.handoff.timebase)} (${startMs}..${endMs}ms)`;
@@ -74,6 +99,7 @@ async function pdfRaster(bytes: Buffer): Promise<Buffer> {
 
 async function pageItems(project: Project, loadImage: PdfImageLoader, policy: OutputPolicy, options: StoryboardOutputOptions): Promise<PdfFramePageItem[]> {
   const orderedFrames: StoryboardFrame[] = selectedOutputFrames(project, options);
+  const instructionEntries: PdfInstructionEntry[] = audioInstructionEntries(project);
   return Promise.all(orderedFrames.map(async (frame: StoryboardFrame): Promise<PdfFramePageItem> => {
     const shot: Shot | undefined = project.shots.find((candidate: Shot): boolean => candidate.id === frame.shotId);
     if (shot === undefined) throw contractError('SHOT_NOT_FOUND', `${frame.id}: PDF 출력용 Shot을 찾을 수 없습니다.`, []);
@@ -111,10 +137,7 @@ async function pageItems(project: Project, loadImage: PdfImageLoader, policy: Ou
       textEntries: project.textCues.filter((cue): boolean => cue.startMs < shot.endMs && cue.endMs > shot.startMs).map((cue): PdfTrackEntry => textTrackEntry(project, cue, policy)),
       overlayInputs: reviewTextPlaybackWithPolicy(project, frameEvaluationAbsoluteMs(shot, frame), policy).playable.map(({ id, kind, text, presentation }): TextLayoutInput => ({ id, kind, text, ...(presentation === undefined ? {} : { presentation }) })),
       audioEntries: [...project.audioCues.filter((cue): boolean => cue.startMs < shot.endMs && cue.endMs > shot.startMs).map((cue): PdfTrackEntry => audioTrackEntry(project, cue)),
-        ...audioInstructions(project).filter((instruction): boolean => instruction.segmentId === shot.segmentId).map((instruction): PdfTrackEntry => ({
-          id: instruction.id, label: `${instruction.kind.toUpperCase()} DIRECTION`, timeText: `SEGMENT ${instruction.segmentId}`, body: instruction.text,
-          statusText: (project.audioInstructionDecisions ?? []).find((decision): boolean => decision.instructionId === instruction.id)?.reviewStatus === 'confirmed' ? 'REVIEWED DIRECTION' : 'DIRECTION · REVIEW REQUIRED',
-        }))] };
+        ...instructionEntries.filter((value): boolean => value.segmentId === shot.segmentId).map((value): PdfTrackEntry => value.entry)] };
   }));
 }
 
