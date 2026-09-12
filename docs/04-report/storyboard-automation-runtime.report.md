@@ -4,7 +4,9 @@
 
 브라우저가 다른 Project 버전의 서버 응답을 받으면 원문 입력 오류 대신 화면 갱신·기존 저장 결과 확인을 안내한다. 성공한 변경 요청은 이미 반영됐을 수 있음을 명시하고 자동 재전송·자동 새로고침·스키마 완화는 수행하지 않는다. 수정 전 버전 오류 2건을 재현했으며 관련 3개 파일·103개 검사(19.26초), 서버/Web 타입·필수 이름 727개·별도 웹 빌드와 브라우저 입력 보존 검사 1개(5.2초)를 통과했다. 브라우저 검사의 첫 실행은 별도 빌드 위치를 잘못 지정한 `MISSING_WEB_BUILD`였고 실제 위치 확인 후 같은 검사를 통과했다. 근거는 `.local/validation/automation-runtime/project-version-{before,focused,regression,web-types,registry,build,e2e,e2e-verified}.log`다.
 
-실제 자동 제작은 사용자가 승인한 누적 실행 시간 12시간·이미지 시도 700회·임시 미디어 1GiB 한도 안에서 진행한다. 확인한 revision 151은 24개 구간 중 21개 컷 계획, 전체 208컷·333프레임이다. 계획된 330프레임의 실제 생성 입력과 참조 바이트·해시 검사를 통과했으며 기준 파일 204개·원문·기존 자산/생성 기록과 24개 구간 시간표를 보존했다. 새 구간은 17개 원문·11개 발화를 19컷·25프레임에 배치했고 다른 구간의 컷·프레임·글자를 유지했다. 3개 구간 계획과 전체 컷 그림 생성·작품 검토는 남아 있다. 컷 그림 생성과 사람 승인은 각각 0개이며 글자 유지 시간 5건 등 제작자 검토 항목을 보존한다. 근거는 실제 작업 폴더의 `approved-12h-verification-revision-151.json`, `planned-frame-preflight-151.json`, `approved-12h-seg021-review.json`이다. 이 수치는 전체 자동 제작 완료나 Final 준비 완료를 뜻하지 않는다.
+실제 자동 제작은 사용자가 승인한 누적 실행 시간 12시간·이미지 시도 700회·임시 미디어 1GiB 한도 안에서 진행한다. 확인한 revision 175는 24개 구간의 컷 계획을 모두 저장한 상태이며 전체 231컷·373프레임 중 그림 19개가 생성됐다. 계획된 373프레임의 실제 생성 입력과 참조 바이트·해시 검사를 통과했으며 기준 파일 204개·원문·기존 자산/생성 기록과 24개 구간 시간표를 보존했다. 구조 오류는 0건이고 사람 승인 전이는 없다. 전체 그림 생성·작품 검토·Final 출력은 남아 있으며 글자 가독성 6건을 포함한 제작자 검토 항목을 유지한다. 근거는 실제 작업 폴더의 `approved-12h-verification-revision-175.json`, `planned-frame-preflight-154.json`, `approved-12h-seg024-review.json`, `text-readability-review-proposal-154-verification.json`이다. 이 결과는 전체 자동 제작 완료나 Final 준비 완료를 뜻하지 않는다.
+
+먼저 생성된 그림 17개를 직접 검토하고 0초 고지, 15초와 18초의 메시지 공개, 32.9초와 33초의 다음 메시지 공개를 실제 브라우저에서 확인했다. 두 메시지는 지정 시점 이전에 나타나지 않으며 원문 전체를 한 번 표시한다. 메시지는 휴대전화 안에 맞춘 합성이 아닌 독립 문구 박스다. 고정 컷의 구도 변화, 소품 형태·개수·상태 차이는 그림별 검토 기록과 구체적인 선택 재생성 후보로 남겼다. 검토 자체로 사람 승인을 변경하거나 재생성을 시작하지 않았다. 근거는 `approved-12h-opening-visual-review-173.json`, `opening-live-review/verification.json`, `reply-live-review/verification.json`이다.
 
 Project 1.24는 소품의 상태별 기준 이미지에 같은 물건의 앞선 기준과 판단 근거를 연결한다. 자동 계획은 새 자원 또는 이전 배치의 명시적 연결을 검증하고 원형 이미지를 먼저 준비한다. 선택 재생성은 앞선 이미지의 바이트·해시와 근거를 전달하며 새 이미지와 연결을 한 revision에 함께 저장한다. 미래·순환·다른 종류 연결, 변경된 입력과 보호된 컷은 거부한다. 이전 버전·원문·사람 검토 상태는 보존하며 원본 변경 영향은 간접 연결까지 반영한다. 실제 자료의 읽기 전용 검증은 앞선 정확한 Asset을 반환했고 저장본 바이트는 바꾸지 않았다. 서버를 1.24로 전환하면서 기존 현재본·Version·자산 215개 파일의 원래 바이트를 확인했다. 실제 생활표 재생성은 앞선 가로 판형과 5열·6행 구획을 유지했다. 앞면 설명에도 뒷면을 반환했던 봉투는 현재 그림과 구체적인 수정 요청을 함께 보내는 재생성으로 보완했다. revision 147의 기본 봉투와 148의 모서리가 찢긴 봉투에서 무지 앞면·동일 판형·종이 재질을 실제 그림으로 확인했으며 이전 이미지·원문·사람 검토 상태를 유지했다. 수정 방향과 정확한 기준 이미지의 전달 증거는 `reference-correction-envelope-actual-review.json`, `reference-correction-torn-envelope-actual-review.json`이다. 근거는 `prop-continuity-runtime-transition.json`, `prop-continuity-paper-actual-review.json`, `prop-continuity-envelope-base-latest.json`이다. 현재 실제 결과는 검토 대기이며 작품 전체 그림 품질은 확인 전이다.
 
@@ -22,7 +24,7 @@ Project 1.23은 한 음향 지시의 서로 다른 발생을 원문 인용·트�
 
 선택 재생의 실제 Audio 3회 반복도 21개 모두 통과했다(45.6초). 근거는 `audio-occurrences-real-audio-repeat.log`다. 실제 음원 생성·재생을 기본 콘티 완료 조건에 추가하지 않았다.
 
-수정 요청 구현 `b19818f`의 [CI 34704608872](https://github.com/zzocojoa/storyboard-generator/actions/runs/34704608872)는 `check`·`e2e`·실제 Audio 반복 검사를 통과했다. 입력 보존 보완의 최신 원격 검사는 별도 확인 대상이다.
+입력 보존 보완 `c453fbb`의 [CI 34706911580](https://github.com/zzocojoa/storyboard-generator/actions/runs/34706911580)는 `check`·`e2e`·실제 Audio 3회 반복 검사를 통과했다. 실제 제작 서버는 기존 `b19818f` Build로 계속 실행하며 입력 보존 UI의 서버 적용은 남아 있다. 원격 검사 통과를 실제 작품의 시각 검토나 Final 승인으로 해석하지 않는다.
 
 커밋 `ca9867c5e0079bdd6cb00ecb45f45155c17aff0e`의 [CI 34687161467](https://github.com/zzocojoa/storyboard-generator/actions/runs/34687161467)는 `check`와 `e2e`를 모두 통과했다. 전체 115개 파일·1,530개 검사, 필수 이름 714개(누락·중복·skip·only 0), 전체 E2E 72개와 실제 Audio 3회 반복 21개가 통과했다. 정상 해제된 잠금을 읽는 경쟁은 수정 전 실패를 재현해 수정했고, 남아 있는 파일 오류·복구 차단을 보존한다. 백업의 게시·바이트 복원·복원본 검토/편집은 독립된 검사와 각각 5초 한도를 사용한다. 재시도·시간 제한을 늘리지 않았다. 증거는 `.local/validation/automation-runtime/backup-ci-complete.log`와 `released-lock-{red,storage,e2e-fixed}.log`다.
 
