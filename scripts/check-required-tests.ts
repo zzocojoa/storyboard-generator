@@ -3,6 +3,7 @@ import { extname, join } from 'node:path';
 import { contractError } from '../src/domain/errors.js';
 
 const REQUIRED_TEST_NAMES: readonly string[] = [
+  'browser_draft_archive_retains_reference_corrections_for_active_unused_and_missing_resources',
   'prop_continuity_plan_resolves_new_keys_and_orders_reference_dependencies',
   'prop_continuity_rejects_foreign_future_cyclic_and_wrong_kind_links',
   'prop_continuity_retake_passes_verified_base_bytes_and_commits_only_with_new_image',

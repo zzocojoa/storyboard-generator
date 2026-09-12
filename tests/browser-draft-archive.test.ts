@@ -4,6 +4,8 @@ import { readProjectDraftArchive, draftArchiveBasis, draftArchiveText } from '..
 import { draftPrefix, draftReference, writeBrowserDraft } from '../web/src/browser-drafts.js';
 import type { BrowserDraft, DraftStorage } from '../web/src/browser-drafts.js';
 import { readinessOutline } from './readiness-fixtures.js';
+import { automaticPlanProject } from './automatic-plan-helpers.js';
+import { twoPropCandidate } from './prop-continuity-helpers.js';
 
 function storageFixture(): DraftStorage {
   const values: Map<string, string> = new Map();
@@ -17,6 +19,21 @@ function record(scope: string, value: unknown): BrowserDraft {
 function snapshot(storage: DraftStorage): string[] {
   return Array.from({ length: storage.length }, (_value: unknown, index: number): string => storage.getItem(storage.key(index)!)!);
 }
+
+it('browser_draft_archive_retains_reference_corrections_for_active_unused_and_missing_resources', async (): Promise<void> => {
+  const original = (await twoPropCandidate(await automaticPlanProject())).project;
+  const [unused, active] = original.productionPlan!.resources;
+  const project = { ...original, productionPlan: { ...original.productionPlan!, segments: original.productionPlan!.segments.map((segment) => ({ ...segment, resourceIds: segment.resourceIds.filter((id): boolean => id !== unused!.id) })) } };
+  const storage = storageFixture();
+  for (const id of [active!.id, unused!.id, project.shots[0]!.id]) writeBrowserDraft(storage,
+    record(JSON.stringify([project.projectId, 'reference-retake', id]), { baseResourceId: unused!.id, continuityReason: '같은 소품 원문 근거', correctionNote: '판형 유지 요청' }));
+  const before = snapshot(storage); const archive = readProjectDraftArchive(storage, project);
+  expect(archive.issues).toEqual([]); expect(archive.entries).toHaveLength(3);
+  expect(archive.entries.find((entry): boolean => entry.target.entityId === active!.id)!.target).toEqual({ label: '기준 이미지 수정 요청·소품 연결', entityId: active!.id, state: 'present', destination: { kind: 'settings' } });
+  for (const id of [unused!.id, project.shots[0]!.id]) expect(archive.entries.find((entry): boolean => entry.target.entityId === id)!.target).toMatchObject({ state: 'missing', destination: null });
+  expect(archive.entries.every((entry): boolean => draftArchiveText(entry.record).includes('판형 유지 요청'))).toBe(true);
+  expect(snapshot(storage)).toEqual(before);
+});
 
 it('browser_draft_archive_finds_missing_entities_and_keeps_cross_project_and_receipt_values_private', async (): Promise<void> => {
   const project = await readinessOutline(); const storage = storageFixture();

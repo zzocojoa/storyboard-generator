@@ -14,6 +14,7 @@ const labels: ReadonlyMap<string, string> = new Map([
   ['audio-instruction', '음향 지시 판정'],
   ['direction', '컷 연출'], ['visual-plan', '원문 연결'], ['frame', '프레임 설명·시각'],
   ['audio-timing', '음성 시각'], ['audio-mix', '음량·페이드'], ['speech-retake', '발화 선택 생성·발음 보완'],
+  ['reference-retake', '기준 이미지 수정 요청·소품 연결'],
   ['text-timing', '글자 시각'], ['text-presentation', '개별 글자 배치'],
   ['text-authority', '글자 본문 근거'], ['text-mapping', '원문·자막 연결'], ['placement-information', '글자 정보성'],
   ['profile', '제작 프로필'], ['text-layout', '글자 배치'], ['text-readability', '글자 읽기 기준'], ['text-typography', '글꼴과 언어'],
@@ -44,6 +45,11 @@ function currentTarget(project: Project, scope: EditorScope): DraftArchiveTarget
   }
   if (scope.entityId === null) return { ...base, state: 'unknown', destination: null };
   const id: string = scope.entityId;
+  if (scope.kind === 'reference-retake') {
+    const exists: boolean = project.productionPlan?.resources.some((resource): boolean => resource.id === id) === true
+      && project.productionPlan.segments.some((segment): boolean => segment.resourceIds.includes(id));
+    return { ...base, state: exists ? 'present' : 'missing', destination: exists ? { kind: 'settings' } : null };
+  }
   let destination: DraftArchiveDestination | null;
   let exists: boolean;
   if (scope.kind === 'direction' || scope.kind === 'visual-plan') {

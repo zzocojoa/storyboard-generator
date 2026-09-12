@@ -77,6 +77,14 @@ test('e2e_prop_continuity_retake_selects_prior_shape_and_keeps_old_versions', as
     await expect(regenerate).toBeDisabled();
     await panel.getByLabel('같은 소품으로 판단한 근거').fill('앞선 종이를 그대로 펼치는 원문 확인');
     await panel.getByLabel('이번 이미지 수정 요청').fill('앞선 표의 가로 판형을 유지해 주세요.');
+    await panel.getByLabel('검토할 제작 기준').selectOption(base!.id);
+    await expect(panel.getByLabel('이번 이미지 수정 요청')).toHaveValue('');
+    await panel.getByLabel('검토할 제작 기준').selectOption(target!.id);
+    await expect(panel.getByLabel('이번 이미지 수정 요청')).toHaveValue('앞선 표의 가로 판형을 유지해 주세요.');
+    await page.reload(); await panel.getByLabel('검토할 제작 기준').selectOption(target!.id);
+    await expect(panel.getByLabel('이번 이미지 수정 요청')).toHaveValue('앞선 표의 가로 판형을 유지해 주세요.');
+    await expect(panel.getByLabel('이어 쓸 소품 기준')).toHaveValue(base!.id);
+    await expect(panel.getByLabel('같은 소품으로 판단한 근거')).toHaveValue('앞선 종이를 그대로 펼치는 원문 확인');
     await expect(panel.getByRole('img', { name: '모양을 이어 쓸 이전 소품', exact: true })).toHaveJSProperty('naturalWidth', before.profile.aspectWidth * 10);
     expect(imageCalls).toBe(0); expect((await h.services.projects.read(before.projectId)).revision).toBe(before.revision);
     await regenerate.click();
@@ -93,6 +101,8 @@ test('e2e_prop_continuity_retake_selects_prior_shape_and_keeps_old_versions', as
     await expect(panel.getByLabel('이어 쓸 소품 기준')).toHaveValue(base!.id);
     await expect(panel.getByLabel('같은 소품으로 판단한 근거')).toHaveValue('앞선 종이를 그대로 펼치는 원문 확인');
     await expect(panel.getByText('이 실행의 수정 요청: 앞선 표의 가로 판형을 유지해 주세요.', { exact: true })).toBeVisible();
+    await expect(panel.getByText('작성 이후 저장된 기준이 바뀌었습니다. 비교한 뒤 사용할 값을 선택하세요.', { exact: true })).toBeVisible();
+    await expect(regenerate).toBeDisabled();
     expect(imageCalls).toBe(1);
   } finally { await app.close(); await service.close(); await h.close(); }
 });

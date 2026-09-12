@@ -5,9 +5,11 @@ import type { AutomationOverview, AutomationView } from '../../src/automation/ru
 import type { Asset, Project } from '../../src/domain/schema.js';
 import { propContinuityCandidates } from '../../src/domain/prop-continuity.js';
 import { apiErrorMessage, cancelAutomation, fetchAutomation, pauseAutomation, resumeAutomation, startReferenceRetake } from './api.js';
+import { useBrowserDraft } from './useBrowserDraft.js';
 
 type Props = { project: Project; disabled: boolean; visible: boolean; onRefresh: () => Promise<void> };
 const ReferenceRecordSchema = z.object({ basis: z.object({ resourceId: z.string() }) });
+const ReferenceRetakeDraftSchema = z.strictObject({ baseResourceId: z.string(), continuityReason: z.string().max(4000), correctionNote: z.string().max(4000) });
 
 /** 같은 원본 장소의 다른 변형을 이전 버전으로 오인하지 않고 선택 자원의 생성 이력을 읽는다. */
 function resourceVersions(project: Project, resourceId: string): { assets: Asset[]; error: string } {
@@ -28,8 +30,6 @@ function ReferencePicture(props: { projectId: string; asset: Asset; caption: str
 /** 화면 조회·버전 비교는 읽기 전용이다. 버튼으로 선택한 한 기준만 별도 실행한다. */
 export function ProductionReferenceReview(props: Props): ReactElement | null {
   const [resourceId, setResourceId] = useState<string>(''); const [previousId, setPreviousId] = useState<string>('');
-  const [baseResourceId, setBaseResourceId] = useState<string>(''); const [continuityReason, setContinuityReason] = useState<string>('');
-  const [correctionNote, setCorrectionNote] = useState<string>('');
   const [overview, setOverview] = useState<AutomationOverview | null>(null);
   const [error, setError] = useState<string>(''); const [busy, setBusy] = useState<boolean>(false);
   const [refresh, setRefresh] = useState<number>(0);
@@ -44,8 +44,12 @@ export function ProductionReferenceReview(props: Props): ReactElement | null {
     return (): void => { disposed = true; if (timer !== null) clearTimeout(timer); };
   }, [props.project.projectId, props.visible, refresh]);
   const resources = (props.project.productionPlan?.resources ?? []).filter((resource): boolean => props.project.productionPlan!.segments.some((segment): boolean => segment.resourceIds.includes(resource.id)));
-  if (resources.length === 0) return null;
   const resource = resources.find((value): boolean => value.id === resourceId);
+  const recovery = useBrowserDraft(JSON.stringify([props.project.projectId, 'reference-retake', resourceId]),
+    { baseResourceId: resource?.propContinuity?.resourceId ?? '', continuityReason: resource?.propContinuity?.reason ?? '', correctionNote: '' },
+    String(props.project.revision), ReferenceRetakeDraftSchema);
+  const { baseResourceId, continuityReason, correctionNote } = recovery.value;
+  if (resources.length === 0) return null;
   const baseCandidates = resource === undefined ? [] : propContinuityCandidates(props.project, resource);
   const selectedBase = baseCandidates.find((value): boolean => value.id === baseResourceId);
   const baseAsset = props.project.assets.find((asset): boolean => asset.id === selectedBase?.referenceAssetId);
@@ -68,17 +72,19 @@ export function ProductionReferenceReview(props: Props): ReactElement | null {
   };
   return <section className="production-reference-review" aria-label="자동 제작 기준 이미지 검토">
     <h3>기준 이미지 검토·재생성</h3><p>인물·공간·소품의 생성 결과를 비교하고, 필요한 기준 한 장의 수정 방향을 지정해 다시 만듭니다.</p>
-    <label className="field">검토할 제작 기준<select aria-label="검토할 제작 기준" value={resourceId} disabled={disabled} onChange={(event): void => { setResourceId(event.target.value); setPreviousId(''); setCorrectionNote(''); setError(''); const selected = resources.find((value): boolean => value.id === event.target.value); setBaseResourceId(selected?.propContinuity?.resourceId ?? ''); setContinuityReason(selected?.propContinuity?.reason ?? ''); }}><option value="">기준 선택</option>{resources.map((value): ReactElement => <option key={value.id} value={value.id}>{value.name} · {value.kind === 'character' ? '인물' : value.kind === 'location' ? '장소' : '소품'}</option>)}</select></label>
+    <label className="field">검토할 제작 기준<select aria-label="검토할 제작 기준" value={resourceId} disabled={disabled} onChange={(event): void => { setResourceId(event.target.value); setPreviousId(''); setError(''); }}><option value="">기준 선택</option>{resources.map((value): ReactElement => <option key={value.id} value={value.id}>{value.name} · {value.kind === 'character' ? '인물' : value.kind === 'location' ? '장소' : '소품'}</option>)}</select></label>
+    <p>같은 기준을 다시 선택하면 작성 중인 수정 요청을 복원합니다. 사라진 기준의 입력은 제작 현황의 미저장 편집 기록에서 확인할 수 있습니다.</p>
     {error !== '' && <p role="alert">{error}</p>}
     {resource !== undefined && <>
       <p>{resource.description}</p><p>제안 근거: {resource.reason}</p><p>연결 구간: {[...segmentIds].join(', ')}</p>
+      {recovery.notice !== null && <fieldset disabled={disabled}>{recovery.notice}</fieldset>}
       <label className="field">이번 이미지 수정 요청 (선택)<textarea aria-label="이번 이미지 수정 요청" value={correctionNote} maxLength={4000} disabled={disabled || active !== undefined}
-        placeholder="예: 접힘 덮개가 없는 봉투 앞면을 보여 주세요." onChange={(event): void => { setCorrectionNote(event.target.value); }} /></label>
+        placeholder="예: 접힘 덮개가 없는 봉투 앞면을 보여 주세요." onChange={(event): void => { recovery.setValue({ ...recovery.value, correctionNote: event.target.value }); }} /></label>
       <p>수정 요청과 현재 그림을 함께 전달합니다. 빈칸이면 기존 설명으로 재생성합니다. 원문·제작 설명·다른 기준은 유지됩니다.</p>
       {resource.kind === 'prop' && <fieldset disabled={disabled || active !== undefined}><legend>같은 소품의 모양 이어 쓰기</legend>
         <p>같은 물건을 다시 보여 주는 경우에만 앞선 기준을 선택하세요. 판형·색상·표 구획은 이어 쓰고, 현재 설명의 상태를 적용합니다. 새 이미지가 저장될 때 연결도 함께 반영됩니다.</p>
-        <label className="field">이어 쓸 소품 기준<select aria-label="이어 쓸 소품 기준" value={baseResourceId} onChange={(event): void => { setBaseResourceId(event.target.value); }}><option value="">추가 연결 없음 · 기존 설정 유지</option>{baseCandidates.map((base): ReactElement => <option key={base.id} value={base.id}>{base.name}</option>)}</select></label>
-        {baseResourceId !== '' && <label className="field">같은 소품으로 판단한 근거<textarea aria-label="같은 소품으로 판단한 근거" value={continuityReason} maxLength={4000} onChange={(event): void => { setContinuityReason(event.target.value); }} /></label>}
+        <label className="field">이어 쓸 소품 기준<select aria-label="이어 쓸 소품 기준" value={baseResourceId} onChange={(event): void => { recovery.setValue({ ...recovery.value, baseResourceId: event.target.value }); }}><option value="">추가 연결 없음 · 기존 설정 유지</option>{baseResourceId !== '' && selectedBase === undefined && <option value={baseResourceId}>현재 사용할 수 없는 이전 기준 · {baseResourceId}</option>}{baseCandidates.map((base): ReactElement => <option key={base.id} value={base.id}>{base.name}</option>)}</select></label>
+        {baseResourceId !== '' && <label className="field">같은 소품으로 판단한 근거<textarea aria-label="같은 소품으로 판단한 근거" value={continuityReason} maxLength={4000} onChange={(event): void => { recovery.setValue({ ...recovery.value, continuityReason: event.target.value }); }} /></label>}
         {baseAsset !== undefined && <ReferencePicture key={baseAsset.id} projectId={props.project.projectId} asset={baseAsset} caption="모양을 이어 쓸 이전 소품" />}
         {continuityIncomplete && <p role="status">원문에서 같은 물건임을 확인한 근거를 입력하세요.</p>}
       </fieldset>}
@@ -92,7 +98,7 @@ export function ProductionReferenceReview(props: Props): ReactElement | null {
       {overview?.configured === false && <p role="alert">서버에 Codex 자동 제작 실행 설정이 필요합니다.</p>}
       <p>선택 기준만 교체하며 이전 파일을 보존합니다. 연결된 컷·그림은 검토 대기가 됩니다. 다른 기준과 기존 컷 그림은 자동 재생성하지 않습니다.</p>
       <p>최대 이미지 시도 2회 · 10분 · 새 파일 64MB. 원문 대사와 음원은 변경하지 않습니다.</p>
-      <button disabled={disabled || continuityIncomplete || overview?.configured !== true || overview.recommendedSettings === null || active !== undefined || currentAsset === undefined || protectedShots.length > 0 || error !== '' || history.error !== ''}
+      <button disabled={disabled || recovery.blocked || continuityIncomplete || overview?.configured !== true || overview.recommendedSettings === null || active !== undefined || currentAsset === undefined || protectedShots.length > 0 || error !== '' || history.error !== ''}
         onClick={(): void => { if (overview?.recommendedSettings !== null && overview?.recommendedSettings !== undefined) void perform(() => startReferenceRetake(props.project.projectId, props.project.revision, { resourceId, ...(baseResourceId === '' ? {} : { propContinuity: { resourceId: baseResourceId, reason: continuityReason } }), ...(correctionNote.trim() === '' ? {} : { correctionNote: correctionNote.trim() }) }, { ...overview.recommendedSettings!, maxJobs: 1, maxAttemptsPerJob: 2, maxImageAttempts: 2, maxActiveMs: 600000, maxStagedBytes: 67108864, audioProduction: 'instructions-only' })); }}>선택 기준만 다시 생성</button>
       {current !== undefined && <div role="status"><p>{current.status === 'review-ready' ? '새 기준 생성 완료 · 결과를 불러와 이전 버전과 비교하세요.' : current.status === 'running' ? '선택 기준 이미지를 생성하고 있습니다.' : current.status === 'paused' ? '기준 생성 일시 중지' : current.status === 'cancelled' ? '기준 생성 취소됨' : '기준 생성 확인 필요'}</p>
         {current.purpose?.kind === 'reference-retake' && current.purpose.correctionNote !== undefined && <p>이 실행의 수정 요청: {current.purpose.correctionNote}</p>}
