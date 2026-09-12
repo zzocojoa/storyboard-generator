@@ -3,7 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
 import { describe, expect, it, vi } from 'vitest';
-import { assertAutomaticFrameBasis, automaticFramePrompt, compileAutomaticFrame, createAutomaticFrameBasis, generateAutomaticFrame } from '../src/automation/frame-image.js';
+import { assertAutomaticFrameBasis, automaticFrameContinuityReference, automaticFramePrompt, compileAutomaticFrame, createAutomaticFrameBasis, generateAutomaticFrame } from '../src/automation/frame-image.js';
+import type { AutomaticFrameCandidate } from '../src/automation/frame-image.js';
+import { verifiedImageReferences } from '../src/automation/image-references.js';
 import { createSegmentPlanBasis } from '../src/automation/plan-basis.js';
 import { compileAutomaticSegmentPlan } from '../src/automation/plan-compiler.js';
 import type { AutomaticPlanProvenance } from '../src/automation/plan-compiler.js';
@@ -45,7 +47,140 @@ function options(id: string): Omit<AutomaticPlanProvenance, 'model' | 'turnId' |
   return { ...rest, generationId: id };
 }
 
+function withKeyFrames(project: Project, firstId: string, offsets: readonly number[]): Project {
+  const first = project.frames.find((frame): boolean => frame.id === firstId)!;
+  return { ...project, frames: [...project.frames, ...offsets.map((offsetMs) => ({ ...first, id: `key-${offsetMs}`, role: 'key' as const, offsetMs, description: `같은 구도에서 ${offsetMs}ms의 물주기 동작.` }))] };
+}
+
+async function generatedFrame(project: Project, frameId: string, generationId: string, result: ImageGenerationResult): Promise<AutomaticFrameCandidate> {
+  const basis = createAutomaticFrameBasis(project, frameId);
+  return compileAutomaticFrame(project, basis, result, { ...automaticPlanProvenance(), generationId, model: result.model, turnId: result.turnId, prompt: automaticFramePrompt(project, basis) });
+}
+
 describe('프레임 자동 그림', (): void => {
+  it('automatic_frame_continuity_passes_previous_verified_bytes_first_without_changing_human_review_or_history', async (): Promise<void> => {
+    const ready = await readyFrame(await automaticPlanProject());
+    const initial = withKeyFrames(ready.project, ready.frameId, [1000]);
+    const firstBytes = await sharp({ create: { width: initial.profile.aspectWidth * 10, height: initial.profile.aspectHeight * 10, channels: 3, background: '#e5ab30' } }).png().toBuffer();
+    const firstResult: ImageGenerationResult = { ...await image(initial), bytes: firstBytes, inspection: await inspectImageBytes(firstBytes, 'image/png') };
+    const first = await generatedFrame(initial, ready.frameId, 'previous', firstResult);
+    const project: Project = { ...first.project, frames: first.project.frames.map((frame) => frame.id === ready.frameId ? { ...frame, visualReview: 'accepted' } : frame) };
+    const before = structuredClone(project); const basis = createAutomaticFrameBasis(project, 'key-1000');
+    expect(basis.referenceAssetIds).toEqual(['previous:image', 'bench-reference']);
+    expect(automaticFrameContinuityReference(project, 'key-1000')).toMatchObject({ kind: 'previous-frame', frameId: ready.frameId, assetId: 'previous:image', atMs: 5000, generationRecordId: 'previous' });
+    const nextResult = await image(project);
+    const run = vi.fn(async (input: ImageGenerationInput): Promise<ImageGenerationResult> => {
+      expect(input.references.map((reference) => reference.bytes)).toEqual([firstBytes, ready.referenceBytes]);
+      expect(input.references[0]?.label).toContain('같은 컷의 바로 앞 그림');
+      expect(input.prompt).toContain('구도·인물 크기·가구와 소품 위치를 유지');
+      expect(input.prompt).toContain('참조 보드');
+      return nextResult;
+    });
+    const candidate = await generateAutomaticFrame(project, basis, [{ assetId: 'bench-reference', bytes: ready.referenceBytes }, { assetId: 'previous:image', bytes: firstBytes }], options('next'), { run }, new AbortController().signal);
+    expect(run).toHaveBeenCalledTimes(1); expect(project).toEqual(before);
+    expect(candidate.project.assets.slice(0, project.assets.length)).toEqual(project.assets);
+    expect(candidate.project.generationRecords.slice(0, project.generationRecords.length)).toEqual(project.generationRecords);
+    expect(candidate.project.frames.find((frame): boolean => frame.id === ready.frameId)).toEqual(project.frames.find((frame): boolean => frame.id === ready.frameId));
+    expect(candidate.project.frames.find((frame): boolean => frame.id === 'key-1000')).toMatchObject({ imageAssetId: 'next:image', visualReview: 'pending' });
+    expect(candidate.project.generationRecords.at(-1)?.referenceHashes).toContain(firstResult.inspection.sha256);
+    expect(candidate.project.dataset).toEqual(initial.dataset);
+    await expect(generateAutomaticFrame(project, basis, [{ assetId: 'bench-reference', bytes: ready.referenceBytes }, { assetId: 'previous:image', bytes: ready.referenceBytes }], options('substituted'), { run }, new AbortController().signal)).rejects.toMatchObject({ code: 'AUTOMATION_REFERENCE_HASH' });
+    await expect(generateAutomaticFrame(project, basis, [{ assetId: 'bench-reference', bytes: ready.referenceBytes }], options('missing-previous'), { run }, new AbortController().signal)).rejects.toMatchObject({ code: 'AUTOMATION_REFERENCE_INPUT' });
+    await expect(verifiedImageReferences(project, ['previous:image'], [{ assetId: 'previous:image', bytes: firstBytes }], (asset): string => asset.id)).rejects.toMatchObject({ code: 'ASSET_REFERENCE_NOT_FOUND' });
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it('automatic_frame_continuity_never_skips_a_missing_rejected_or_changed_immediate_predecessor', async (): Promise<void> => {
+    const ready = await readyFrame(await automaticPlanProject()); const initial = withKeyFrames(ready.project, ready.frameId, [1000, 2000]);
+    const project = (await generatedFrame(initial, ready.frameId, 'first', await image(initial))).project;
+    expect(automaticFrameContinuityReference(project, ready.frameId)).toEqual({ kind: 'none', frameId: null, reason: 'first-frame' });
+    expect(automaticFrameContinuityReference(project, 'key-2000')).toEqual({ kind: 'none', frameId: 'key-1000', reason: 'not-generated' });
+    const rejected: Project = { ...project, frames: project.frames.map((frame) => frame.id === ready.frameId ? { ...frame, visualReview: 'rejected' } : frame) };
+    expect(automaticFrameContinuityReference(rejected, 'key-1000')).toMatchObject({ kind: 'none', reason: 'rejected' });
+    const changedCamera: Project = { ...project, shots: project.shots.map((shot) => shot.id === 'automatic-plan-test:shot:0' ? { ...shot, camera: { ...shot.camera, size: 'WS' } } : shot) };
+    const changedDescription: Project = { ...project, frames: project.frames.map((frame) => frame.id === ready.frameId ? { ...frame, description: '수정한 현재 물주기 구도' } : frame) };
+    const changedSource: Project = { ...project, dataset: { ...project.dataset, units: project.dataset.units.map((unit) => unit.id === '동작' ? { ...unit, text: '물뿌리개를 옆에 내려놓는다.' } : unit) } };
+    const changedReference = (await addReferenceAsset(project, { id: 'bench-reference-v2', kind: 'location', subjectId: 'workbench', description: '수정한 작업대', mimeType: 'image/png', bytes: ready.referenceBytes })).project;
+    for (const changed of [changedCamera, changedDescription, changedSource, changedReference]) expect(automaticFrameContinuityReference(changed, 'key-1000')).toMatchObject({ kind: 'none', reason: 'changed-input' });
+    const foreign: Project = { ...project, frames: project.frames.filter((frame): boolean => frame.id !== ready.frameId), shots: [...project.shots, { ...project.shots.find((shot): boolean => shot.id === 'automatic-plan-test:shot:0')!, id: 'different-shot' }] };
+    foreign.frames.push({ ...project.frames.find((frame): boolean => frame.id === ready.frameId)!, shotId: 'different-shot' });
+    expect(automaticFrameContinuityReference(foreign, 'key-1000')).toEqual({ kind: 'none', frameId: null, reason: 'first-frame' });
+  });
+
+  it('automatic_frame_continuity_invalidates_transitive_image_dependencies_after_an_earlier_retake', async (): Promise<void> => {
+    const ready = await readyFrame(await automaticPlanProject()); const initial = withKeyFrames(ready.project, ready.frameId, [1000, 2000, 3000]);
+    const result = await image(initial); let project: Project = initial;
+    for (const [frameId, generationId] of [[ready.frameId, 'chain-first'], ['key-1000', 'chain-second'], ['key-2000', 'chain-third']] as const) project = (await generatedFrame(project, frameId, generationId, result)).project;
+    expect(automaticFrameContinuityReference(project, 'key-3000')).toMatchObject({ kind: 'previous-frame', assetId: 'chain-third:image' });
+    const before = structuredClone(project); const basis = createAutomaticFrameBasis(project, 'key-3000');
+    const retaken = (await generatedFrame(project, ready.frameId, 'chain-first-retake', result)).project;
+    expect(retaken.frames.find((frame): boolean => frame.id === 'key-2000')).toEqual(project.frames.find((frame): boolean => frame.id === 'key-2000'));
+    expect(automaticFrameContinuityReference(retaken, 'key-3000')).toMatchObject({ kind: 'none', reason: 'changed-input' });
+    expect(() => assertAutomaticFrameBasis(retaken, basis)).toThrow(expect.objectContaining({ code: 'AUTOMATION_STALE_PLAN' }));
+    const inserted: Project = { ...project, frames: [...project.frames, { ...project.frames.find((frame): boolean => frame.id === ready.frameId)!, id: 'new-in-between', role: 'key', offsetMs: 500 }] };
+    expect(automaticFrameContinuityReference(inserted, 'key-3000')).toMatchObject({ kind: 'none', reason: 'changed-input' });
+    expect(project).toEqual(before); expect(retaken.generationRecords.slice(0, project.generationRecords.length)).toEqual(project.generationRecords);
+  });
+
+  it('automatic_frame_continuity_accepts_legacy_actual_inputs_but_rejects_unverifiable_or_corrupt_records', async (): Promise<void> => {
+    const ready = await readyFrame(await automaticPlanProject()); const initial = withKeyFrames(ready.project, ready.frameId, [1000]);
+    const current = (await generatedFrame(initial, ready.frameId, 'legacy-image', await image(initial))).project;
+    const envelope = JSON.parse(current.generationRecords.at(-1)!.prompt) as { input: string };
+    const separator: number = envelope.input.indexOf('\n');
+    const { continuityReference: _reference, ...oldInput } = JSON.parse(envelope.input.slice(separator + 1)) as Record<string, unknown>;
+    const legacy: Project = { ...current, generationRecords: current.generationRecords.map((record) => record.id === 'legacy-image' ? { ...record, templateVersion: 'automatic-frame-image-1.0.0', prompt: JSON.stringify({ ...JSON.parse(record.prompt) as object, input: `기존 그림 생성 지시\n${JSON.stringify(oldInput)}` }) } : record) };
+    const before = structuredClone(legacy);
+    expect(automaticFrameContinuityReference(legacy, 'key-1000')).toMatchObject({ kind: 'previous-frame', assetId: 'legacy-image:image' });
+    const unverified: Project = { ...legacy, generationRecords: legacy.generationRecords.filter((record): boolean => record.id !== 'legacy-image') };
+    expect(automaticFrameContinuityReference(unverified, 'key-1000')).toMatchObject({ kind: 'none', reason: 'unverifiable-generation' });
+    for (const prompt of ['broken-json', '{}', JSON.stringify({ ...JSON.parse(legacy.generationRecords.at(-1)!.prompt) as object, input: 'no-line-break' })]) {
+      const broken: Project = { ...legacy, generationRecords: legacy.generationRecords.map((record) => record.id === 'legacy-image' ? { ...record, prompt } : record) };
+      expect(() => automaticFrameContinuityReference(broken, 'key-1000')).toThrow(expect.objectContaining({ code: 'AUTOMATION_FRAME_CONTINUITY_PROVENANCE' }));
+    }
+    expect(legacy).toEqual(before);
+  });
+
+  it('automatic_frame_continuity_excludes_previous_images_when_their_visual_sources_are_no_longer_active', async (): Promise<void> => {
+    const payload = await nativePackage(); const data = nativeData(payload); const action = data.units.find((unit): boolean => unit.id === '동작')!;
+    const source = createSourceOutline(importPackage(withNativeData(payload, { ...data, units: [...data.units, { ...action, id: 'late-action', order: 20, text: '다음 화면의 빈 작업대.' }] })), { proposedTextHoldMs: 2000 });
+    const ready = await readyFrame(source);
+    const project: Project = { ...ready.project, shots: ready.project.shots.map((shot) => shot.id === 'automatic-plan-test:shot:0' ? { ...shot, sourceLinks: shot.sourceLinks.map((link) => link.unitId === '동작' ? { ...link, temporalAnchor: { kind: 'shot-offset' as const, startOffsetMs: 0, endOffsetMs: 4000, basis: 'proposal' as const, status: 'confirmed' as const } } : link) } : shot) };
+    const generated = (await generatedFrame(project, ready.frameId, 'earlier-action', await image(project))).project;
+    expect(automaticFrameContinuityReference(generated, 'automatic-plan-test:shot:0:reveal:4000')).toMatchObject({ kind: 'none', reason: 'different-active-sources' });
+    expect(createAutomaticFrameBasis(generated, 'automatic-plan-test:shot:0:reveal:4000').referenceAssetIds).toEqual(['bench-reference']);
+  });
+
+
+  it('automatic_frame_continuity_counts_the_previous_bitmap_in_reference_limits_without_dropping_originals', async (): Promise<void> => {
+    const ready = await readyFrame(await automaticPlanProject()); let project: Project = withKeyFrames(ready.project, ready.frameId, [1000]);
+    const props: string[] = [];
+    for (let index: number = 0; index < 19; index += 1) {
+      const id: string = `limit-prop-${index}`; props.push(id);
+      project = (await addReferenceAsset(project, { id, kind: 'prop', subjectId: id, description: `검증 소품 ${index}`, mimeType: 'image/png', bytes: ready.referenceBytes })).project;
+    }
+    project = { ...project, shots: project.shots.map((shot) => shot.id === 'automatic-plan-test:shot:0' ? { ...shot, propIds: props } : shot) };
+    const basis = createAutomaticFrameBasis(project, ready.frameId); expect(basis.referenceAssetIds).toHaveLength(20);
+    const generated = await image(project);
+    const first = await generateAutomaticFrame(project, basis, basis.referenceAssetIds.map((assetId) => ({ assetId, bytes: ready.referenceBytes })), options('limit-first'), { run: async (input, signal): Promise<ImageGenerationResult> => ({ ...generated, referencePresentation: (await prepareImageReferences(input.references, signal)).presentation }) }, new AbortController().signal);
+    const before = structuredClone(first.project);
+    expect(() => createAutomaticFrameBasis(first.project, 'key-1000')).toThrow(expect.objectContaining({ code: 'CODEX_IMAGE_REFERENCES_LIMIT' }));
+    expect(first.project).toEqual(before); expect(first.project.shots.find((shot): boolean => shot.id === 'automatic-plan-test:shot:0')?.propIds).toEqual(props);
+  });
+
+  it('automatic_frame_continuity_uses_end_frame_evaluation_and_never_selects_a_later_bitmap', async (): Promise<void> => {
+    const ready = await readyFrame(await automaticPlanProject()); const keyed = withKeyFrames(ready.project, ready.frameId, [8000]);
+    const first = keyed.frames.find((frame): boolean => frame.id === ready.frameId)!;
+    const initial: Project = { ...keyed, frames: [...keyed.frames, { ...first, id: 'end-frame', role: 'end', offsetMs: 8500 }] };
+    const result = await image(initial);
+    const early = (await generatedFrame(initial, ready.frameId, 'end-first', result)).project;
+    const later = (await generatedFrame(early, 'key-8000', 'end-key', result)).project;
+    expect(automaticFrameContinuityReference(later, 'end-frame')).toMatchObject({ kind: 'previous-frame', frameId: 'key-8000', atMs: 13000 });
+    const end = (await generatedFrame(later, 'end-frame', 'end-generated', result)).project;
+    expect(automaticFramePrompt(end, createAutomaticFrameBasis(end, 'end-frame'))).toContain('"evaluationAbsoluteMs": 13499');
+    expect(automaticFrameContinuityReference(end, 'key-8000')).toMatchObject({ kind: 'previous-frame', frameId: ready.frameId });
+    expect(automaticFrameContinuityReference(end, ready.frameId)).toMatchObject({ kind: 'none', reason: 'first-frame' });
+  });
+
   it('automatic_frame_preserves_eight_reference_assets_and_records_the_complete_board_mapping', async (): Promise<void> => {
     const ready = await readyFrame(await automaticPlanProject()); let project: Project = ready.project;
     const extraIds: string[] = [];
@@ -115,7 +250,7 @@ describe('프레임 자동 그림', (): void => {
         project = await store.update(project.projectId, project.revision, (current): Project => { assertAutomaticFrameBasis(current, basis); return candidate.project; }, candidate.writes);
         const asset = await store.asset(project.projectId, `${id}:image`);
         expect(asset.content).toEqual(result.bytes);
-        expect(project.generationRecords.at(-1)).toMatchObject({ provider: 'codex-app', model: result.model, requestId: id, templateVersion: 'automatic-frame-image-1.0.0' });
+        expect(project.generationRecords.at(-1)).toMatchObject({ provider: 'codex-app', model: result.model, requestId: id, templateVersion: 'automatic-frame-image-1.1.0' });
         expect(project.generationRecords.at(-1)?.prompt).toContain(result.turnId);
       }
       expect(project.assets.filter((asset): boolean => asset.kind === 'image').map((asset): number => asset.version)).toEqual([1, 2]);

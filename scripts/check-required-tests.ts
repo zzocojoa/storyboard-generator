@@ -3,6 +3,14 @@ import { extname, join } from 'node:path';
 import { contractError } from '../src/domain/errors.js';
 
 const REQUIRED_TEST_NAMES: readonly string[] = [
+  'automatic_frame_continuity_passes_previous_verified_bytes_first_without_changing_human_review_or_history',
+  'automatic_frame_continuity_never_skips_a_missing_rejected_or_changed_immediate_predecessor',
+  'automatic_frame_continuity_invalidates_transitive_image_dependencies_after_an_earlier_retake',
+  'automatic_frame_continuity_accepts_legacy_actual_inputs_but_rejects_unverifiable_or_corrupt_records',
+  'automatic_frame_continuity_excludes_previous_images_when_their_visual_sources_are_no_longer_active',
+  'automatic_frame_continuity_counts_the_previous_bitmap_in_reference_limits_without_dropping_originals',
+  'automatic_frame_continuity_uses_end_frame_evaluation_and_never_selects_a_later_bitmap',
+
   'browser_draft_archive_retains_reference_corrections_for_active_unused_and_missing_resources',
   'prop_continuity_plan_resolves_new_keys_and_orders_reference_dependencies',
   'prop_continuity_rejects_foreign_future_cyclic_and_wrong_kind_links',
