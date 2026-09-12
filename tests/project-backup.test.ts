@@ -1,9 +1,11 @@
 import { mkdtemp, mkdir, readFile, readdir, rm, symlink, truncate, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import Fastify from 'fastify';
 import { createProjectBackup, previewProjectBackup, restoreProjectBackup } from '../src/backup/service.js';
+import type { BackupResult } from '../src/backup/schema.js';
+import type { BackupSnapshot } from '../src/backup/snapshot.js';
 import { readBackupSnapshot, readProjectBackup } from '../src/backup/snapshot.js';
 import { BACKUP_JSON_MAX_BYTES, BACKUP_MAX_FILES, BackupManifestSchema } from '../src/backup/schema.js';
 import { sha256Bytes, sha256Text } from '../src/importers/integrity.js';
@@ -39,7 +41,7 @@ async function fixture(): Promise<{ root: string; dataRoot: string; project: Pro
 }
 
 describe('저장된 콘티의 선택 백업과 독립 저장소 복원', (): void => {
-  it('project_backup_roundtrip_preserves_raw_versions_media_approvals_and_remains_editable', async (): Promise<void> => {
+  it('project_backup_publication_preserves_raw_versions_media_approvals_and_source', async (): Promise<void> => {
     const { root, dataRoot, project } = await fixture(); const selection = { parentPath: root, folderName: '콘티 백업' };
     const before = await readBackupSnapshot(dataRoot, project.projectId); const sourceEntries = await readdir(dataRoot);
     const preview = await previewProjectBackup(dataRoot, project.projectId, 1, selection);
@@ -47,21 +49,46 @@ describe('저장된 콘티의 선택 백업과 독립 저장소 복원', (): voi
     const backup = await readProjectBackup(result.outputPath);
     expect(backup.entries).toEqual(before.entries); expect(backup.project).toEqual(project);
     expect(backup.manifestSha256).toBe(result.manifestSha256); expect(preview.assets).toBe(project.assets.length); expect(preview.versions).toBe(2);
-    const restored = await restoreProjectBackup(result.outputPath, { parentPath: root, folderName: '복원' }, result.manifestSha256);
-    const copied = await readBackupSnapshot(restored.outputPath, project.projectId);
-    expect(copied.entries).toEqual(before.entries);
-    for (const file of before.files) expect(await readFile(join(restored.outputPath, sha256Text(project.projectId), file.path))).toEqual(file.content);
-    const store = new ProjectStore(restored.outputPath);
-    try {
-      await store.initialize(); expect(store.recoveryBlocks()).toEqual([]);
-      expect(await store.read(project.projectId)).toEqual(project); expect((await store.list()).map((entry): string => entry.projectId)).toEqual([project.projectId]);
-      const archive = await readReviewArchive(restored.outputPath, project.projectId);
-      expect(archive.readiness.finalReady).toBe(false); expect(archive.readiness).toEqual(reviewFinalReadiness(project, archive.integrity));
-      const next = await store.update(project.projectId, 1, (current): Project => ({ ...current, title: '복원 후 편집' }), []);
-      expect(next.revision).toBe(2); expect(next.assets).toEqual(project.assets); expect(next.generationRecords).toEqual(project.generationRecords);
-    } finally { await store.close(); }
     await before.assertUnchanged(); expect(await readdir(dataRoot)).toEqual(sourceEntries);
-    expect((await readProjectBackup(result.outputPath)).manifest.revision).toBe(1);
+  });
+
+  describe('독립 백업으로부터 복원', (): void => {
+    type PreparedBackup = { root: string; dataRoot: string; project: Project; before: BackupSnapshot; result: BackupResult; sourceEntries: string[] };
+    let prepared: PreparedBackup;
+    // 각 검사는 별도의 백업을 준비한다. 준비와 검사 각각의 5초 한도를 유지한다.
+    beforeEach(async (): Promise<void> => {
+      const { root, dataRoot, project } = await fixture();
+      const before = await readBackupSnapshot(dataRoot, project.projectId); const sourceEntries = await readdir(dataRoot);
+      const selection = { parentPath: root, folderName: '콘티 백업' };
+      const preview = await previewProjectBackup(dataRoot, project.projectId, 1, selection);
+      const result = await createProjectBackup(dataRoot, project.projectId, 1, selection, preview.basisSha256);
+      prepared = { root, dataRoot, project, before, result, sourceEntries };
+    }, 5000);
+
+    it('project_backup_restore_preserves_every_raw_file_and_human_review_state', async (): Promise<void> => {
+      const { root, dataRoot, project, before, result, sourceEntries } = prepared;
+      const restored = await restoreProjectBackup(result.outputPath, { parentPath: root, folderName: '복원' }, result.manifestSha256);
+      const copied = await readBackupSnapshot(restored.outputPath, project.projectId);
+      expect(copied.entries).toEqual(before.entries); expect(copied.project).toEqual(project);
+      for (const file of before.files) expect(await readFile(join(restored.outputPath, sha256Text(project.projectId), file.path))).toEqual(file.content);
+      await before.assertUnchanged(); expect(await readdir(dataRoot)).toEqual(sourceEntries);
+    });
+
+    it('project_backup_restored_project_remains_reviewable_and_editable_without_changing_backup', async (): Promise<void> => {
+      const { root, dataRoot, project, before, result, sourceEntries } = prepared;
+      const restored = await restoreProjectBackup(result.outputPath, { parentPath: root, folderName: '복원' }, result.manifestSha256);
+      const store = new ProjectStore(restored.outputPath);
+      try {
+        await store.initialize(); expect(store.recoveryBlocks()).toEqual([]);
+        expect(await store.read(project.projectId)).toEqual(project); expect((await store.list()).map((entry): string => entry.projectId)).toEqual([project.projectId]);
+        const archive = await readReviewArchive(restored.outputPath, project.projectId);
+        expect(archive.readiness.finalReady).toBe(false); expect(archive.readiness).toEqual(reviewFinalReadiness(project, archive.integrity));
+        const next = await store.update(project.projectId, 1, (current): Project => ({ ...current, title: '복원 후 편집' }), []);
+        expect(next.revision).toBe(2); expect(next.assets).toEqual(project.assets); expect(next.generationRecords).toEqual(project.generationRecords);
+      } finally { await store.close(); }
+      await before.assertUnchanged(); expect(await readdir(dataRoot)).toEqual(sourceEntries);
+      expect((await readProjectBackup(result.outputPath)).manifest.revision).toBe(1);
+    });
   });
 
   it('project_backup_rejects_changed_source_missing_history_existing_and_nested_destinations', async (): Promise<void> => {
