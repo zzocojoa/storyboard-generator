@@ -30,8 +30,14 @@ it('audio_instruction_placeholder_requires_exact_audible_source_evidence_and_cor
       expect(input.outputSchema).toMatchObject({ properties: { decisions: { items: {
         additionalProperties: false, required: expect.arrayContaining(['instructionId', 'resolution', 'cueIds', 'informationIds', 'reason', 'sourceEvidence', 'sharedScope', 'occurrences']),
         properties: { sourceEvidence: { items: { additionalProperties: false, required: ['unitId', 'quote'] } },
-          occurrences: { items: { additionalProperties: false, required: expect.arrayContaining(['cueId', 'source', 'informationIds', 'supportingUnitIds', 'reason']) } } },
+          occurrences: { items: { additionalProperties: false, required: expect.arrayContaining(['cueId', 'source', 'informationIds', 'supportingUnitIds', 'reason']),
+            properties: { source: { anyOf: [
+              { additionalProperties: false, properties: { kind: { const: 'unit' } }, required: ['kind', 'unitId', 'quote'] },
+              { additionalProperties: false, properties: { kind: { const: 'instruction' } }, required: ['kind', 'quote'] },
+            ] } },
+          } } },
       } } } });
+      expect(JSON.stringify(input.outputSchema)).not.toContain('"oneOf"');
       calls += 1; return { model: 'fixture', turnId: `turn-${calls}`, result: z.json().parse(calls === 1 ? invalid : proposed()) };
     } },
     onProgress: async (): Promise<void> => {},

@@ -4,7 +4,7 @@ import { AudioInstructionInputSchema, AudioInstructionOccurrenceInputSchema, app
 import { audioCueSource, audioCuesInSegment } from '../domain/audio-source.js';
 import { assertNoErrors, contractError } from '../domain/errors.js';
 import { assertGenerationRecordTransition } from '../domain/generation-records.js';
-import { IdSchema, ProjectSchema } from '../domain/schema.js';
+import { AudioInstructionOccurrenceSourceSchema, IdSchema, ProjectSchema } from '../domain/schema.js';
 import type { GenerationRecord, Project } from '../domain/schema.js';
 import { preferredSharedAudioScope, sameSharedAudioScope, sharedAudioInstructions } from '../domain/shared-audio-scope.js';
 import { validateProject } from '../domain/validation.js';
@@ -21,7 +21,10 @@ export const AutomaticAudioInstructionPlanSchema = z.strictObject({
 });
 const ModelOutputSchema = AutomaticAudioInstructionPlanSchema.extend({
   decisions: z.array(AudioInstructionInputSchema.required({ sourceEvidence: true, sharedScope: true }).extend({
-    occurrences: z.array(AudioInstructionOccurrenceInputSchema.required({ supportingUnitIds: true })).max(128),
+    occurrences: z.array(AudioInstructionOccurrenceInputSchema.required({ supportingUnitIds: true }).extend({
+      // Codex 구조화 응답이 지원하는 anyOf를 사용하며 서로 다른 kind와 엄격한 필드 검사는 유지한다.
+      source: z.union(AudioInstructionOccurrenceSourceSchema.options),
+    })).max(128),
   })).min(1),
 });
 export type AutomaticAudioInstructionPlan = z.infer<typeof AutomaticAudioInstructionPlanSchema>;
