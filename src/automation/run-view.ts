@@ -1,13 +1,12 @@
 import { z } from 'zod';
-import { AutomationSettingsSchema, AutomationTaskSchema } from './run-schema.js';
+import { AutomationPurposeSchema, AutomationSettingsSchema, AutomationTaskSchema } from './run-schema.js';
 import type { AutomationRun } from './run-schema.js';
-import { SpeechRetakeIntentSchema } from './speech-retake-schema.js';
 
 export const AutomationViewSchema = z.strictObject({
   id: z.uuid(), projectId: z.string(), revision: z.number().int().nonnegative(),
   status: z.enum(['running', 'paused', 'cancelled', 'needs-attention', 'review-ready']),
   createdAt: z.string(), updatedAt: z.string(), settings: AutomationSettingsSchema,
-  purpose: SpeechRetakeIntentSchema.optional(),
+  purpose: AutomationPurposeSchema.optional(),
   segmentIds: z.array(z.string()), activeMs: z.number().nonnegative(), imageAttempts: z.number().int().nonnegative(), stagedBytes: z.number().nonnegative(),
   jobs: z.array(z.strictObject({ id: z.uuid(), task: AutomationTaskSchema, attempts: z.number().int().nonnegative(),
     status: z.enum(['pending', 'running', 'prepared', 'applying', 'completed', 'failed', 'interrupted']) })),

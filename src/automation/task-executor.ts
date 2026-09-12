@@ -42,6 +42,7 @@ import { inspectStoryboardDensity, recordStoryboardDensityReview } from './densi
 import type { AutomationSettings, AutomationTask } from './run-schema.js';
 import { assertSpeechRetakeIntent, compileSpeechRetake } from './speech-retake.js';
 import { stageSelectedSpeech } from './stage-speech.js';
+import { assertReferenceRetakeIntent } from './reference-retake.js';
 
 export type AutomationEngines = { model: StructuredGenerationEngine; image: ImageGenerationEngine; speech: SpeechGenerationEngine; voiceCatalog?: (signal: AbortSignal) => Promise<InstalledSpeechVoice[]> };
 export type AutomationRuntimePaths = { codexExecutable: string; sayExecutable: string; audioConvertExecutable: string };
@@ -134,12 +135,14 @@ export async function executeAutomaticTask(input: AutomaticTaskInput, services: 
       candidate = { project: result.project, writes: [], exceptions: [] };
       break;
     }
-    case 'reference': {
+    case 'reference': case 'reference-retake': {
       if (remainingBytes < MAX_IMAGE_BYTES) throw contractError('AUTOMATION_STAGING_BUDGET', '기준 이미지 한 장의 최대 바이트를 수용할 저장 예산이 필요합니다.', []);
-      const basis = createProductionReferenceBasis(project, task.resourceId);
+      const basis = task.kind === 'reference-retake' ? assertReferenceRetakeIntent(project, task) : createProductionReferenceBasis(project, task.resourceId);
+      if (task.kind === 'reference-retake') await services.store.asset(project.projectId, task.previousAssetId);
       const references = await loadReferences(services.store, project.projectId, basis.referenceAssetIds, signal);
       await services.onProgress({ phase: 'image', message: `${task.resourceId}: 제작 기준 이미지 생성` });
       const result = await generateAutomaticReference(project, basis, references, provenance, services.engines.image, signal);
+      if (task.kind === 'reference-retake') await services.store.asset(project.projectId, task.previousAssetId);
       candidate = { ...result, exceptions: [] };
       break;
     }

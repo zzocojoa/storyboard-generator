@@ -204,6 +204,57 @@ describe('자동 제작 기준', (): void => {
     expect(regenerated.project.productionPlan?.resources[1]?.referenceAssetId).toBe('outfit-1:reference');
   });
 
+  it('같은 장소의 변형은 앞선 기본 공간 이미지와 구조 유지 지시를 함께 전달한다', async (): Promise<void> => {
+    const source = await automaticPlanProject(); const plan = productionPlan(source);
+    plan.resources = ['day', 'night'].map((key, index) => ({ ...plan.resources[0]!, key, description: index === 0 ? '왼쪽 창문과 나무 작업대' : '같은 작업대를 밤 조명으로 표현' }));
+    plan.segments = ['SEG-001', 'demonstration'].map((segmentId, index) => ({ ...plan.segments[0]!, segmentId, resourceKeys: [index === 0 ? 'day' : 'night'], locationResourceKey: index === 0 ? 'day' : 'night' }));
+    const planned = compileAutomaticProductionPlan(source, createProductionPlanBasis(source, ['SEG-001', 'demonstration']), plan, automaticPlanProvenance()).project;
+    const image = await imageResult(planned); const firstId = planned.productionPlan!.resources[0]!.id;
+    const current = (await compileAutomaticReference(planned, createProductionReferenceBasis(planned, firstId), image,
+      { ...automaticPlanProvenance(), generationId: 'day-reference', model: image.model, turnId: image.turnId })).project;
+    const before = structuredClone(current); const nextId = current.productionPlan!.resources[1]!.id;
+    const basis = createProductionReferenceBasis(current, nextId);
+    expect(basis.referenceAssetIds).toEqual(['day-reference:reference']);
+    const engine = vi.fn(async (input: ImageGenerationInput): Promise<ImageGenerationResult> => {
+      expect(input.references).toHaveLength(1); expect(input.references[0]?.bytes).toEqual(image.bytes);
+      expect(input.references[0]?.label).toContain('벽·창문·출입구의 위치와 연결');
+      expect(input.references[0]?.label).toContain('왼쪽 창문과 나무 작업대');
+      expect(input.references[0]?.label).not.toContain('얼굴·체형');
+      expect(input.prompt).toContain('밤 조명'); return image;
+    });
+    const result = await generateAutomaticReference(current, basis, [{ assetId: 'day-reference:reference', bytes: image.bytes }], generationOptions('night-reference'), { run: engine }, new AbortController().signal);
+    expect(engine).toHaveBeenCalledOnce(); expect(current).toEqual(before);
+    expect(result.project.assets.slice(0, current.assets.length)).toEqual(current.assets);
+    expect(result.project.generationRecords.at(-1)?.referenceHashes).toContain(image.inspection.sha256);
+    expect(JSON.parse(result.project.generationRecords.at(-1)!.prompt).basis.referenceAssetIds).toEqual(['day-reference:reference']);
+    expect(result.project.frames.every((frame): boolean => frame.visualReview === 'pending')).toBe(true);
+  });
+
+  it('공간 기준은 미래 상태·다른 장소·독립 제작 세트에서 자동 차용하지 않는다', async (): Promise<void> => {
+    const source = await automaticPlanProject(); const plan = productionPlan(source);
+    plan.resources = ['earlier', 'later'].map((key) => ({ ...plan.resources[0]!, key }));
+    plan.segments = ['SEG-001', 'demonstration'].map((segmentId, index) => ({ ...plan.segments[0]!, segmentId, resourceKeys: [index === 0 ? 'earlier' : 'later'], locationResourceKey: index === 0 ? 'earlier' : 'later' }));
+    let project = compileAutomaticProductionPlan(source, createProductionPlanBasis(source, ['SEG-001', 'demonstration']), plan, automaticPlanProvenance()).project;
+    const image = await imageResult(project);
+    for (const index of [1, 0]) {
+      const basis = createProductionReferenceBasis(project, project.productionPlan!.resources[index]!.id);
+      expect(basis.referenceAssetIds).toEqual([]);
+      project = (await compileAutomaticReference(project, basis, image, { ...automaticPlanProvenance(), generationId: `room-${index}`, model: image.model, turnId: image.turnId })).project;
+    }
+    const earlier = project.productionPlan!.resources[0]!; const later = project.productionPlan!.resources[1]!;
+    for (const resources of [
+      [{ ...earlier, sourceUnitIds: [source.dataset.units[0]!.id] }, later],
+      [{ ...earlier, subjectId: null }, later],
+      [{ ...earlier, subjectId: null }, { ...later, subjectId: null }],
+      [{ ...earlier, kind: 'prop' as const, subjectId: null }, { ...later, kind: 'prop' as const, subjectId: null }],
+    ]) {
+      const candidate: Project = { ...project, productionPlan: { ...project.productionPlan!, resources } };
+      expect(createProductionReferenceBasis(candidate, later.id).referenceAssetIds).toEqual([]);
+    }
+    const inactive: Project = { ...project, productionPlan: { ...project.productionPlan!, segments: project.productionPlan!.segments.slice(1) } };
+    expect(createProductionReferenceBasis(inactive, later.id).referenceAssetIds).toEqual([]);
+  });
+
   it('모델 보정 횟수와 취소를 지키며 선택 입력 스냅샷을 보존한다', async (): Promise<void> => {
     const project = await automaticPlanProject(); const basis = createProductionPlanBasis(project, ['demonstration']); const plan = productionPlan(project);
     const options = { maxCorrections: 1, provenance: generationOptions('production-planner') }; const controller = new AbortController();

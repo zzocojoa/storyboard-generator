@@ -79,7 +79,7 @@ function SpeechRetakeForm(props: Props & { overview: AutomationOverview; voices:
     {error !== '' && <p role="alert">{error} · 접수 여부는 아래 실행 상태를 다시 확인하세요.</p>}
     <button disabled={busy || props.disabled || recovery.blocked || sourceReviewNeeded || recorded.error !== '' || reading.error !== '' || protectedCue || active !== undefined || !props.voices.some((voice): boolean => voice.name === draft.voice.name)} onClick={(): void => { void perform(start); }}>이 발화만 자동 생성</button>
     {current !== null && <div aria-live="polite"><p>선택 발화 실행: {current.status === 'review-ready' ? '생성·저장 완료 — 청취 검토 대기' : current.status === 'running' ? '생성 중' : current.status === 'paused' ? '일시 중지' : current.status === 'cancelled' ? '취소됨' : '설정 확인 필요'}</p>
-      <p>{current.purpose?.voice.name} · {current.purpose?.voice.rateWordsPerMinute} 단어/분 · {current.progress}</p>
+      {current.purpose?.kind === 'speech-retake' && <p>{current.purpose.voice.name} · {current.purpose.voice.rateWordsPerMinute} 단어/분 · {current.progress}</p>}
       {current.problem !== null && <p role="alert">{current.problem.code}: {current.problem.message}</p>}{current.serviceError !== null && <p role="alert">{current.serviceError.message}</p>}
       {current.status === 'running' && <button disabled={busy} onClick={(): void => { void perform(() => pauseAutomation(props.project.projectId, current.id)); }}>음성 생성 중지</button>}
       {['paused', 'needs-attention'].includes(current.status) && <button disabled={busy || current.workerActive} onClick={(): void => { void perform(() => resumeAutomation(props.project.projectId, current.id)); }}>같은 설정으로 이어 만들기</button>}
@@ -118,7 +118,7 @@ export function SpeechRetakePanel(props: Props): ReactElement {
     setError('');
     void poll(); return (): void => { disposed = true; if (timer !== null) clearTimeout(timer); };
   }, [props.project.projectId, refresh]);
-  const current = overview?.runs.find((run): boolean => run.purpose?.cueId === props.cue.id) ?? null;
+  const current = overview?.runs.find((run): boolean => run.purpose?.kind === 'speech-retake' && run.purpose.cueId === props.cue.id) ?? null;
   return <div className="speech-retake-panel"><h4>발화 선택 생성·비교</h4>
     {error !== '' && <p role="alert">{error}</p>}{overview === null && error === '' && <p role="status">자동 음성 실행을 확인합니다.</p>}
     <button onClick={(): void => { setRefresh((value): number => value + 1); }}>음성 실행 상태 다시 확인</button>

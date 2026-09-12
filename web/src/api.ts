@@ -1,3 +1,4 @@
+import type { ReferenceRetakeInput } from '../../src/automation/reference-retake-schema.js';
 import type { TextPresentationValues } from '../../src/domain/text-presentation.js';
 import type { SpeechRetakeInput } from '../../src/automation/speech-retake-schema.js';
 import { BackupPreviewSchema, BackupResultSchema } from '../../src/backup/schema.js';
@@ -345,4 +346,8 @@ import type { TextLayoutPreview } from '../../src/rendering/text-response.js';
 
 export async function previewTextPresentation(projectId: string, cueId: string, expectedRevision: number, presentation: TextPresentationValues, atMs: number, signal: AbortSignal | null): Promise<TextLayoutPreview> {
   return TextLayoutPreviewSchema.parse(await request(`/api/projects/${encodeURIComponent(projectId)}/text/${encodeURIComponent(cueId)}/presentation/preview`, { ...json('POST', { expectedRevision, presentation, atMs }), signal, cache: 'no-store' }));
+}
+
+export async function startReferenceRetake(projectId: string, expectedRevision: number, input: ReferenceRetakeInput, settings: AutomationSettings): Promise<AutomationView> {
+  return z.strictObject({ run: AutomationViewSchema }).parse(await request(`/api/projects/${encodeURIComponent(projectId)}/automation/reference-retakes`, json('POST', { expectedRevision, input, settings }))).run;
 }

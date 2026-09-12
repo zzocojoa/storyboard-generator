@@ -38,7 +38,7 @@ function requireBasis(run: AutomationRun, revision: number, projectHash: string)
 }
 function taskKey(task: AutomationTask): string {
   switch (task.kind) {
-    case 'speech-retake': return automaticHash(task);
+    case 'speech-retake': case 'reference-retake': return automaticHash(task);
     case 'text-layout': return automaticHash({ kind: task.kind });
     case 'voice-casting': case 'production': return automaticHash({ kind: task.kind, segmentIds: [...task.segmentIds].sort() });
     case 'segment': case 'repair': case 'audio-mix': case 'audio-instructions': return automaticHash({ kind: task.kind, segmentId: task.segmentId });
@@ -62,7 +62,7 @@ export function reduceAutomationRun(input: AutomationRun, rawEvent: AutomationRu
       const tasks: Set<string> = new Set(run.jobs.map((job): string => taskKey(job.task)));
       const productionSegments: Set<string> = new Set(run.jobs.flatMap((job): string[] => job.task.kind === 'production' ? job.task.segmentIds : []));
       for (const job of event.jobs) {
-        if (run.purpose !== undefined ? automaticHash(job.task) !== automaticHash(run.purpose) : job.task.kind === 'speech-retake') invalid('선택 발화 재생성은 시작할 때 고정한 한 발화·음성·범위만 처리할 수 있습니다.');
+        if (run.purpose !== undefined ? automaticHash(job.task) !== automaticHash(run.purpose) : job.task.kind === 'speech-retake' || job.task.kind === 'reference-retake') invalid('선택 재생성은 시작할 때 고정한 대상·설정·범위만 처리할 수 있습니다.');
         if (job.task.kind === 'voice-casting' && (!automaticVoicePlanning(run.settings) || new Set(job.task.segmentIds).size !== job.task.segmentIds.length || job.task.segmentIds.some((id): boolean => !run.segmentIds.includes(id)))) invalid('음성 자동 배정 설정과 선택 구간을 확인하세요.');
         if (job.task.kind === 'text-layout' && (!('textLayoutPlanning' in run.settings) || run.settings.textLayoutPlanning !== 'automatic')) invalid('글자 배치 자동 계획을 선택한 실행에서만 배치 작업을 등록할 수 있습니다.');
         if (job.task.kind === 'audio-mix' && (!('audioMixPlanning' in run.settings) || run.settings.audioMixPlanning !== 'automatic')) invalid('음량 자동 계획을 선택한 실행에서만 음량 작업을 등록할 수 있습니다.');
@@ -86,7 +86,7 @@ export function reduceAutomationRun(input: AutomationRun, rawEvent: AutomationRu
       const job = requireJob(run, event.jobId);
       if (jobCompleted(job) || job.dependsOn.some((id): boolean => !jobCompleted(requireJob(run, id)))) invalid('완료한 작업을 다시 실행하거나 미완료 의존 작업을 건너뛸 수 없습니다.');
       if (job.attempts.length >= run.settings.maxAttemptsPerJob) throw contractError('AUTOMATION_ATTEMPT_BUDGET', `작업의 유한 재시도 한도에 도달했습니다: ${job.id}`, []);
-      const image: boolean = job.task.kind === 'image' || job.task.kind === 'reference';
+      const image: boolean = job.task.kind === 'image' || job.task.kind === 'reference' || job.task.kind === 'reference-retake';
       if (image && run.imageAttempts >= run.settings.maxImageAttempts) throw contractError('AUTOMATION_IMAGE_BUDGET', '자동 제작 이미지 시도 한도에 도달했습니다.', []);
       const attempt: AutomationAttempt = { id: event.attemptId, status: 'running', revision: event.revision, projectHash: event.projectHash,
         startedAt: event.at, finishedAt: null, applicationHash: null, stagedBytes: 0, committedRevision: null, problem: null };

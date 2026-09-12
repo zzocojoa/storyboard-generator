@@ -28,14 +28,15 @@ function requireResource(project: Project, resourceId: string): ProductionResour
   return resource;
 }
 
-/** 외형 변형은 먼저 사용한 동일 인물 기준을 참조한다. 다른 대상·미래 구간 기준은 자동 선택하지 않는다. */
-function identityReferenceIds(project: Project, resource: ProductionResource): string[] {
-  if (resource.kind !== 'character') return [];
+/** 같은 원본 인물·장소의 앞선 기준만 사용한다. 공간은 사건 상태가 없는 기본 세트로 한정한다. */
+function continuityReferenceIds(project: Project, resource: ProductionResource): string[] {
+  if (resource.kind === 'prop' || resource.subjectId === null) return [];
   const firstUse = (resourceId: string): number => Math.min(...(project.productionPlan?.segments ?? [])
     .filter((segment): boolean => segment.resourceIds.includes(resourceId))
     .flatMap((segment): number[] => project.dataset.segments.filter((value): boolean => value.id === segment.segmentId).map((value): number => value.startMs)));
   const prior = project.productionPlan?.resources.filter((value): boolean => value.id !== resource.id && value.kind === resource.kind
-    && value.subjectId === resource.subjectId && value.referenceAssetId !== null && firstUse(value.id) <= firstUse(resource.id))
+    && value.subjectId === resource.subjectId && value.referenceAssetId !== null && firstUse(value.id) <= firstUse(resource.id)
+    && (resource.kind === 'character' || value.sourceUnitIds.length === 0))
     .sort((left, right): number => firstUse(left.id) - firstUse(right.id))[0];
   return prior?.referenceAssetId === null || prior?.referenceAssetId === undefined ? [] : [prior.referenceAssetId];
 }
@@ -46,7 +47,7 @@ export function createProductionReferenceBasis(project: Project, resourceId: str
   if (segmentIds.size === 0) throw contractError('AUTOMATION_INACTIVE_RESOURCE', `현재 구간에 사용하지 않는 과거 기준입니다: ${resourceId}`, []);
   const protectedShots = project.shots.filter((shot): boolean => segmentIds.has(shot.segmentId) && (shot.approvalStatus === 'approved' || shot.lockedFields.length > 0));
   if (protectedShots.length > 0) throw contractError('AUTOMATION_PROTECTED_REFERENCE', `확정·잠금 컷이 사용하는 기준을 자동 교체하지 않습니다: ${protectedShots.map((shot): string => shot.id).join(', ')}`, []);
-  return ProductionReferenceBasisSchema.parse({ projectId: project.projectId, revision: project.revision, projectHash: sha256Text(stableJsonStringify(project)), resourceId, referenceAssetIds: identityReferenceIds(project, resource) });
+  return ProductionReferenceBasisSchema.parse({ projectId: project.projectId, revision: project.revision, projectHash: sha256Text(stableJsonStringify(project)), resourceId, referenceAssetIds: continuityReferenceIds(project, resource) });
 }
 
 export function assertProductionReferenceBasis(project: Project, basis: ProductionReferenceBasis): void {
@@ -56,8 +57,10 @@ export function assertProductionReferenceBasis(project: Project, basis: Producti
 
 async function referenceInput(project: Project, basis: ProductionReferenceBasis, loaded: readonly LoadedReference[]): Promise<ImageGenerationInput> {
   assertProductionReferenceBasis(project, basis);
-  const references = await verifiedImageReferences(project, basis.referenceAssetIds, loaded, (asset): string => `${asset.id}: 동일 인물의 얼굴·체형만 유지. 의상·자세·상태는 현재 설명을 적용.`);
   const resource = requireResource(project, basis.resourceId);
+  const references = await verifiedImageReferences(project, basis.referenceAssetIds, loaded, (asset): string => resource.kind === 'location'
+    ? `${asset.id}: 동일 장소의 기본 공간이다. 벽·창문·출입구의 위치와 연결, 고정 가구의 형태·배치를 유지한다. 현재 설명에 명시된 조명·시간대·상태 변화만 적용하며 공간을 새로 설계하거나 좌우 반전하지 않는다. 기본 공간 설명: ${asset.description}`
+    : `${asset.id}: 동일 인물의 얼굴·체형만 유지. 의상·자세·상태는 현재 설명을 적용.`);
   return { prompt: `콘티 제작용 ${resource.kind} 기준 이미지 한 장. 이야기 장면이나 사건을 추가하지 않는다. 글자·로고·정확한 메시지는 그리지 않는다. 인물은 외형과 현재 의상이 잘 보이게, 공간은 비어 있는 세트와 구조가 보이게, 소품은 대상만 명확하게 묘사한다. 사용자 검토 전 제작 제안이다.\n${JSON.stringify({ name: resource.name, description: resource.description, profile: project.profile })}`,
     aspectRatio: { width: project.profile.aspectWidth, height: project.profile.aspectHeight }, references };
 }
@@ -90,7 +93,7 @@ export async function compileAutomaticReference(inputProject: Project, inputBasi
   const referencePresentation = validateImageReferencePresentation(result.referencePresentation, basis.referenceAssetIds.map((id): string => project.assets.find((asset): boolean => asset.id === id)!.sha256));
   const record: GenerationRecord = { id: provenance.generationId, provider: 'codex-app', model: result.model, modelVersion: null, requestId: provenance.generationId,
     prompt: stableJsonStringify({ input: provenance.prompt, revisedPrompt: result.revisedPrompt, turnId: result.turnId, itemId: result.itemId, basis, referencePresentation }),
-    templateVersion: 'automatic-production-reference-1.0.0', seed: null, referenceHashes: [...new Set([basis.projectHash, ...basis.referenceAssetIds.map((id): string => project.assets.find((value): boolean => value.id === id)!.sha256)])],
+    templateVersion: 'automatic-production-reference-1.1.0', seed: null, referenceHashes: [...new Set([basis.projectHash, ...basis.referenceAssetIds.map((id): string => project.assets.find((value): boolean => value.id === id)!.sha256)])],
     resultAssetIds: [asset.id], shotIds: [...shotIds], createdAt: provenance.createdAt, generatorBuild: provenance.generatorBuild };
   const candidate: Project = ProjectSchema.parse({ ...project, assets: [...project.assets, asset], generationRecords: [...project.generationRecords, record],
     productionPlan: { resources: project.productionPlan!.resources.map((value) => value.id === resource.id ? { ...value, referenceAssetId: asset.id } : value), segments: project.productionPlan!.segments },

@@ -18,6 +18,8 @@ import { automationView } from './run-view.js';
 import type { AutomationView } from './run-view.js';
 import { createSpeechRetakeIntent } from './speech-retake.js';
 import type { SpeechRetakeInput } from './speech-retake-schema.js';
+import { createReferenceRetakeIntent, referenceRetakeSegments } from './reference-retake.js';
+import type { ReferenceRetakeInput } from './reference-retake-schema.js';
 
 type ActiveExecution = { controller: AbortController; finished: Promise<void> };
 type ServiceProblem = NonNullable<AutomationView['serviceError']>;
@@ -122,6 +124,21 @@ export class AutomationService {
     await this.#options.services.diskSpace.assertPreservation(Buffer.byteLength(stableJsonStringify(project)));
     const snapshot = await this.#options.services.runs.create({ type: 'created', id: randomUUID(), projectId, revision: project.revision, projectHash: automaticHash(project),
       segmentIds: [unit.segmentId], purpose, settings: options, generatorBuild: this.#options.services.generatorBuild, at: new Date().toISOString() }, project);
+    this.#launch(snapshot.run.id);
+    return this.#view(snapshot);
+  }
+  async startReferenceRetake(projectId: string, expectedRevision: number, input: ReferenceRetakeInput, settings: AutomationSettings): Promise<AutomationView> {
+    this.#assertOpen();
+    const options = AutomationSettingsSchema.parse(settings);
+    await this.#options.services.projects.assertMutable(projectId);
+    const project = await this.#options.services.projects.read(projectId);
+    if (project.revision !== expectedRevision) throw contractError('REVISION_CONFLICT', `${projectId}: expected=${expectedRevision}, actual=${project.revision}`, []);
+    const purpose = createReferenceRetakeIntent(project, input);
+    await this.#options.services.projects.asset(projectId, purpose.previousAssetId);
+    if (automaticHash(await this.#options.services.projects.read(projectId)) !== automaticHash(project)) throw contractError('REVISION_CONFLICT', '기준 이미지를 확인하는 동안 프로젝트가 변경되었습니다. 새로고침한 뒤 다시 요청하세요.', []);
+    await this.#options.services.diskSpace.assertPreservation(Buffer.byteLength(stableJsonStringify(project)));
+    const snapshot = await this.#options.services.runs.create({ type: 'created', id: randomUUID(), projectId, revision: project.revision, projectHash: automaticHash(project),
+      segmentIds: referenceRetakeSegments(project, input.resourceId), purpose, settings: options, generatorBuild: this.#options.services.generatorBuild, at: new Date().toISOString() }, project);
     this.#launch(snapshot.run.id);
     return this.#view(snapshot);
   }

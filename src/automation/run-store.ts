@@ -1,4 +1,5 @@
 import { assertSpeechRetakeIntent } from './speech-retake.js';
+import { assertReferenceRetakeIntent, referenceRetakeSegments } from './reference-retake.js';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { RequestLockManager } from '../codex/request-lock.js';
@@ -112,10 +113,14 @@ export class AutomationRunStore {
     const project = parseProject(structuredClone(inputProject));
     if (event.projectId !== project.projectId || event.revision !== project.revision || event.projectHash !== automaticHash(project)
       || event.segmentIds.some((id): boolean => !project.dataset.segments.some((segment): boolean => segment.id === id))) throw contractError('AUTOMATION_RUN_INPUT', '자동 실행의 시작 Snapshot과 선택 구간이 현재 프로젝트와 다릅니다.', []);
-    if (event.purpose !== undefined) {
+    if (event.purpose?.kind === 'speech-retake') {
       const cue = assertSpeechRetakeIntent(project, event.purpose);
       const unit = project.dataset.units.find((value): boolean => value.id === cue.unitId)!;
       if (event.segmentIds.length !== 1 || event.segmentIds[0] !== unit.segmentId) throw contractError('AUTOMATION_RUN_INPUT', '선택 발화의 원본 구간만 재생성 실행 범위에 포함하세요.', []);
+    }
+    if (event.purpose?.kind === 'reference-retake') {
+      assertReferenceRetakeIntent(project, event.purpose);
+      if (automaticHash([...event.segmentIds].sort()) !== automaticHash(referenceRetakeSegments(project, event.purpose.resourceId).sort())) throw contractError('AUTOMATION_RUN_INPUT', '선택 기준 이미지를 사용하는 모든 구간을 재생성 영향 범위에 포함하세요.', []);
     }
     const content = stableJsonStringify(project);
     if (Buffer.byteLength(content) > MAX_PROJECT_BYTES) throw contractError('AUTOMATION_RUN_FILE_SIZE', '자동 실행의 시작 프로젝트 Snapshot은 64MB 이하여야 합니다.', []);

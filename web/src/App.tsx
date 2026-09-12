@@ -12,6 +12,7 @@ import type { ReviewPlaybackPreference } from './useReviewPlayback.js';
 import { reviewPlayhead } from './review-playback.js';
 import type { ReviewPlaybackRate } from './review-playback.js';
 import { ReferenceImageForm } from './ReferenceImageForm.js';
+import { ProductionReferenceReview } from './ProductionReferenceReview.js';
 import type { ReferenceDraft } from './ReferenceImageForm.js';
 import { SourceUpdateForm } from './SourceUpdateForm.js';
 import { z } from 'zod';
@@ -660,6 +661,7 @@ function Inspector(props: { reviewPlayback: ReviewPlaybackPreference; page: Insp
       <TextLayoutSettings projectId={props.project.projectId} revision={props.project.revision} value={props.project.textLayout} mode={props.project.textLayoutControl.mode} review={textPresetReview(props.project)} working={props.working} onSave={props.onTextLayout} />
       <TextReadabilitySettings projectId={props.project.projectId} revision={props.project.revision} value={props.project.textReadability} working={props.working} onSave={props.onTextReadability} />
       <ReferenceImageForm project={props.project} working={props.working} onRegister={props.onReference} />
+      <ProductionReferenceReview key={props.project.projectId} project={props.project} disabled={props.working} visible={props.workspacePage === 'settings'} onRefresh={props.onRefresh} />
       <SourceUpdateForm project={props.project} working={props.working} onPreview={props.onSourcePreview} onApply={props.onSourceApply} />
     </section></div>
   </aside>;

@@ -6,6 +6,7 @@ import { AutomaticApplyReceiptSchema } from './application-schema.js';
 import { StoryboardDensitySchema } from './density.js';
 import type { StoryboardDensity } from './density.js';
 import { SpeechRetakeIntentSchema } from './speech-retake-schema.js';
+import { ReferenceRetakeIntentSchema } from './reference-retake-schema.js';
 
 export const LegacyAutomationSettingsSchema = z.strictObject({
   model: z.string().trim().min(1).nullable(),
@@ -53,6 +54,7 @@ export function automationDensity(settings: AutomationSettings): StoryboardDensi
 }
 export const AutomationTaskSchema = z.discriminatedUnion('kind', [
   SpeechRetakeIntentSchema,
+  ReferenceRetakeIntentSchema,
   z.strictObject({ kind: z.literal('voice-casting'), segmentIds: z.array(IdSchema).min(1).max(8192) }),
   z.strictObject({ kind: z.literal('text-layout') }),
   z.strictObject({ kind: z.literal('audio-mix'), segmentId: IdSchema }),
@@ -67,11 +69,12 @@ export const AutomationJobDefinitionSchema = z.strictObject({ id: z.uuid(), task
 const At = z.iso.datetime();
 const JobAttempt = { jobId: z.uuid(), attemptId: z.uuid(), at: At };
 const Problem = z.strictObject({ code: z.string().min(1).max(200), message: z.string().min(1).max(16000) });
+export const AutomationPurposeSchema = z.discriminatedUnion('kind', [SpeechRetakeIntentSchema, ReferenceRetakeIntentSchema]);
 
 export const AutomationRunCreatedSchema = z.strictObject({
   type: z.literal('created'), id: z.uuid(), projectId: IdSchema, revision: z.number().int().nonnegative(), projectHash: HashSchema,
   segmentIds: z.array(IdSchema).min(1).max(8192), settings: AutomationSettingsSchema, generatorBuild: GeneratorBuildProvenanceSchema, at: At,
-  purpose: SpeechRetakeIntentSchema.optional(),
+  purpose: AutomationPurposeSchema.optional(),
 });
 export const AutomationRunEventSchema = z.discriminatedUnion('type', [
   AutomationRunCreatedSchema,

@@ -7,6 +7,7 @@ import type { AutomationService } from '../automation/service.js';
 import { contractError } from '../domain/errors.js';
 import { SpeechRetakeInputSchema } from '../automation/speech-retake-schema.js';
 import { IdSchema } from '../domain/schema.js';
+import { ReferenceRetakeInputSchema } from '../automation/reference-retake-schema.js';
 
 const ProjectParams = z.strictObject({ projectId: IdSchema });
 const RunParams = ProjectParams.extend({ id: z.uuid() });
@@ -44,6 +45,12 @@ export function registerAutomationRoutes(app: FastifyInstance, service: Automati
     localOrigin(request); const { projectId } = ProjectParams.parse(request.params);
     const body = z.strictObject({ expectedRevision: z.number().int().nonnegative(), input: SpeechRetakeInputSchema, settings: AutomationSettingsSchema }).parse(request.body);
     const run = await requireService(service).startSpeechRetake(projectId, body.expectedRevision, body.input, body.settings);
+    reply.status(202); return { run };
+  });
+  app.post('/api/projects/:projectId/automation/reference-retakes', { bodyLimit: 65536 }, async (request, reply): Promise<object> => {
+    localOrigin(request); const { projectId } = ProjectParams.parse(request.params);
+    const body = z.strictObject({ expectedRevision: z.number().int().nonnegative(), input: ReferenceRetakeInputSchema, settings: AutomationSettingsSchema }).parse(request.body);
+    const run = await requireService(service).startReferenceRetake(projectId, body.expectedRevision, body.input, body.settings);
     reply.status(202); return { run };
   });
   app.get('/api/projects/:projectId/automation/:id', async (request): Promise<object> => {

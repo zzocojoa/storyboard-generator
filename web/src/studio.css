@@ -304,6 +304,9 @@ body { min-width: 360px; min-height: 100dvh; }
 .frame-review-preview { margin: 12px 0; }
 .frame-review-preview img { display: block; width: 100%; max-height: 420px; object-fit: contain; background: #f1f2ec; }
 .frame-review-preview figcaption { font-size: 12px; line-height: 1.6; padding-top: 8px; }
+.production-reference-review { border-top: 1px solid var(--studio-line); margin-top: 30px; padding-top: 24px; }
+.production-reference-review p { line-height: 1.7; overflow-wrap: anywhere; }
+.reference-comparison { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 16px; }
 @media (max-width: 800px) { .top-actions > button:first-child { display: block; } }
 @media (max-width: 590px) {
   .top-actions { width: 100%; justify-content: flex-end; }
