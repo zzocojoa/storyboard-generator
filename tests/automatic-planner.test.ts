@@ -6,6 +6,7 @@ import { planAutomaticSegment } from '../src/automation/plan-segment.js';
 import type { AutomaticPlanOptions, AutomaticPlanProgress, AutomaticPlanServices } from '../src/automation/plan-segment.js';
 import { createSegmentPlanBasis } from '../src/automation/plan-basis.js';
 import { contractError } from '../src/domain/errors.js';
+import type { Asset, Project } from '../src/domain/schema.js';
 import type { StructuredGenerationInput } from '../src/codex/structured-engine.js';
 import { automaticPlanProject, automaticPlanProvenance, demonstrationPlan, stagedPlanSpeech } from './automatic-plan-helpers.js';
 
@@ -49,6 +50,33 @@ describe('자동 계획 실행 조정', (): void => {
     const denied = vi.fn().mockRejectedValue(contractError('CODEX_LOGIN_REQUIRED', '로그인이 필요합니다.', []));
     await expect(planAutomaticSegment(project, basis, options(), { ...services, model: { run: denied } }, new AbortController().signal)).rejects.toMatchObject({ code: 'CODEX_LOGIN_REQUIRED' });
     expect(denied).toHaveBeenCalledTimes(1);
+  });
+
+  it('automatic_planner_corrects_continuity_with_asset_and_boundary_evidence_without_changing_previous_shots_or_human_review', async (): Promise<void> => {
+    const source = await automaticPlanProject();
+    const asset: Asset = { id: 'continuity-prop', kind: 'prop', subjectId: null, path: 'assets/continuity.png', mimeType: 'image/png', sha256: '1'.repeat(64), description: '연속성 소품', durationMs: null, version: 1 };
+    const project: Project = { ...source, assets: [asset], shots: source.shots.map((shot) => shot.id === 'shot-1' ? { ...shot, continuityAfter: [{ assetId: asset.id, state: '닫힘' }] } : shot) };
+    const before: Project = structuredClone(project);
+    const plan = demonstrationPlan(project);
+    const inputs: StructuredGenerationInput[] = [];
+    const model = vi.fn(async (input: StructuredGenerationInput) => {
+      inputs.push(input);
+      const snapshot = JSON.parse(input.prompt.split('입력 스냅샷:\n')[1] ?? '') as { correction: { message: string } | null };
+      if (snapshot.correction !== null) {
+        expect(snapshot.correction.message).toContain(asset.id);
+        expect(snapshot.correction.message).toMatch(/"expected"\s*:\s*"닫힘"/u);
+        expect(snapshot.correction.message).toMatch(/"actual"\s*:\s*"열림"/u);
+      }
+      return { model: 'test-model', turnId: `continuity-${inputs.length}`, result: z.json().parse({ ...plan, shots: plan.shots.map((shot) => ({ ...shot, continuityBefore: [{ assetId: asset.id, state: snapshot.correction === null ? '열림' : '닫힘' }] })) }) };
+    });
+    const speech = vi.fn();
+    const services: AutomaticPlanServices = { textFontPath: TEST_TEXT_FONT_PATH, loadExistingAudio: noExistingAudio, speech: { run: speech }, model: { run: model }, onSpeechReady: vi.fn(async (): Promise<void> => {}), onProgress: vi.fn(async (): Promise<void> => {}) };
+    const candidate = await planAutomaticSegment(project, createSegmentPlanBasis(project, 'demonstration', ['shot-2']), { ...options(), audioProduction: 'instructions-only' }, services, new AbortController().signal);
+    expect(model).toHaveBeenCalledTimes(2); expect(speech).not.toHaveBeenCalled();
+    expect(candidate.project.shots.find((shot): boolean => shot.segmentId === 'demonstration')?.continuityBefore).toEqual([{ assetId: asset.id, state: '닫힘' }]);
+    expect(candidate.project.shots.find((shot): boolean => shot.id === 'shot-1')).toEqual(project.shots.find((shot): boolean => shot.id === 'shot-1'));
+    expect(candidate.project.frames.every((frame): boolean => frame.visualReview === 'pending')).toBe(true);
+    expect(candidate.writes).toEqual([]); expect(project).toEqual(before);
   });
 
   it('automation_planner_cancels_before_model_and_checks_staging_budget_without_project_writes', async (): Promise<void> => {

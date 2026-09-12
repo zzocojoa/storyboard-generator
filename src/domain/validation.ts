@@ -294,7 +294,7 @@ export function validateProject(project: Project, expectedDataset: Dataset): Iss
       const incoming: string | undefined = next.continuityBefore.find((state): boolean => state.assetId === id)?.state;
       if (outgoing === incoming) return [];
       const severity: Issue['severity'] = outgoing === undefined || incoming === undefined ? 'warning' : 'error';
-      return [issue('CONTINUITY_STATE_MISMATCH', severity, next.id, 'continuityBefore', '인접 컷의 자산 전후 상태가 이어지지 않습니다.', outgoing ?? '미기록', incoming ?? '미기록', [])];
+      return [issue('CONTINUITY_STATE_MISMATCH', severity, next.id, 'continuityBefore', `자산 ${id}: 앞 컷 ${shot.id}의 종료 상태와 현재 컷의 시작 상태가 이어지지 않습니다.`, outgoing ?? '미기록', incoming ?? '미기록', [])];
     });
   });
   const assetClosureIssues: Issue[] = assetReferenceIssues(project);
