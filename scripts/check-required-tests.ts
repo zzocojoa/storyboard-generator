@@ -82,6 +82,7 @@ const REQUIRED_TEST_NAMES: readonly string[] = [
   'speech_retake_respects_protected_shots_shared_audio_and_information_gates',
   'speech_retake_run_binds_one_task_and_keeps_legacy_hashes_without_expanding_production',
   'reference_retake_binds_resource_version_and_protects_approved_or_locked_shots',
+  'reference_retake_correction_binds_prompt_and_previous_image_without_source_changes',
   'reference_retake_run_limits_one_fixed_target_and_charges_image_attempt_budget',
   'reference_retake_http_only_replaces_selected_reference_and_preserves_existing_media',
   'e2e_reference_retake_reviews_one_resource_runs_without_chat_and_compares_preserved_versions',

@@ -33,8 +33,13 @@ test('e2e_text_typography_restores_draft_previews_and_repairs_changed_font_witho
     await expect(form.getByRole('img', { name: '선택한 글꼴로 조판한 화면 글자' })).toBeVisible(); expect(await readFile(currentPath)).toEqual(original);
     await expect.poll(async (): Promise<boolean> => form.getByRole('img', { name: '선택한 글꼴로 조판한 화면 글자' }).evaluate((element: HTMLImageElement): boolean => element.complete && element.naturalWidth > 0)).toBe(true);
     await form.screenshot({ path: testInfo.outputPath('typography-preview.png') });
-    await form.getByRole('button', { name: '글꼴·언어 저장', exact: true }).click();
-    await expect.poll(async (): Promise<number> => (await store.read(project.projectId)).revision).toBe(2);
+    // 현재본 게시 뒤 잠금 정리까지 끝난 저장 응답을 기다린 다음 파일을 검토한다.
+    const [firstSave] = await Promise.all([
+      page.waitForResponse((response): boolean => response.request().method() === 'PATCH' && response.url() === `${base}/api/projects/${encodeURIComponent(project.projectId)}/text-typography`),
+      form.getByRole('button', { name: '글꼴·언어 저장', exact: true }).click(),
+    ]);
+    expect(firstSave.status()).toBe(200); await firstSave.finished();
+    expect((await store.read(project.projectId)).revision).toBe(2);
     await writeFile(selectedPath, await readFile(TEST_LATIN_FONT_PATH)); await page.reload();
     await expect(form.getByRole('button', { name: '현재 글꼴 파일 선택', exact: true })).toBeVisible();
     await expect(form.getByRole('button', { name: '글꼴·언어 저장', exact: true })).toBeDisabled();
@@ -43,9 +48,13 @@ test('e2e_text_typography_restores_draft_previews_and_repairs_changed_font_witho
     await expect(form.getByRole('region', { name: '글꼴 미리보기' })).toContainText('선택 글꼴에 없는 글자');
     await form.getByLabel('화면 글꼴', { exact: true }).selectOption('default');
     await expect(form.getByRole('region', { name: '글꼴 미리보기' })).toHaveCount(0);
-    await form.getByRole('button', { name: '글꼴·언어 저장', exact: true }).click();
-    await expect.poll(async (): Promise<number> => (await store.read(project.projectId)).revision).toBe(3);
+    const [secondSave] = await Promise.all([
+      page.waitForResponse((response): boolean => response.request().method() === 'PATCH' && response.url() === `${base}/api/projects/${encodeURIComponent(project.projectId)}/text-typography`),
+      form.getByRole('button', { name: '글꼴·언어 저장', exact: true }).click(),
+    ]);
+    expect(secondSave.status()).toBe(200); await secondSave.finished();
     const saved = await store.read(project.projectId); expect(saved.textTypography).toMatchObject({ fontId: 'default', language: 'ko' });
+    expect(saved.revision).toBe(3);
     for (const key of ['dataset', 'textCues', 'audioCues', 'shots', 'frames', 'assets', 'generationRecords'] as const) expect(saved[key]).toEqual(project[key]);
     expect((await (await page.request.get(`${base}/api/projects/${encodeURIComponent(project.projectId)}/final-readiness`)).json()).finalReady).toBe(true);
     await page.reload(); await expect(form.getByLabel('화면 글꼴', { exact: true })).toHaveValue('default');

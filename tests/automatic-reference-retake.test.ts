@@ -3,6 +3,7 @@ import Fastify from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 import { automaticHash } from '../src/automation/application-evidence.js';
 import { nextAutomaticWork } from '../src/automation/job-graph.js';
+import { generateAutomaticReference } from '../src/automation/production-reference.js';
 import { assertReferenceRetakeIntent, createReferenceRetakeIntent } from '../src/automation/reference-retake.js';
 import { AutomationRunExecutor } from '../src/automation/run-executor.js';
 import { createAutomationRun, reduceAutomationRun } from '../src/automation/run-state.js';
@@ -12,8 +13,33 @@ import { errorBody, httpErrorPolicy } from '../src/server/app.js';
 import { registerAutomationRoutes } from '../src/server/automation-routes.js';
 import { createExecutionHarness, initial, settings } from './automatic-executor-helpers.js';
 import { referenceRetakeCandidate } from './reference-retake-helpers.js';
+import { automaticPlanProvenance } from './automatic-plan-helpers.js';
 
 describe('선택 기준 이미지 재생성', (): void => {
+  it('reference_retake_correction_binds_prompt_and_previous_image_without_source_changes', async (): Promise<void> => {
+    const h = await createExecutionHarness(async (): Promise<void> => {});
+    try {
+      const prepared = await referenceRetakeCandidate(h.source); const project = prepared.project; const before = structuredClone(project);
+      const resource = project.productionPlan!.resources[0]!; const correctionNote = '창문 위치는 유지하고 작업대가 전부 보이도록 카메라를 뒤로 옮겨 주세요.';
+      const intent = createReferenceRetakeIntent(project, { resourceId: resource.id, correctionNote });
+      expect(() => assertReferenceRetakeIntent(project, { ...intent, correctionNote: '다른 수정 요청' })).toThrowError(expect.objectContaining({ code: 'AUTOMATION_REFERENCE_RETAKE_STALE' }));
+      expect(() => createReferenceRetakeIntent(project, { resourceId: resource.id, correctionNote: ' ' })).toThrow();
+      expect(() => createReferenceRetakeIntent(project, { resourceId: resource.id, correctionNote: '가'.repeat(4001) })).toThrow();
+      const basis = assertReferenceRetakeIntent(project, intent); expect(basis.referenceAssetIds).toEqual([resource.referenceAssetId]);
+      const image = vi.fn(h.engine.image.run); const { model: _model, prompt: _prompt, turnId: _turnId, ...provenance } = automaticPlanProvenance();
+      const bytes = Buffer.from(prepared.writes[0]!.content);
+      const result = await generateAutomaticReference(project, basis, [{ assetId: resource.referenceAssetId!, bytes }],
+        { ...provenance, generationId: 'corrected-reference' }, { run: image }, new AbortController().signal);
+      expect(image).toHaveBeenCalledOnce(); expect(image.mock.calls[0]?.[0].prompt).toContain(correctionNote);
+      expect(image.mock.calls[0]?.[0].references[0]?.bytes).toEqual(bytes);
+      expect(image.mock.calls[0]?.[0].references[0]?.label).toContain('수정 대상의 이전 이미지');
+      expect(result.project.generationRecords.at(-1)?.prompt).toContain(correctionNote);
+      expect(result.project.productionPlan!.resources[0]?.description).toBe(resource.description);
+      expect(result.project.dataset).toEqual(project.dataset); expect(result.project.assets.slice(0, project.assets.length)).toEqual(project.assets);
+      expect(project).toEqual(before);
+    } finally { await h.close(); }
+  });
+
   it('reference_retake_binds_resource_version_and_protects_approved_or_locked_shots', async (): Promise<void> => {
     const h = await createExecutionHarness(async (): Promise<void> => {});
     try {

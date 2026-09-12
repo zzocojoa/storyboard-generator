@@ -56,7 +56,8 @@ test('e2e_prop_continuity_retake_selects_prior_shape_and_keeps_old_versions', as
   const h = await createExecutionHarness(async (): Promise<void> => {});
   let imageCalls: number = 0;
   const service = new AutomationService({ services: { ...h.services, engines: () => ({ ...h.engine, image: { run: async (input, signal) => {
-    imageCalls += 1; expect(input.references).toHaveLength(1); expect(input.references[0]?.label).toContain('표 구획'); return h.engine.image.run(input, signal);
+    imageCalls += 1; expect(input.references).toHaveLength(2); expect(input.references[0]?.label).toContain('표 구획');
+    expect(input.references[1]?.label).toContain('수정 대상의 이전 이미지'); expect(input.prompt).toContain('앞선 표의 가로 판형을 유지해 주세요.'); return h.engine.image.run(input, signal);
   } } }) }, onError: (_id, problem): void => { throw new Error(problem.message); } });
   await service.initialize(); await service.cancel(h.source.projectId, h.id);
   const candidate = await twoPropCandidate(h.source);
@@ -75,6 +76,7 @@ test('e2e_prop_continuity_retake_selects_prior_shape_and_keeps_old_versions', as
     const regenerate = panel.getByRole('button', { name: '선택 기준만 다시 생성', exact: true });
     await expect(regenerate).toBeDisabled();
     await panel.getByLabel('같은 소품으로 판단한 근거').fill('앞선 종이를 그대로 펼치는 원문 확인');
+    await panel.getByLabel('이번 이미지 수정 요청').fill('앞선 표의 가로 판형을 유지해 주세요.');
     await expect(panel.getByRole('img', { name: '모양을 이어 쓸 이전 소품', exact: true })).toHaveJSProperty('naturalWidth', before.profile.aspectWidth * 10);
     expect(imageCalls).toBe(0); expect((await h.services.projects.read(before.projectId)).revision).toBe(before.revision);
     await regenerate.click();
@@ -90,6 +92,7 @@ test('e2e_prop_continuity_retake_selects_prior_shape_and_keeps_old_versions', as
     await page.reload(); await panel.getByLabel('검토할 제작 기준').selectOption(target!.id);
     await expect(panel.getByLabel('이어 쓸 소품 기준')).toHaveValue(base!.id);
     await expect(panel.getByLabel('같은 소품으로 판단한 근거')).toHaveValue('앞선 종이를 그대로 펼치는 원문 확인');
+    await expect(panel.getByText('이 실행의 수정 요청: 앞선 표의 가로 판형을 유지해 주세요.', { exact: true })).toBeVisible();
     expect(imageCalls).toBe(1);
   } finally { await app.close(); await service.close(); await h.close(); }
 });

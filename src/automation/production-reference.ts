@@ -16,10 +16,12 @@ import type { LoadedReference } from './image-references.js';
 import type { PlannedAssetWrite } from './plan-audio.js';
 import { AutomaticPlanProvenanceSchema } from './plan-compiler.js';
 import type { AutomaticPlanProvenance } from './plan-compiler.js';
+import { ReferenceCorrectionNoteSchema, ReferenceRetakeInputSchema } from './reference-retake-schema.js';
+import type { ReferenceRetakeInput } from './reference-retake-schema.js';
 
 export type { LoadedReference } from './image-references.js';
 
-export const ProductionReferenceBasisSchema = z.strictObject({ projectId: IdSchema, revision: z.number().int().nonnegative(), projectHash: HashSchema, resourceId: IdSchema, referenceAssetIds: z.array(IdSchema).max(MAX_IMAGE_REFERENCE_SOURCES), propContinuity: PropContinuitySchema.optional() });
+export const ProductionReferenceBasisSchema = z.strictObject({ projectId: IdSchema, revision: z.number().int().nonnegative(), projectHash: HashSchema, resourceId: IdSchema, referenceAssetIds: z.array(IdSchema).max(MAX_IMAGE_REFERENCE_SOURCES), propContinuity: PropContinuitySchema.optional(), correctionNote: ReferenceCorrectionNoteSchema.optional() });
 export type ProductionReferenceBasis = z.infer<typeof ProductionReferenceBasisSchema>;
 export type AutomaticReferenceCandidate = { project: Project; basis: ProductionReferenceBasis; writes: PlannedAssetWrite[] };
 
@@ -67,20 +69,34 @@ export function createProductionReferenceBasis(project: Project, resourceId: str
 }
 
 export function assertProductionReferenceBasis(project: Project, basis: ProductionReferenceBasis): void {
-  const current: ProductionReferenceBasis = basis.propContinuity === undefined ? createProductionReferenceBasis(project, basis.resourceId)
-    : createPropContinuityReferenceBasis(project, basis.resourceId, basis.propContinuity);
+  const current: ProductionReferenceBasis = createReferenceRetakeBasis(project, { resourceId: basis.resourceId,
+    ...(basis.propContinuity === undefined ? {} : { propContinuity: basis.propContinuity }), ...(basis.correctionNote === undefined ? {} : { correctionNote: basis.correctionNote }) });
   if (stableJsonStringify(current) !== stableJsonStringify(ProductionReferenceBasisSchema.parse(basis))) throw contractError('AUTOMATION_STALE_PLAN', `기준 이미지 요청 이후 입력·선택이 바뀌었습니다: ${basis.resourceId}`, []);
+}
+
+/** 수정 요청은 대상의 현재 그림과 함께 전달하며 원문 설명이나 제작 계획을 재작성하지 않는다. */
+export function createReferenceRetakeBasis(project: Project, raw: ReferenceRetakeInput): ProductionReferenceBasis {
+  const input = ReferenceRetakeInputSchema.parse(raw);
+  const basis = input.propContinuity === undefined ? createProductionReferenceBasis(project, input.resourceId)
+    : createPropContinuityReferenceBasis(project, input.resourceId, input.propContinuity);
+  if (input.correctionNote === undefined) return basis;
+  const resource = requireResource(project, input.resourceId);
+  if (resource.referenceAssetId === null) throw contractError('AUTOMATION_REFERENCE_RETAKE_TARGET', `${resource.name}: 수정할 기존 기준 이미지가 없습니다. 먼저 기준 이미지를 생성하세요.`, []);
+  return ProductionReferenceBasisSchema.parse({ ...basis, correctionNote: input.correctionNote,
+    referenceAssetIds: [...new Set([...basis.referenceAssetIds, resource.referenceAssetId])] });
 }
 
 async function referenceInput(project: Project, basis: ProductionReferenceBasis, loaded: readonly LoadedReference[]): Promise<ImageGenerationInput> {
   assertProductionReferenceBasis(project, basis);
   const resource = requireResource(project, basis.resourceId);
-  const references = await verifiedImageReferences(project, basis.referenceAssetIds, loaded, (asset): string => resource.kind === 'location'
+  const references = await verifiedImageReferences(project, basis.referenceAssetIds, loaded, (asset): string => basis.correctionNote !== undefined && asset.id === resource.referenceAssetId
+    ? `${asset.id}: 수정 대상의 이전 이미지다. 수정 요청에 해당하는 부분을 고치고 나머지 인물·물성·형태는 현재 설명과 동일 소품 기준에 맞춰 유지한다. 이전 그림의 오류를 그대로 반복하지 않는다.`
+    : resource.kind === 'location'
     ? `${asset.id}: 동일 장소의 기본 공간이다. 벽·창문·출입구의 위치와 연결, 고정 가구의 형태·배치를 유지한다. 현재 설명에 명시된 조명·시간대·상태 변화만 적용하며 공간을 새로 설계하거나 좌우 반전하지 않는다. 기본 공간 설명: ${asset.description}`
     : resource.kind === 'prop'
       ? `${asset.id}: 같은 소품의 앞선 기준이다. 판형·비율·색상·재질·표 구획·고정된 구조를 유지한다. 젖음·손상·내용·배치는 현재 설명에서 확인한 상태만 적용한다. 현재 설명에 없는 건조·복원·새 글자·사건을 만들지 않는다. 이름이 비슷한 다른 소품으로 교체하지 않는다.`
       : `${asset.id}: 동일 인물의 얼굴·체형만 유지. 의상·자세·상태는 현재 설명을 적용.`);
-  return { prompt: `콘티 제작용 ${resource.kind} 기준 이미지 한 장. 이야기 장면이나 사건을 추가하지 않는다. 글자·로고·정확한 메시지는 그리지 않는다. 인물은 외형과 현재 의상이 잘 보이게, 공간은 비어 있는 세트와 구조가 보이게, 소품은 대상만 명확하게 묘사한다. 사용자 검토 전 제작 제안이다.\n${JSON.stringify({ name: resource.name, description: resource.description, propContinuity: basis.propContinuity ?? resource.propContinuity ?? null, profile: project.profile })}`,
+  return { prompt: `콘티 제작용 ${resource.kind} 기준 이미지 한 장. 이야기 장면이나 사건을 추가하지 않는다. 글자·로고·정확한 메시지는 그리지 않는다. 인물은 외형과 현재 의상이 잘 보이게, 공간은 비어 있는 세트와 구조가 보이게, 소품은 대상만 명확하게 묘사한다. 수정 요청은 시각 표현 보완이며 원문 사건·인물 정체·정보 공개 조건을 바꾸는 권한이 아니다. 사용자 검토 전 제작 제안이다.\n${JSON.stringify({ name: resource.name, description: resource.description, propContinuity: basis.propContinuity ?? resource.propContinuity ?? null, correctionNote: basis.correctionNote ?? null, profile: project.profile })}`,
     aspectRatio: { width: project.profile.aspectWidth, height: project.profile.aspectHeight }, references };
 }
 
@@ -112,7 +128,7 @@ export async function compileAutomaticReference(inputProject: Project, inputBasi
   const referencePresentation = validateImageReferencePresentation(result.referencePresentation, basis.referenceAssetIds.map((id): string => project.assets.find((asset): boolean => asset.id === id)!.sha256));
   const record: GenerationRecord = { id: provenance.generationId, provider: 'codex-app', model: result.model, modelVersion: null, requestId: provenance.generationId,
     prompt: stableJsonStringify({ input: provenance.prompt, revisedPrompt: result.revisedPrompt, turnId: result.turnId, itemId: result.itemId, basis, referencePresentation }),
-    templateVersion: 'automatic-production-reference-1.2.0', seed: null, referenceHashes: [...new Set([basis.projectHash, ...basis.referenceAssetIds.map((id): string => project.assets.find((value): boolean => value.id === id)!.sha256)])],
+    templateVersion: 'automatic-production-reference-1.3.0', seed: null, referenceHashes: [...new Set([basis.projectHash, ...basis.referenceAssetIds.map((id): string => project.assets.find((value): boolean => value.id === id)!.sha256)])],
     resultAssetIds: [asset.id], shotIds: [...shotIds], createdAt: provenance.createdAt, generatorBuild: provenance.generatorBuild };
   const candidate: Project = ProjectSchema.parse({ ...project, assets: [...project.assets, asset], generationRecords: [...project.generationRecords, record],
     productionPlan: { resources: project.productionPlan!.resources.map((value) => value.id === resource.id ? { ...value, referenceAssetId: asset.id, ...(basis.propContinuity === undefined ? {} : { propContinuity: basis.propContinuity }) } : value), segments: project.productionPlan!.segments },
