@@ -62,7 +62,8 @@ export function AutomaticProductionPanel(props: { project: Project; disabled: bo
     {current !== null && <div className="automatic-status" aria-live="polite"><strong>{statusLabels[current.status]}</strong>
       <p>{completed} / 현재 등록 {current.jobs.length}개 반영 · 저장 버전 {current.revision}{running === undefined ? '' : ` · ${taskLabels[running.task.kind]}`}</p>
       <progress aria-label="자동 제작 진행" value={completed} max={Math.max(1, current.jobs.length)} />
-      <p>그림 {current.imageAttempts}회 시도 · 누적 실행 {Math.round(current.activeMs / 60000)}분 · 반영 후보 {(current.stagedBytes / 1048576).toFixed(1)}MB</p>
+      <p>그림 {current.imageAttempts}회 시도 · 기록된 실행 시간 {Math.round(current.activeMs / 60000)}분 · 반영 후보 {(current.stagedBytes / 1048576).toFixed(1)}MB</p>
+      {current.status === 'running' && current.workerActive && <p>현재 처리 중인 시간은 작업이 끝나거나 중지될 때 합산됩니다.</p>}
       {runDensity !== null && <p>표현 수준: {densityDetailLabels[runDensity.detail]} · 같은 그림 {runDensity.longHoldReviewMs / 1000}초 초과 시 검토</p>}
       {runDensity !== null && !currentScope && <p>최신 생성 결과를 불러오면 현재 컷·프레임 수와 긴 그림 표시 구간을 확인할 수 있습니다.</p>}
       {densityReview !== null && <section aria-label="콘티 표현 검토"><p>불러온 콘티 버전 {densityReview.revision} · {densityReview.shotCount}컷 · 프레임 {densityReview.frameCount}개 · 그림 대상 {densityReview.imageFrameCount}개 · 검은 화면/이전 화면 유지 {densityReview.excludedImageFrameCount}개</p>
