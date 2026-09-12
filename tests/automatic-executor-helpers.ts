@@ -44,8 +44,8 @@ export async function createExecutionHarness(fault: AutomaticApplicationFault): 
     model: { run: async (input) => {
       const project = await projects.read(source.projectId);
       const output = JSON.stringify(input.outputSchema).includes('"volumeDb"') ? { schemaVersion: '1.0.0', segmentId: 'demonstration', summary: '실제 음원 검토', cues: project.audioCues.filter((cue): boolean => cue.assetId !== null && cue.timingStatus === 'measured').map((cue) => ({ cueId: cue.id, volumeDb: -3, fadeInMs: 0, fadeOutMs: 0, reason: '가이드 발화를 원래 파일보다 조금 낮춰 검토합니다.' })) } : JSON.stringify(input.outputSchema).includes('"preset"') ? { schemaVersion: '1.0.0', cuePresentations: currentTextPresentations(project), textTypography: project.textTypography ?? await testTextTypography(), preset: { ...project.textLayout, fontSize: 0.045 }, reason: '문구 길이와 세로 화면비에 맞춰 글자 크기를 정했습니다.' } : JSON.stringify(input.outputSchema).includes('"resources"') ? {
-        schemaVersion: '1.0.0', profile: { ...project.profile, medium: 'ai', visualStyle: '밝은 연필 콘티' }, profileReason: '시연 동작을 검토할 제작 기준',
-        resources: [{ key: 'bench', kind: 'location', subjectId: 'workbench', name: '작업대', description: '밝은 나무 작업대', reason: '화분 시연 장소', sourceRefs: project.dataset.locations[0]!.sourceRefs, sourceUnitIds: [], referenceAssetId: null }],
+        schemaVersion: '1.1.0', profile: { ...project.profile, medium: 'ai', visualStyle: '밝은 연필 콘티' }, profileReason: '시연 동작을 검토할 제작 기준',
+        resources: [{ key: 'bench', kind: 'location', subjectId: 'workbench', name: '작업대', description: '밝은 나무 작업대', reason: '화분 시연 장소', sourceRefs: project.dataset.locations[0]!.sourceRefs, sourceUnitIds: [], referenceAssetId: null, propContinuity: null }],
         segments: [{ segmentId: 'demonstration', resourceKeys: ['bench'], locationResourceKey: 'bench', continuityGroup: 'plant', entryState: '흙이 보이는 화분', exitState: '물을 준 화분', reason: '동작의 연속성' }],
       } : demonstrationPlan(project);
       return { model: 'test-planner', turnId: randomUUID(), result: z.json().parse(output) };

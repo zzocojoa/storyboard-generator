@@ -1,7 +1,7 @@
 import { z } from 'zod';
-import { HashSchema, IdSchema } from '../domain/schema.js';
+import { HashSchema, IdSchema, PropContinuitySchema } from '../domain/schema.js';
 
-export const ReferenceRetakeInputSchema = z.strictObject({ resourceId: IdSchema });
+export const ReferenceRetakeInputSchema = z.strictObject({ resourceId: IdSchema, propContinuity: PropContinuitySchema.optional() });
 export const ReferenceRetakeIntentSchema = ReferenceRetakeInputSchema.extend({
   kind: z.literal('reference-retake'), previousAssetId: IdSchema, sourceHash: HashSchema,
 });

@@ -4,7 +4,7 @@
   "properties": {
     "schemaVersion": {
       "type": "string",
-      "const": "1.23.0"
+      "const": "1.24.0"
     },
     "projectId": {
       "$ref": "#/$defs/__schema0"
@@ -167,6 +167,24 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "propContinuity": {
+                    "type": "object",
+                    "properties": {
+                      "resourceId": {
+                        "$ref": "#/$defs/__schema0"
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 4000
+                      }
+                    },
+                    "required": [
+                      "resourceId",
+                      "reason"
+                    ],
+                    "additionalProperties": false
                   }
                 },
                 "required": [

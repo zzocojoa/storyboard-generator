@@ -170,8 +170,8 @@ describe('프레임 자동 그림', (): void => {
     expect(automaticFramePrompt(project, createAutomaticFrameBasis(project, earlyId))).not.toContain('붉은 봉투');
     expect(automaticFramePrompt(project, createAutomaticFrameBasis(project, lateId))).toContain('붉은 봉투');
     project = compileAutomaticProductionPlan(project, createProductionPlanBasis(project, ['demonstration']), {
-      schemaVersion: '1.0.0', profile: project.profile, profileReason: '기존 설정 유지',
-      resources: [{ key: 'bench', kind: 'location', subjectId: 'workbench', name: '후반 작업대', description: '후반 공개된 봉투가 놓인 작업대', reason: '후반 지문 기준', sourceRefs: project.dataset.units.find((unit): boolean => unit.id === '동작')!.sourceRefs, sourceUnitIds: ['late-action'], referenceAssetId: 'bench-reference' }],
+      schemaVersion: '1.1.0', profile: project.profile, profileReason: '기존 설정 유지',
+      resources: [{ key: 'bench', kind: 'location', subjectId: 'workbench', name: '후반 작업대', description: '후반 공개된 봉투가 놓인 작업대', reason: '후반 지문 기준', sourceRefs: project.dataset.units.find((unit): boolean => unit.id === '동작')!.sourceRefs, sourceUnitIds: ['late-action'], referenceAssetId: 'bench-reference', propContinuity: null }],
       segments: [{ segmentId: 'demonstration', resourceKeys: ['bench'], locationResourceKey: 'bench', continuityGroup: 'bench', entryState: '작업대', exitState: '작업대', reason: '작업대 기준' }],
     }, { ...automaticPlanProvenance(), generationId: 'late-resource' }).project;
     expect(() => createAutomaticFrameBasis(project, earlyId)).toThrow(expect.objectContaining({ code: 'AUTOMATION_FRAME_REFERENCE_EARLY' }));

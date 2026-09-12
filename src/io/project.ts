@@ -284,11 +284,20 @@ function migrate122To123(input: JsonObject): JsonObject {
   return { ...input, schemaVersion: '1.23.0' };
 }
 
+function migrate123To124(input: JsonObject): JsonObject {
+  if (input.schemaVersion !== '1.23.0') return input;
+  const resources = isJsonObject(input.productionPlan) ? input.productionPlan.resources : undefined;
+  if (Array.isArray(resources) && resources.some((resource): boolean => isJsonObject(resource) && 'propContinuity' in resource)) {
+    throw contractError('UNSUPPORTED_LEGACY_PROP_CONTINUITY', '1.23 이전 저장본의 소품 연결을 추측하지 않습니다. 버전과 propContinuity를 확인하세요.', []);
+  }
+  return { ...input, schemaVersion: '1.24.0' };
+}
+
 /** 실제 저장 형식에서 정의된 순방향 변환만 수행한다. 과거 버전을 역으로 추측하지 않는다. */
 function projectMigrationInputs(input: unknown): readonly unknown[] {
   if (!isJsonObject(input)) return [input];
   const migrations: readonly ((value: JsonObject) => JsonObject)[] = [migrate10To11, migrate11To12, migrate12To13,
-    migrate13To14, migrate14To15, migrate15To16, migrate16To17, migrate17To18, migrate18To19, migrate19To110, migrate110To111, migrate111To112, migrate112To113, migrate113To114, migrate114To115, migrate115To116, migrate116To117, migrate117To118, migrate118To119, migrate119To120, migrate120To121, migrate121To122, migrate122To123];
+    migrate13To14, migrate14To15, migrate15To16, migrate16To17, migrate17To18, migrate18To19, migrate19To110, migrate110To111, migrate111To112, migrate112To113, migrate113To114, migrate114To115, migrate115To116, migrate116To117, migrate117To118, migrate118To119, migrate119To120, migrate120To121, migrate121To122, migrate122To123, migrate123To124];
   return migrations.reduce<readonly JsonObject[]>((states, migrate): readonly JsonObject[] => {
     const previous: JsonObject = states[states.length - 1]!;
     const next: JsonObject = migrate(previous);

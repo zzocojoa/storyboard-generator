@@ -49,12 +49,12 @@ describe('Git 확인 불가 Provenance와 1.9 이관', (): void => {
     expect(readBuildGitState(await temporaryRoot())).toEqual({ gitStateAvailable: false, headCommitSha: null, worktreeDirty: null, generationInputsDirty: null });
   });
   it('current_build_manifest_uses_provenance_version_3', (): void => {
-    expect(readBuildManifest()).toMatchObject({ provenanceVersion: 3, gitStateAvailable: true, projectSchemaVersion: '1.23.0' });
+    expect(readBuildManifest()).toMatchObject({ provenanceVersion: 3, gitStateAvailable: true, projectSchemaVersion: '1.24.0' });
     expect(generatorBuildProvenance(readBuildManifest())).toHaveProperty('gitStateAvailable', true);
   });
   it('project_18_to_19_migration_is_idempotent', async (): Promise<void> => {
     const migrated: Project = parseProject(await legacyProject());
-    expect(migrated.schemaVersion).toBe('1.23.0'); expect(parseProject(migrated)).toEqual(migrated);
+    expect(migrated.schemaVersion).toBe('1.24.0'); expect(parseProject(migrated)).toEqual(migrated);
   });
   it('project_18_to_19_preserves_original_data', async (): Promise<void> => {
     const input: object = await legacyProject(); const before: string = JSON.stringify(input); const migrated: Project = parseProject(input);

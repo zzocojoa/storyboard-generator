@@ -5,9 +5,12 @@ export const ProductionPlanBasisSchema = z.strictObject({
   projectId: IdSchema, revision: z.number().int().nonnegative(), projectHash: HashSchema,
   segmentIds: z.array(IdSchema).min(1).max(4096),
 });
-export const AutomaticProductionResourceSchema = ProductionResourceSchema.omit({ id: true, generationId: true }).extend({ key: IdSchema.max(80) });
+export const AutomaticProductionResourceSchema = ProductionResourceSchema.omit({ id: true, generationId: true, propContinuity: true }).extend({
+  key: IdSchema.max(80),
+  propContinuity: z.strictObject({ resourceKey: IdSchema, reason: z.string().trim().min(1).max(4000) }).nullable(),
+});
 export const AutomaticProductionPlanSchema = z.strictObject({
-  schemaVersion: z.literal('1.0.0'),
+  schemaVersion: z.literal('1.1.0'),
   profile: ProfileSchema.extend({ medium: z.enum(['live-action', 'ai', 'hybrid']), visualStyle: z.string().trim().min(1).max(4000) }),
   profileReason: z.string().trim().min(1).max(4000),
   resources: z.array(AutomaticProductionResourceSchema).max(256),

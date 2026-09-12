@@ -118,7 +118,7 @@ it('shared_audio_grouping_requires_exact_provenance_and_migration_never_fabricat
   const separate: Project = { ...project, dataset: { ...project.dataset, instructions: project.dataset.instructions.map((instruction) => instruction.id === 'shared-ambient-other' ? { ...instruction, sourceRefs: [{ ...instruction.sourceRefs[0]!, locator: 'line:41' }] } : instruction) } };
   expect(sharedAudioInstructions(separate, ambient)).toEqual([ambient]);
   const old = { ...project, schemaVersion: '1.21.0' }; const bytes: string = JSON.stringify(old);
-  expect(migrateProjectInput(old)).toEqual({ ...old, schemaVersion: '1.23.0' }); expect(JSON.stringify(old)).toBe(bytes);
+  expect(migrateProjectInput(old)).toEqual({ ...old, schemaVersion: '1.24.0' }); expect(JSON.stringify(old)).toBe(bytes);
   const generated = compileAudioInstructionPlan(project, 'demonstration', scopedPlan(project, 'demonstration'), automaticPlanProvenance());
   expect(() => migrateProjectInput({ ...generated, schemaVersion: '1.21.0' })).toThrowError(expect.objectContaining({ code: 'UNSUPPORTED_LEGACY_SHARED_AUDIO_SCOPE' }));
 });

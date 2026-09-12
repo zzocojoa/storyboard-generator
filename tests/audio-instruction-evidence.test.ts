@@ -70,7 +70,7 @@ it('legacy_empty_automatic_sound_is_preserved_blocked_and_replanned_without_repl
   const generated = compileAudioInstructionPlan(initial, 'demonstration', proposed(), automaticPlanProvenance());
   const legacy = { ...generated, schemaVersion: '1.20.0', audioInstructionDecisions: generated.audioInstructionDecisions!.map(({ sourceEvidence: _evidence, sharedScope: _scope, occurrences: _occurrences, ...decision }) => decision) };
   const bytes: string = JSON.stringify(legacy); const project = parseProject(legacy);
-  expect(JSON.stringify(legacy)).toBe(bytes); expect(project.schemaVersion).toBe('1.23.0');
+  expect(JSON.stringify(legacy)).toBe(bytes); expect(project.schemaVersion).toBe('1.24.0');
   const cue = project.audioCues.find((value): boolean => value.instructionId === 'ambient-instruction')!;
   expect(storyboardAudioIssues(project, cue)).toContainEqual(expect.objectContaining({ code: 'AUDIO_INSTRUCTION_CONTENT_REQUIRED' }));
   expect(() => confirmAudioInstruction(project, 'ambient-instruction')).toThrow();

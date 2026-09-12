@@ -24,6 +24,8 @@
 
 ## 현재 상태와 다음 작업
 
+- Project 1.24는 같은 소품의 앞선 기준을 명시적으로 연결한다. 계획·선택 재생성에서 이전 Asset 바이트와 동일성 근거를 결속하며 원형을 먼저 준비한다. 미래·순환·다른 종류 참조를 차단하고 이전 파일·승인·원문은 보존한다. 1.23 저장본에 연결을 추측하지 않는다. 세부 계약은 자동 제작 Design을 따른다.
+
 - Project 1.23은 하나의 음향 지시 안의 여러 발생을 원문 인용·트랙·정보 공개 조건별로 나눈다. 기존 컷의 미확인 음향 발생도 실제 음원 없이 시간 배치를 제안하며 원문·기존 컷·보호된 자산을 보존한다. 같은 소리의 지문/효과음은 보충 근거로 묶어 기존 트랙을 재사용한다. 1.22 저장본은 메모리에서 버전만 이관한다. 상세 계약과 검증 범위는 자동 제작 Design·Report를 따른다.
 
 - Project 1.22는 같은 출처의 공통 음향 지시에 전체 적용 구간·정확한 대본 인용·판단 근거를 기록한다. 후속 구간은 유효한 공통 판단을 이어받고 기존 음향 연결에도 공개·검토 조건을 적용한다. 다른 적용 구간의 원문 변경은 공통 판단만 재검토하며 수동 연결·실제 음원·이전 기록을 보존한다. 이전 1.21 저장본은 메모리에서 버전만 이관하고 적용 근거를 만들지 않는다. 상세 계약은 자동 제작 Design, 실제 검증 범위는 실행 Report를 따른다.
@@ -52,7 +54,7 @@
 
 - 편집 UI는 제작 현황·제작 설정·컷 편집·검토/출력 작업 공간을 제공한다. 선택 컷 패널은 연출·원문 연결·그림·음성·글자로 구분하며 탭 이동 시 입력 폼의 마운트를 유지한다. 검토 항목은 실제 엔티티의 구간·컷으로 연결하고 최종 출력 활성화는 서버 Final Readiness에 따른다. 제작 현황의 자동 제작은 서버가 Codex App 실행을 직접 이어가며, 개별 생성 버튼은 기존 대기 요청 등록이다. 개별 요청용 Codex 실행 문구에는 현재 Project ID를 포함한다. 전체 요청 상태와 현재 프로젝트 완성도를 구분한다. 시각 계약은 `DESIGN.md`, 실제 사용 흐름은 README를 따른다.
 
-- Plan과 [Design](docs/02-design/features/storyboard-generator.design.md), 1.23.0 공통 데이터 모델, `native-v1`·`production-v1`·`production-documents-v1` 입력 어댑터, 검증·편집 함수, CLI, 로컬 저장/API, 웹 편집 화면, Codex App 요청·결과 브리지, Proposal Frame Plan과 Anchor 기반 Key Frame, `sourced`·`black`·`hold-previous` 출력, 독립 오디오/글자 트랙·컷 전환 편집, Text Mapping·독립 Placement Information·Source Temporal Anchor·동적 Information Gate·Text/Frame/Audio 공통 출력 인터록, 실제 PCM WAV 등록·이전 WAV 정규화 복구, Cue 범위에 묶인 시간순 재생, queue 제한 Worker 오디오 변환, 중앙 Asset 외래 키 closure, 전체 Version 합집합 Historical Generation Record 감사, symlink-safe 파일 연산과 journal version 3·lock version 3 기반 update·initial create 복구, 공유 주기 Process Heartbeat, 잘못된 Recovery Marker 격리, 프로젝트별 Active Create·Active Update와 영속 recovery block, 현재 출력 참조 Asset Integrity API, 범위가 명시된 HTTP 오류와 Web 차단 상태, Absolute·Duration timecode, JSON·CSV·PDF 출력이 있다. 실행 방법은 `README.md`, 실제 명령과 의존성은 `package.json`을 기준으로 확인한다.
+- Plan과 [Design](docs/02-design/features/storyboard-generator.design.md), 1.24.0 공통 데이터 모델, `native-v1`·`production-v1`·`production-documents-v1` 입력 어댑터, 검증·편집 함수, CLI, 로컬 저장/API, 웹 편집 화면, Codex App 요청·결과 브리지, Proposal Frame Plan과 Anchor 기반 Key Frame, `sourced`·`black`·`hold-previous` 출력, 독립 오디오/글자 트랙·컷 전환 편집, Text Mapping·독립 Placement Information·Source Temporal Anchor·동적 Information Gate·Text/Frame/Audio 공통 출력 인터록, 실제 PCM WAV 등록·이전 WAV 정규화 복구, Cue 범위에 묶인 시간순 재생, queue 제한 Worker 오디오 변환, 중앙 Asset 외래 키 closure, 전체 Version 합집합 Historical Generation Record 감사, symlink-safe 파일 연산과 journal version 3·lock version 3 기반 update·initial create 복구, 공유 주기 Process Heartbeat, 잘못된 Recovery Marker 격리, 프로젝트별 Active Create·Active Update와 영속 recovery block, 현재 출력 참조 Asset Integrity API, 범위가 명시된 HTTP 오류와 Web 차단 상태, Absolute·Duration timecode, JSON·CSV·PDF 출력이 있다. 실행 방법은 `README.md`, 실제 명령과 의존성은 `package.json`을 기준으로 확인한다.
 - 합성 범용 프로젝트와 실제 제작 프로젝트 PRJ-007의 `SEG-008`에서 Codex App의 컷 제안·내장 이미지·로컬 가이드 음성 요청과 결과 반영을 끝까지 확인했다. 실제 사례는 5개 컷의 시간 합계, 이미지 재생성과 시각 승인, 측정된 음성 길이를 확인했다. 생성 요청의 완료·실패·대기, 처리 시간, 반복 생성 횟수와 실패 원인을 영속 기록에서 집계해 화면에 표시한다. 요청별 비용은 Codex App에서 제공하지 않으므로 미측정으로 명시한다. 전체 제작 품질 검증은 계획서의 다른 대표 예외와 전체 분량으로 확대해야 한다.
 - 구현 요청을 받으면 현재 설계와 코드 상태를 확인하고, 누락된 설계를 요청 범위 안에서 구체화한 다음 구현한다. 이미 완료한 단계를 다시 시작하지 않는다.
 - 사용자가 생성 실행 환경을 Codex App으로 확정했다. `OPENAI_API_KEY`나 OpenAI SDK를 요구하지 않는다. 컷 제안은 현재 Codex 모델, 이미지는 내장 `image_gen`, 가이드 음성은 설정된 로컬 macOS 음성을 사용한다. 화면비·그림체·패널 표현·실사/AI/혼합 제작 방식은 프로젝트별 설정으로 다룬다.

@@ -1,4 +1,5 @@
 import { issue } from './errors.js';
+import { propContinuityIssues } from './prop-continuity.js';
 import type { Asset, Issue, ProductionResource, Project, SourceRef } from './schema.js';
 
 export type VisualLocation = { id: string; name: string; description: string };
@@ -47,6 +48,7 @@ export function productionPlanIssues(project: Project): Issue[] {
     const subjectValid: boolean = resource.kind === 'character' ? project.dataset.people.some((person): boolean => person.id === resource.subjectId)
       : resource.kind === 'location' ? resource.subjectId === null || project.dataset.locations.some((location): boolean => location.id === resource.subjectId) : resource.subjectId === null;
     return [
+      ...(resource.propContinuity === undefined ? [] : propContinuityIssues(project, resource, resource.propContinuity).filter((): boolean => active)),
       ...(subjectValid ? [] : [failure(resource.id, 'subjectId', '제작 기준의 원본 인물·장소 연결이 유효하지 않습니다. 소품은 독립 제작 자원으로 지정하세요.')]),
       ...(project.dataset.people.some((value): boolean => value.id === resource.id) || project.dataset.locations.some((value): boolean => value.id === resource.id) ? [failure(resource.id, 'id', '제작 자원 ID와 원본 ID가 충돌합니다.')] : []),
       ...duplicates(resource.sourceUnitIds, 'sourceUnitIds'),

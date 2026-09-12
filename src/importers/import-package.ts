@@ -27,7 +27,7 @@ export function importPackage(input: unknown): Project {
   const issues: Issue[] = [...normalized.issues, ...validateDataset(dataset, snapshots)];
   assertNoErrors(issues, 'INVALID_SOURCE_DATASET');
   return ProjectSchema.parse({
-    schemaVersion: '1.23.0', projectId: dataset.projectId, title: dataset.title, revision: 0, profile: payload.handoff.profile, productionPlan: null, textLayout: storyboardTextPreset(), textLayoutControl: textLayoutControl('automatic'), textReadability: storyboardReadingPreset(),
+    schemaVersion: '1.24.0', projectId: dataset.projectId, title: dataset.title, revision: 0, profile: payload.handoff.profile, productionPlan: null, textLayout: storyboardTextPreset(), textLayoutControl: textLayoutControl('automatic'), textReadability: storyboardReadingPreset(),
     handoff: payload.handoff, sources: snapshots, dataset, importIssues: issues,
     textMappingDecisions, textPlacementInformationDecisions, shots: [], frames: [], audioCues: [], textCues: [], assets: [], generationRecords: [],
   });

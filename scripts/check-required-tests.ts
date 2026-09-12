@@ -3,6 +3,14 @@ import { extname, join } from 'node:path';
 import { contractError } from '../src/domain/errors.js';
 
 const REQUIRED_TEST_NAMES: readonly string[] = [
+  'prop_continuity_plan_resolves_new_keys_and_orders_reference_dependencies',
+  'prop_continuity_rejects_foreign_future_cyclic_and_wrong_kind_links',
+  'prop_continuity_retake_passes_verified_base_bytes_and_commits_only_with_new_image',
+  'prop_continuity_retake_rechecks_selection_and_preserves_protected_shots_on_failure',
+  'prop_continuity_source_update_includes_indirect_resource_evidence',
+  'prop_continuity_legacy_migration_preserves_absent_links_and_rejects_fabricated_evidence',
+  'e2e_prop_continuity_retake_selects_prior_shape_and_keeps_old_versions',
+
   'old_screen_receives_actionable_version_error_without_retrying_project_read',
   'committed_mutation_response_mismatch_does_not_resubmit_or_claim_save_failure',
   'matching_version_still_requires_full_project_validation_and_preserves_valid_response',

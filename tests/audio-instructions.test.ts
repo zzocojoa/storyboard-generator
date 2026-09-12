@@ -102,7 +102,7 @@ describe('대본과 구별한 음향 지시 연결', (): void => {
   it('1.19 저장본은 원문·트랙을 보존하고 새로운 지시 필드를 소급 허용하지 않는다', async (): Promise<void> => {
     const current = await audioInstructionFixture(); const legacy = { ...current, schemaVersion: '1.19.0' }; const bytes = JSON.stringify(legacy);
     const migrated = parseProject(legacy);
-    expect(migrated).toEqual({ ...legacy, schemaVersion: '1.23.0' }); expect(JSON.stringify(legacy)).toBe(bytes);
+    expect(migrated).toEqual({ ...legacy, schemaVersion: '1.24.0' }); expect(JSON.stringify(legacy)).toBe(bytes);
     expect(() => parseProject({ ...legacy, audioInstructionDecisions: [] })).toThrowError(expect.objectContaining({ code: 'UNSUPPORTED_LEGACY_AUDIO_INSTRUCTIONS' }));
   });
 

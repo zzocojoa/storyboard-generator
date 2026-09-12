@@ -56,13 +56,16 @@ export function compileAutomaticProductionPlan(project: Project, basis: Producti
   if (new Set(keys).size !== keys.length || keys.some((key): boolean => project.productionPlan?.resources.some((resource): boolean => resource.id === key) ?? false)) {
     throw contractError('AUTOMATION_PRODUCTION_RESOURCE', '새 제작 기준의 key는 중복되거나 기존 자원 ID와 같을 수 없습니다.', []);
   }
-  const resources: ProductionResource[] = plan.resources.map(({ key: _key, ...resource }, index): ProductionResource =>
-    ({ ...resource, id: `${provenance.generationId}:resource:${index + 1}`, generationId: provenance.generationId }));
+  const resources: ProductionResource[] = plan.resources.map(({ key: _key, propContinuity, ...resource }, index): ProductionResource => {
+    const baseIndex: number = propContinuity === null ? -1 : plan.resources.findIndex((value): boolean => value.key === propContinuity.resourceKey);
+    return { ...resource, id: `${provenance.generationId}:resource:${index + 1}`, generationId: provenance.generationId,
+      ...(propContinuity === null ? {} : { propContinuity: { resourceId: baseIndex < 0 ? propContinuity.resourceKey : `${provenance.generationId}:resource:${baseIndex + 1}`, reason: propContinuity.reason } }) };
+  });
   const segments: ProductionSegment[] = plannedSegments(project, basis, plan, resources, provenance.generationId);
   if (resources.some((resource): boolean => !segments.some((segment): boolean => segment.resourceIds.includes(resource.id)))) throw contractError('AUTOMATION_PRODUCTION_RESOURCE', '사용하지 않는 제작 기준 이미지를 생성하지 않습니다. 모든 새 자원을 선택 구간에 연결하세요.', []);
   const record: GenerationRecord = { id: provenance.generationId, provider: 'codex-app', model: provenance.model, modelVersion: null,
     requestId: provenance.generationId, prompt: stableJsonStringify({ input: provenance.prompt, output: plan, turnId: provenance.turnId, basis }),
-    templateVersion: 'automatic-production-plan-1.0.0', seed: null, referenceHashes: [basis.projectHash], resultAssetIds: [], shotIds: [],
+    templateVersion: 'automatic-production-plan-1.1.0', seed: null, referenceHashes: [basis.projectHash], resultAssetIds: [], shotIds: [],
     createdAt: provenance.createdAt, generatorBuild: provenance.generatorBuild };
   const profileChanged: boolean = stableJsonStringify(project.profile) !== stableJsonStringify(plan.profile);
   const affected: Set<string> = new Set(project.shots.filter((shot): boolean => profileChanged || basis.segmentIds.includes(shot.segmentId)).map((shot): string => shot.id));

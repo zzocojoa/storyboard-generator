@@ -1,3 +1,4 @@
+import { productionResourceAncestors } from './prop-continuity.js';
 import { audioCueSource, audioInstructionMatches } from './audio-source.js';
 import { carrySourceTextPresentation } from './text-presentation.js';
 import { assertNoErrors, contractError } from './errors.js';
@@ -68,13 +69,23 @@ export function sourceImpact(current: Project, incoming: Project): SourceImpactR
     if (shot.presence.some((presence): boolean => personIds.includes(presence.personId)) || (shot.visualLocationId !== null && locationIds.includes(shot.visualLocationId))) impacted.add(shot.segmentId);
   }
   for (const plan of current.productionPlan?.segments ?? []) {
-    const resources = current.productionPlan?.resources.filter((resource): boolean => plan.resourceIds.includes(resource.id)) ?? [];
+    const resources = (current.productionPlan?.resources.filter((resource): boolean => plan.resourceIds.includes(resource.id)) ?? []).flatMap((resource) => productionResourceAncestors(current, resource));
     if (resources.some((resource): boolean => resource.sourceUnitIds.some((id): boolean => unitIds.includes(id))
       || resource.kind === 'character' && resource.subjectId !== null && personIds.includes(resource.subjectId)
       || resource.kind === 'location' && resource.subjectId !== null && locationIds.includes(resource.subjectId))) impacted.add(plan.segmentId);
   }
   if (JSON.stringify(current.handoff.profile) !== JSON.stringify(incoming.handoff.profile)) {
     for (const segment of [...current.dataset.segments, ...incoming.dataset.segments]) impacted.add(segment.id);
+  }
+  // 원형이 쓰인 구간이 사라지거나 바뀌면 그 원형을 이어 쓰는 변형도 다시 계획한다.
+  let previousImpactSize: number = -1;
+  while (previousImpactSize !== impacted.size) {
+    previousImpactSize = impacted.size;
+    const resourceIds: Set<string> = new Set((current.productionPlan?.segments ?? []).filter((plan): boolean => impacted.has(plan.segmentId)).flatMap((plan): string[] => plan.resourceIds));
+    for (const plan of current.productionPlan?.segments ?? []) {
+      const resources = current.productionPlan?.resources.filter((resource): boolean => plan.resourceIds.includes(resource.id)) ?? [];
+      if (resources.some((resource): boolean => productionResourceAncestors(current, resource).slice(1).some((ancestor): boolean => resourceIds.has(ancestor.id)))) impacted.add(plan.segmentId);
+    }
   }
   const impactedSegmentIds: string[] = [...impacted];
   const impactedShotIds: string[] = current.shots.filter((shot: Shot): boolean => impacted.has(shot.segmentId)).map((shot: Shot): string => shot.id);

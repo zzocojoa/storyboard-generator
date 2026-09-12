@@ -85,7 +85,7 @@ describe('실제 글꼴의 공통 글자 배치', (): void => {
     const fixture = await finalFixture(); const legacy = { ...legacyTextProject(fixture.project), schemaVersion: '1.12.0' };
     const original: string = stableJsonStringify(legacy); const evidence = parseProjectSnapshotEvidence(legacy);
     expect(evidence.projectionHashes).toContain(sha256Text(original)); expect(stableJsonStringify(legacy)).toBe(original);
-    expect(evidence.project).toEqual({ ...legacy, schemaVersion: '1.23.0', textLayout: storyboardTextPreset(), textReadability: fixture.project.textReadability, textLayoutControl: { version: '1.0.0', mode: 'manual', plannedInputHash: null } });
+    expect(evidence.project).toEqual({ ...legacy, schemaVersion: '1.24.0', textLayout: storyboardTextPreset(), textReadability: fixture.project.textReadability, textLayoutControl: { version: '1.0.0', mode: 'manual', plannedInputHash: null } });
     expect(parseProject(evidence.project)).toEqual(evidence.project);
     expect(() => parseProject({ ...legacy, textLayout: { unknown: '이전 값을 버리면 안 됨' } })).toThrowError(expect.objectContaining({ code: 'UNSUPPORTED_LEGACY_TEXT_LAYOUT' }));
   });

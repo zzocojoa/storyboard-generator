@@ -26,8 +26,8 @@ import { ProjectStore } from '../src/server/store.js';
 import { automaticPlanProject, automaticPlanProvenance, demonstrationPlan, stagedPlanSpeech } from './automatic-plan-helpers.js';
 
 function productionPlan(project: Project): AutomaticProductionPlan {
-  return { schemaVersion: '1.0.0', profile: { ...project.profile, medium: project.profile.medium === 'unspecified' ? 'ai' : project.profile.medium, visualStyle: project.profile.visualStyle || '밝은 흑백 연필 콘티' }, profileReason: '원문 동작을 가까이 확인할 검토용 제작 기준이다.',
-    resources: [{ key: 'bench', kind: 'location', subjectId: 'workbench', name: '밝은 작업대', description: '흰 벽 앞의 밝은 나무 작업대.', reason: '원본 작업대의 시각적 제작 제안.', sourceRefs: project.dataset.locations[0]!.sourceRefs, sourceUnitIds: [], referenceAssetId: null }],
+  return { schemaVersion: '1.1.0', profile: { ...project.profile, medium: project.profile.medium === 'unspecified' ? 'ai' : project.profile.medium, visualStyle: project.profile.visualStyle || '밝은 흑백 연필 콘티' }, profileReason: '원문 동작을 가까이 확인할 검토용 제작 기준이다.',
+    resources: [{ key: 'bench', kind: 'location', subjectId: 'workbench', name: '밝은 작업대', description: '흰 벽 앞의 밝은 나무 작업대.', reason: '원본 작업대의 시각적 제작 제안.', sourceRefs: project.dataset.locations[0]!.sourceRefs, sourceUnitIds: [], referenceAssetId: null, propContinuity: null }],
     segments: [{ segmentId: 'demonstration', resourceKeys: ['bench'], locationResourceKey: 'bench', continuityGroup: 'plant-demo', entryState: '작업대 왼쪽에서 오른쪽을 본다.', exitState: '물뿌리개를 작업대에 내려놓는다.', reason: '물주기 원문 동작을 유지한다.' }] };
 }
 
@@ -134,7 +134,7 @@ describe('자동 제작 기준', (): void => {
   it('컷 계획 출력은 현재 구간의 실제 소품·연속성 자산만 허용한다', async (): Promise<void> => {
     const source = await automaticPlanProject(); const sourcePlan = productionPlan(source);
     const plan: AutomaticProductionPlan = { ...sourcePlan,
-      resources: [...sourcePlan.resources, { key: 'can', kind: 'prop', subjectId: null, name: '물뿌리개', description: '작은 초록 물뿌리개', reason: '원문의 물주기 소품', sourceRefs: source.dataset.units.find((unit): boolean => unit.id === '동작')!.sourceRefs, sourceUnitIds: ['동작'], referenceAssetId: null }],
+      resources: [...sourcePlan.resources, { key: 'can', kind: 'prop', subjectId: null, name: '물뿌리개', description: '작은 초록 물뿌리개', reason: '원문의 물주기 소품', sourceRefs: source.dataset.units.find((unit): boolean => unit.id === '동작')!.sourceRefs, sourceUnitIds: ['동작'], referenceAssetId: null, propContinuity: null }],
       segments: sourcePlan.segments.map((segment) => ({ ...segment, resourceKeys: [...segment.resourceKeys, 'can'] })),
     };
     let project = compileAutomaticProductionPlan(source, createProductionPlanBasis(source, ['demonstration']), plan, automaticPlanProvenance()).project;
@@ -177,7 +177,7 @@ describe('자동 제작 기준', (): void => {
   it('늦은 구간의 최신 의상을 앞 구간에 재사용하지 않는다', async (): Promise<void> => {
     const source = await automaticPlanProject(); const plan = productionPlan(source);
     const person = source.dataset.people[0]!;
-    plan.resources = ['earlier', 'later'].map((key, index) => ({ key, kind: 'character', subjectId: person.id, name: person.name, description: index === 0 ? '흰 셔츠' : '검은 코트', reason: '구간별 의상 제작 제안', sourceRefs: person.sourceRefs, sourceUnitIds: [], referenceAssetId: null }));
+    plan.resources = ['earlier', 'later'].map((key, index) => ({ key, kind: 'character', subjectId: person.id, name: person.name, description: index === 0 ? '흰 셔츠' : '검은 코트', reason: '구간별 의상 제작 제안', sourceRefs: person.sourceRefs, sourceUnitIds: [], referenceAssetId: null, propContinuity: null }));
     plan.segments = ['SEG-001', 'demonstration'].map((segmentId, index) => ({ ...plan.segments[0]!, segmentId, resourceKeys: [index === 0 ? 'earlier' : 'later'], locationResourceKey: null }));
     let project = compileAutomaticProductionPlan(source, createProductionPlanBasis(source, ['SEG-001', 'demonstration']), plan, automaticPlanProvenance()).project;
     const image = await imageResult(project);
@@ -272,7 +272,7 @@ describe('자동 제작 기준', (): void => {
   it('이전 저장본의 원본과 자산을 보존하고 제작 계획을 임의로 복원하지 않는다', async (): Promise<void> => {
     const project = await automaticPlanProject(); const { productionPlan: _plan, textLayout: _textLayout, textReadability: _textReadability, textLayoutControl: _control, ...withoutPlan } = project;
     const legacy = { ...withoutPlan, schemaVersion: '1.10.0' }; const snapshot = structuredClone(legacy);
-    expect(parseProject(legacy)).toEqual({ ...project, schemaVersion: '1.23.0', productionPlan: null, textLayoutControl: { version: '1.0.0', mode: 'manual', plannedInputHash: null } });
+    expect(parseProject(legacy)).toEqual({ ...project, schemaVersion: '1.24.0', productionPlan: null, textLayoutControl: { version: '1.0.0', mode: 'manual', plannedInputHash: null } });
     expect(legacy).toEqual(snapshot);
     expect(() => parseProject({ ...legacy, productionPlan: { unknown: '보존해야 할 자료' } })).toThrowError(expect.objectContaining({ code: 'UNSUPPORTED_LEGACY_PRODUCTION_PLAN' }));
   });

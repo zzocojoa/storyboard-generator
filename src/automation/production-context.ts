@@ -29,6 +29,7 @@ export function automaticProductionContext(project: Project, basis: ProductionPl
     'sourceRefs는 실제 입력의 fileId·locator·originalId를 그대로 사용한다. sourceUnitIds는 해당 외형·상태의 근거 원문 ID다. sourceUnitIds를 지정한 상태는 같은 구간에서도 해당 원문이 공개된 프레임부터 사용할 수 있다. 기본 공간·외형은 사건 이전에도 쓸 수 있도록 원본 장소·인물의 sourceRefs로 연결하고 sourceUnitIds는 비워 둔다. 미래 구간의 상태를 앞 구간에서 쓰지 않는다. 기본 외형은 people/scenes의 근거를 쓸 수 있고 나중 의상·시간 변화는 별도 resource로 계획한다.',
     'key는 새 자원의 임시 식별자이며 서버가 영속 ID를 만든다. 기존 자원 재사용은 segments.resourceKeys에 기존 resource.id를 그대로 쓴다. 새 기준의 referenceAssetId는 null이며 재사용하는 실제 이미지가 있으면 대상·종류가 맞는 existingReferenceAssets ID를 지정한다. 파일 경로나 이미지 URL은 만들지 않는다.',
     'segments에는 요청한 구간이 각각 하나씩 필요하다. resourceKeys에 사용한 기준을 연결하고 locationResourceKey는 그 안의 location 자원을 가리킨다. 음성 전용 화자를 화면 인물로 강제하지 않는다. 인물이 없는 제품·풍경 콘티도 정상이다.',
+    '모든 새 자원에 propContinuity를 명시한다. 다른 소품·인물·장소는 null이다. 같은 물건의 상태별 변형만 {resourceKey, reason}으로 앞선 소품에 연결한다. 기존 자원은 실제 resource.id, 이번 계획의 자원은 key를 쓴다. reason에는 sourceRefs의 원문을 근거로 동일한 물건인 이유와 유지할 판형·구획·재질·변경 상태를 구별한다. 이름 유사성만으로 연결하거나 미래 상태를 앞선 기준에 참조하지 않는다. 기본 물건은 먼저 계획하고 상태 변형은 그 기준을 이어 쓴다.',
     'continuityGroup은 같은 시간·공간·상태가 이어지는 구간끼리 같게 지정한다. 시간 점프·장소 전환은 새 그룹이며 이유를 기록한다. entryState/exitState는 구간의 카메라 축·시선·복장·소품·조명 상태를 구체적으로 정리한다. 미래 사건을 앞 구간의 이미지에 요구하지 않는다.',
     '필요한 화면 인물·공간·주요 소품 기준을 빠뜨리지 않되 사용하지 않는 자원은 만들지 않는다. 원본을 덮거나 고정 시간·ID·대사를 바꾸지 않는다. correction이 있으면 지정 오류를 보정한다.',
   ].join('\n');

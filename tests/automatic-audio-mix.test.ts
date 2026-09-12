@@ -82,7 +82,7 @@ it('automatic_audio_mix_rejects_speech_fades_changed_wav_and_cancelled_result_an
 
 it('audio_mix_legacy_read_keeps_original_hash_and_does_not_invent_saved_settings', async (): Promise<void> => {
   const h = await audioMixFixture(); const legacy = { ...h.project, schemaVersion: '1.15.0' }; const before: string = JSON.stringify(legacy);
-  const evidence = parseProjectSnapshotEvidence(legacy); expect(evidence.project.schemaVersion).toBe('1.23.0');
+  const evidence = parseProjectSnapshotEvidence(legacy); expect(evidence.project.schemaVersion).toBe('1.24.0');
   expect(evidence.project.audioCues).toEqual(legacy.audioCues); expect(evidence.projectionHashes).toContain(automaticHash(legacy)); expect(JSON.stringify(legacy)).toBe(before);
   expect(() => parseProject({ ...legacy, audioCues: legacy.audioCues.map((cue) => ({ ...cue, mix: {} })) })).toThrowError(expect.objectContaining({ code: 'UNSUPPORTED_LEGACY_AUDIO_MIX' }));
 });

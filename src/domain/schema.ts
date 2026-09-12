@@ -278,11 +278,14 @@ export const GenerationSchema = z.strictObject({
   referenceHashes: z.array(HashSchema), resultAssetIds: z.array(IdSchema), shotIds: z.array(IdSchema), createdAt: z.iso.datetime(),
   generatorBuild: GeneratorBuildProvenanceSchema.nullable(),
 });
+export const PropContinuitySchema = z.strictObject({ resourceId: IdSchema, reason: z.string().trim().min(1).max(4000) });
+export type PropContinuity = z.infer<typeof PropContinuitySchema>;
 export const ProductionResourceSchema = z.strictObject({
   id: IdSchema, kind: z.enum(['character', 'location', 'prop']), subjectId: IdSchema.nullable(),
   name: z.string().trim().min(1).max(200), description: z.string().trim().min(1).max(4000),
   reason: z.string().trim().min(1).max(4000), sourceRefs: z.array(SourceRefSchema).min(1),
   sourceUnitIds: z.array(IdSchema), generationId: IdSchema, referenceAssetId: IdSchema.nullable(),
+  propContinuity: PropContinuitySchema.optional(),
 });
 export const ProductionSegmentSchema = z.strictObject({
   segmentId: IdSchema, resourceIds: z.array(IdSchema), visualLocationId: IdSchema.nullable(),
@@ -301,7 +304,7 @@ export const VoiceCastingSchema = z.strictObject({
 });
 export type VoiceCasting = z.infer<typeof VoiceCastingSchema>;
 export const ProjectSchema = z.strictObject({
-  schemaVersion: z.literal('1.23.0'), projectId: IdSchema, title: z.string().min(1), revision: z.number().int().nonnegative(),
+  schemaVersion: z.literal('1.24.0'), projectId: IdSchema, title: z.string().min(1), revision: z.number().int().nonnegative(),
   voiceCasting: VoiceCastingSchema.optional(), textTypography: TextTypographySchema.optional(),
   storyboardIdentity: z.strictObject({ sourceProjectId: IdSchema, creationFingerprint: HashSchema }).optional(),
   profile: ProfileSchema, productionPlan: ProductionPlanSchema.nullable(), textLayout: TextLayoutPresetSchema, textLayoutControl: TextLayoutControlSchema, textReadability: TextReadabilityPolicySchema,

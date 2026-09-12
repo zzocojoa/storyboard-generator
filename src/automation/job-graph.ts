@@ -9,6 +9,7 @@ import { textLayoutPlanningHash } from './plan-text-layout.js';
 import { automaticShotProtected, sourceRepairScope } from './repair-basis.js';
 import type { AutomationJob, AutomationJobDefinition, AutomationRun, AutomationTask } from './run-schema.js';
 import { jobCompleted, latestAttempt } from './run-state.js';
+import { orderProductionReferences } from './production-reference-order.js';
 
 export type AutomaticWork = { kind: 'register'; jobs: AutomationJobDefinition[] } | { kind: 'execute'; job: AutomationJob } | { kind: 'review' };
 
@@ -74,7 +75,7 @@ export function nextAutomaticWork(run: AutomationRun, project: Project): Automat
   const firstUse = (id: string): number => Math.min(...segments.filter((segment): boolean => project.productionPlan?.segments.some((value): boolean => value.segmentId === segment.id && value.resourceIds.includes(id)) ?? false).map((segment): number => segment.startMs));
   const references = (project.productionPlan?.resources ?? []).filter((resource): boolean => resourceIds.has(resource.id) && resource.referenceAssetId === null)
     .sort((left, right): number => firstUse(left.id) - firstUse(right.id));
-  if (references.length > 0) return register(run, references.map((resource): AutomationTask => ({ kind: 'reference', resourceId: resource.id })));
+  if (references.length > 0) return register(run, orderProductionReferences(project, references).map((resource): AutomationTask => ({ kind: 'reference', resourceId: resource.id })));
   const segmentTasks: AutomationTask[] = segments.filter((segment): boolean => !run.jobs.some((job): boolean => job.task.kind === 'segment' && job.task.segmentId === segment.id))
     .filter((segment): boolean => project.shots.filter((shot): boolean => shot.segmentId === segment.id).every((shot): boolean => shot.proposalOrigin === 'source-outline'))
     .map((segment): AutomationTask => ({ kind: 'segment', segmentId: segment.id, replaceShotIds: project.shots.filter((shot): boolean => shot.segmentId === segment.id).map((shot): string => shot.id) }));

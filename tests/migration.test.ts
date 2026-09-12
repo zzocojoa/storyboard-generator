@@ -24,7 +24,7 @@ describe('프로젝트 형식 마이그레이션', (): void => {
       delete shot.transitionOut;
     }
     const migrated: Project = parseProject(legacy);
-    expect(migrated.schemaVersion).toBe('1.23.0');
+    expect(migrated.schemaVersion).toBe('1.24.0');
     expect(migrated.shots.every((shot): boolean => shot.transitionOut.kind === 'cut' && shot.transitionOut.durationMs === 0)).toBe(true);
     expect(migrated.shots.every((shot): boolean => shot.sourceLinks.every((link): boolean => link.status === 'mapping-required'))).toBe(true);
   });
@@ -44,13 +44,13 @@ it('storage_migrated_update_uses_original_bytes_for_rollback_and_keeps_historica
     const original: string = `${JSON.stringify({ ...legacyTextProject(project), schemaVersion: '1.11.0' }, null, '\t')}\r\n`;
     await writeFile(join(directory, 'project.json'), original);
     await writeFile(join(directory, 'versions', '000000.json'), original);
-    expect((await interrupted.read(project.projectId)).schemaVersion).toBe('1.23.0');
+    expect((await interrupted.read(project.projectId)).schemaVersion).toBe('1.24.0');
     await expect(interrupted.update(project.projectId, 0, (current) => ({ ...current, title: '게시하지 못한 편집' }), [])).rejects.toThrow('게시 직전 실패');
     expect(await readFile(join(directory, 'project.json'), 'utf8')).toBe(original);
     expect(await readdir(join(directory, 'versions'))).toEqual(['000000.json']);
     await interrupted.close();
     const saved = await reopened.update(project.projectId, 0, (current) => ({ ...current, title: '성공한 편집' }), []);
-    expect(saved).toMatchObject({ schemaVersion: '1.23.0', revision: 1, title: '성공한 편집' });
+    expect(saved).toMatchObject({ schemaVersion: '1.24.0', revision: 1, title: '성공한 편집' });
     expect(await readFile(join(directory, 'versions', '000000.json'), 'utf8')).toBe(original);
     expect((await reopened.generationHistorySnapshot(project.projectId)).versions).toHaveLength(2);
   } finally { await initial.close(); await interrupted.close(); await reopened.close(); await rm(root, { recursive: true, force: true }); }
