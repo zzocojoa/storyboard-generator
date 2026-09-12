@@ -2,11 +2,15 @@
 
 ## 현재 통합 상태
 
+브라우저가 다른 Project 버전의 서버 응답을 받으면 원문 입력 오류 대신 화면 갱신·기존 저장 결과 확인을 안내한다. 성공한 변경 요청은 이미 반영됐을 수 있음을 명시하고 자동 재전송·자동 새로고침·스키마 완화는 수행하지 않는다. 수정 전 버전 오류 2건을 재현했으며 관련 3개 파일·103개 검사(19.26초), 서버/Web 타입·필수 이름 727개·별도 웹 빌드와 브라우저 입력 보존 검사 1개(5.2초)를 통과했다. 브라우저 검사의 첫 실행은 별도 빌드 위치를 잘못 지정한 `MISSING_WEB_BUILD`였고 실제 위치 확인 후 같은 검사를 통과했다. 근거는 `.local/validation/automation-runtime/project-version-{before,focused,regression,web-types,registry,build,e2e,e2e-verified}.log`다.
+
+실제 자동 제작은 승인된 누적 실행 시간 한도에 도달하여 revision 134에서 중지됐고 추가 생성 한도는 승인 전이다. 24개 구간 중 11개 컷 계획과 기준 그림을 보존하며 13개 구간 계획·전체 프레임 그림 생성·작품 전체 검토가 남아 있다. 새 발생 계약으로 4개 구간의 음향 10개를 분리하고 기존 컷의 2개 발생 시각을 실제 모델로 제안·저장했다. 이전 원본·Version·Asset 199개 파일 보존, 다른 컷·트랙 불변, 해당 2개 음향의 원문·시각 검사와 실제 편집 화면 표시를 확인했다. 같은 두 항목의 PDF 발췌 2페이지에서 원문·시각·선택 음성 표기·페이지 경계와 렌더링을 대조했다. 발췌는 미생성 그림의 placeholder를 유지하며 전체 콘티 또는 사람 승인을 뜻하지 않는다. 근거는 실제 작업 폴더의 `audio-occurrences-{schema-terminal-run,completed-phase-verification,timing-verification,timing-live-ui,pdf-verification}.json`과 `output/pdf/audio-occurrences-timing-review.pdf`다.
+
 Codex 응답에 전달하는 음향 발생 원문 Schema는 서로 다른 `kind`를 갖는 엄격한 두 객체의 `anyOf`를 사용한다. 설치된 Zod의 판별 Union 변환은 Codex가 거부하는 `oneOf`를 생성하므로 모델 응답 경계에서만 지원 형식으로 구성하며 저장·서버 검증은 유지한다. 해당 회귀 검사에서 수정 전 실패를 확인했고 수정 후 관련 3개 파일·15개 검사(4.30초), 서버 타입·Schema 일치를 통과했다. 근거는 `audio-occurrences-schema-{before,tests,types}.log`다. 앞선 `ac2a38a`의 [CI 34690232423](https://github.com/zzocojoa/storyboard-generator/actions/runs/34690232423)는 `check`·`e2e`를 통과했지만 이 외부 응답 형식 오류까지 검증한 것은 아니다.
 
 Project 1.23은 한 음향 지시의 서로 다른 발생을 원문 인용·트랙·정보 공개 조건별로 나누고 실제 WAV 없이 시각을 제안한다. 같은 발생을 지문과 효과음이 함께 설명하면 보충 원문을 연결해 기존 트랙을 재사용한다. 기존 컷에도 미확인 발생의 시간 배치 작업을 등록하며 컷·확정 Source 범위·원문·보호된 음원·과거 생성 기록을 보존한다. 여러 원문을 한 자동 전용 트랙에 합친 이전 제안은 검토 대상으로 남기며 사람 확인을 자동 변경하지 않는다. 1.22 파일은 메모리에서 버전만 이관한다.
 
-검증 가능한 범위는 공개 합성 자료의 독립된 두 소리·잘못된 인용/정보/트랙 거부·기존 효과음 재사용·편집된 컷 안의 배치·이전 파일/Source Update 보존·PDF 본문/시각이다. 브라우저에서 시각 수정·명시적인 판정 확인·빈 입력의 재열기, 원문 변경으로 사라진 연결과 작성 중 인용 보존을 확인했다. 원본 변경 뒤 작업 위치를 다시 선택·기억하는 기존 절차를 테스트에 반영했으며 시간 제한이나 재시도 횟수를 늘리지 않았다. 새 발생 계약의 실제 모델 결과 및 작품 전체 그림·연출·Final 품질은 아직 검증 완료로 주장하지 않는다.
+검증 가능한 범위는 공개 합성 자료의 독립된 두 소리·잘못된 인용/정보/트랙 거부·기존 효과음 재사용·편집된 컷 안의 배치·이전 파일/Source Update 보존·PDF 본문/시각과 위 실제 발생 계획 결과다. 브라우저에서 시각 수정·명시적인 판정 확인·빈 입력의 재열기, 원문 변경으로 사라진 연결과 작성 중 인용 보존을 확인했다. 원본 변경 뒤 작업 위치를 다시 선택·기억하는 기존 절차를 테스트에 반영했으며 시간 제한이나 재시도 횟수를 늘리지 않았다. 작품 전체 그림·연출·Final 품질은 아직 검증 완료로 주장하지 않는다.
 
 현재 로컬 `npm run check`는 116개 파일·1,539개 검사(556.57초), 서버/Web 타입·필수 이름 724개(누락·중복·skip·only 0)·Schema 일치·웹 빌드를 통과했다. 전체 E2E 73개(4.8분)도 통과했다. 이후 추가한 사라진 음향 연결의 입력 보존은 타입 검사와 해당 E2E(9.8초), 모델 응답 필수 키는 관련 3개 검사로 확인했다. 첫 전체 검사 실패는 새 이관 단계 수 기대값과 샌드박스의 로컬 포트 제한이었으며, 각각 수정·포트 허용 실행으로 확인했다. 증거는 `.local/validation/automation-runtime/`의 `audio-occurrences-check-verified.log`, `audio-occurrences-all-e2e.log`, `audio-occurrences-draft-recovery-final.log`, `audio-occurrences-model-schema.log`, `audio-occurrences-final-types.log`, `audio-occurrences-draft-types.log`다.
 

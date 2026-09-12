@@ -3,6 +3,9 @@ import { extname, join } from 'node:path';
 import { contractError } from '../src/domain/errors.js';
 
 const REQUIRED_TEST_NAMES: readonly string[] = [
+  'old_screen_receives_actionable_version_error_without_retrying_project_read',
+  'committed_mutation_response_mismatch_does_not_resubmit_or_claim_save_failure',
+  'matching_version_still_requires_full_project_validation_and_preserves_valid_response',
   'audio_occurrences_create_independent_sources_and_timing_without_late_information_on_early_sound',
   'audio_occurrences_reject_missing_foreign_spoken_duplicate_or_unbound_sources_atomically',
   'audio_occurrences_reuse_one_existing_effect_for_corresponding_action_and_sound_evidence_without_duplicates',

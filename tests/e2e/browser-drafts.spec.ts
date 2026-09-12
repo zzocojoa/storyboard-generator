@@ -23,6 +23,15 @@ test('e2e_browser_drafts_restore_location_and_compare_server_changes_without_mut
     const inspector = page.getByRole('complementary', { name: '콘티 편집 패널' });
     const action = inspector.getByRole('textbox', { name: '행동·연출', exact: true });
     await action.fill('새로고침 전에 작성한 연출');
+    const projectRoute: string = `**/api/projects/${encodeURIComponent(project.projectId)}`;
+    await page.route(projectRoute, async (route): Promise<void> => {
+      await route.fulfill({ json: { project: { ...project, schemaVersion: '99.0.0' } } });
+    });
+    await page.getByRole('button', { name: '새로고침', exact: true }).click();
+    await expect(page.getByRole('button', { name: /화면과 서버의 프로젝트 형식 버전이 다릅니다/ })).toContainText('결과를 먼저 확인');
+    await expect(action).toHaveValue('새로고침 전에 작성한 연출');
+    expect(mutations).toEqual([]);
+    await page.unroute(projectRoute);
     await page.reload(); await expect(action).toHaveValue('새로고침 전에 작성한 연출');
     await expect(inspector).toContainText('작성 중이던 입력을 복원했습니다.');
     const navigation = page.getByRole('navigation', { name: '콘티 작업 공간' });

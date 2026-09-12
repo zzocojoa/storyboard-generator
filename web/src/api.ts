@@ -64,6 +64,7 @@ export type ProjectSummary = z.infer<typeof SummarySchema>;
 export type CodexRequest = z.infer<typeof CodexRequestSchema>;
 export type SourceImpact = z.infer<typeof SourceImpactSchema>;
 const ReviewedSourceImpactSchema = z.strictObject({ impact: SourceImpactSchema, basisSha256: z.string().regex(/^[a-f0-9]{64}$/u) });
+const ProjectResponseVersionSchema = z.object({ project: z.object({ schemaVersion: z.string(), projectId: z.string() }) });
 export type ReviewedSourceImpact = z.infer<typeof ReviewedSourceImpactSchema>;
 export type AssetIntegrityIssue = { projectId: string; assetId: string; outputTargetIds: string[]; code: string; message: string };
 export type ApiErrorCategory = 'validation' | 'not-found' | 'conflict' | 'locked' | 'unavailable' | 'internal';
@@ -109,6 +110,7 @@ export class ApiError extends Error {
 export function apiErrorMessage(error: unknown): string {
   if (!(error instanceof ApiError)) return error instanceof Error ? error.message : String(error);
   if (error.code === 'NETWORK_REQUEST_FAILED') return error.message;
+  if (error.code === 'CLIENT_PROJECT_VERSION_MISMATCH') return error.message;
   if (error.code.startsWith('DOCUMENT_REVIEW_')) return error.message;
   if (error.code === 'FINAL_OUTPUT_NOT_READY') return `FINAL OUTPUT NOT READY\n${error.message}`;
   if (error.code === 'PROJECT_BUSY') return '프로젝트 생성 또는 다른 작업이 진행 중입니다. 완료 후 다시 불러오거나 재시도하세요.';
@@ -161,7 +163,23 @@ async function request(path: string, init: RequestInit): Promise<unknown> {
   if (!response.ok) {
     throw responseApiError(response, data);
   }
+  assertProjectResponseVersion(data, path, init.method ?? 'GET', response.status);
   return data;
+}
+
+function assertProjectResponseVersion(data: unknown, path: string, method: string, status: number): void {
+  const parsed = ProjectResponseVersionSchema.safeParse(data);
+  if (!parsed.success) return;
+  const expectedVersion: string = ProjectSchema.shape.schemaVersion.value;
+  const actualVersion: string = parsed.data.project.schemaVersion;
+  if (actualVersion === expectedVersion) return;
+  throw new ApiError('CLIENT_PROJECT_VERSION_MISMATCH',
+    '화면과 서버의 프로젝트 형식 버전이 다릅니다. 현재 입력을 보관한 뒤 브라우저 새로고침으로 최신 화면을 불러오세요.\n'
+    + '최신 화면에서도 반복되면 CUTROOM 서버와 웹 화면을 같은 버전으로 실행하세요.\n'
+    + '저장·생성 요청은 이미 반영되었을 수 있으므로 프로젝트를 다시 불러와 결과를 먼저 확인하세요.\n'
+    + `화면 ${expectedVersion} · 서버 ${actualVersion} · ${method} ${path} · status=${status}`,
+    status, 'internal', false, true, [],
+    { scope: 'service', projectId: parsed.data.project.projectId, resourceId: null, mutationBlocked: false });
 }
 
 function json(method: string, body: unknown): RequestInit {
