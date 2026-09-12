@@ -112,6 +112,7 @@ test('e2e_shared_audio_review_shows_applied_segments_without_repeating_sound_and
   await store.update(source.projectId, 0, (current) => compileAudioInstructionPlan(current, first.id, {
     schemaVersion: '1.0.0', segmentId: first.id, summary: '장면 공통 지시의 적용 위치를 첫 구간으로 정한 화면 검증 제안',
     decisions: instructions.map((instruction) => ({ instructionId: instruction.id, resolution: 'required', cueIds: [], informationIds: [], sourceEvidence: [],
+      occurrences: [{ cueId: null, source: { kind: 'instruction', quote: instruction.text }, informationIds: [], supportingUnitIds: [], reason: '첫 구간에 배치하는 원문 지시의 발생입니다.' }],
       sharedScope: { version: '1.0.0', instructionIds: sharedAudioInstructions(current, instruction).map((value): string => value.id),
         requiredSegmentIds: [first.id], sourceEvidence: [], reason: '장면 공통 소리는 첫 구간에서 사용하고 뒤 내레이션에 반복하지 않는 검토용 제안입니다.' },
       reason: '원문 지시와 적용 구간을 검토하세요. 실제 WAV는 선택 사항입니다.' })),
@@ -152,8 +153,10 @@ test('e2e_audio_instruction_shows_exact_script_evidence_and_keeps_it_through_man
   const evidence = [{ unitId: '동작', quote: '문을 두드리는 소리가 들린다.' }];
   await store.update(source.projectId, 0, (current) => compileAudioInstructionPlan(current, 'demonstration', {
     schemaVersion: '1.0.0', segmentId: 'demonstration', summary: '빈칸 대신 실제 지문의 소리를 연결한다.', decisions: [
-      { instructionId: 'music-instruction', resolution: 'none', cueIds: [], informationIds: [], sourceEvidence: [], reason: '명시적 음악 부재' },
-      { instructionId: 'ambient-instruction', resolution: 'required', cueIds: [], informationIds: ['reveal:동작'], sourceEvidence: evidence, reason: '지문에 문 두드리는 소리가 명시되어 있다.' },
+      { instructionId: 'music-instruction', resolution: 'none', cueIds: [], informationIds: [], sourceEvidence: [], occurrences: [], reason: '명시적 음악 부재' },
+      { instructionId: 'ambient-instruction', resolution: 'required', cueIds: [], informationIds: ['reveal:동작'], sourceEvidence: evidence,
+        occurrences: [{ cueId: null, source: { kind: 'unit', unitId: '동작', quote: evidence[0]!.quote }, informationIds: ['reveal:동작'], supportingUnitIds: [], reason: '지문의 문 두드림 한 번을 연결합니다.' }],
+        reason: '지문에 문 두드리는 소리가 명시되어 있다.' },
     ],
   }, automaticPlanProvenance()), []);
   const app = await createApp(config, store, new CodexRequestStore(config.codex.requestRoot, buildForSpeechVoice('not-installed')));
@@ -190,8 +193,10 @@ test('e2e_audio_instruction_proposal_review_wav_preparation_and_reload_preserve_
   const store = new ProjectStore(config.dataRoot); const source = await audioInstructionFixture(); await store.create(source);
   await store.update(source.projectId, 0, (current) => compileAudioInstructionPlan(current, 'demonstration', {
     schemaVersion: '1.0.0', segmentId: 'demonstration', summary: '원문 음악 부재와 별도 물소리 준비', decisions: [
-      { instructionId: 'music-instruction', resolution: 'none', cueIds: [], informationIds: [], reason: '배경 음악 없음이라고 원문에 명시되어 있습니다.' },
-      { instructionId: 'ambient-instruction', resolution: 'required', cueIds: [], informationIds: [], reason: '물 흐르는 소리는 별도 WAV가 필요합니다.' },
+      { instructionId: 'music-instruction', resolution: 'none', cueIds: [], informationIds: [], occurrences: [], reason: '배경 음악 없음이라고 원문에 명시되어 있습니다.' },
+      { instructionId: 'ambient-instruction', resolution: 'required', cueIds: [], informationIds: [],
+        occurrences: [{ cueId: null, source: { kind: 'instruction', quote: '물 흐르는 소리' }, informationIds: [], supportingUnitIds: [], reason: '원문 지시의 물소리를 연결합니다.' }],
+        reason: '물 흐르는 소리는 별도 WAV가 필요합니다.' },
     ],
   }, automaticPlanProvenance()), []);
   const app = await createApp(config, store, new CodexRequestStore(config.codex.requestRoot, buildForSpeechVoice('Yuna')));

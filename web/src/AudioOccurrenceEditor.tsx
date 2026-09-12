@@ -34,7 +34,7 @@ export function AudioOccurrenceEditor(props: Props): ReactElement {
           <option value="">새 음향 지시 트랙</option>{entry.cueId !== null && !candidates.some((value): boolean => value.id === entry.cueId)
             && <option value={entry.cueId}>다시 연결할 트랙 · {entry.cueId}</option>}{candidates.map((value): ReactElement => <option key={value.id} value={value.id}>{value.id} · {value.assetId === null ? '지시' : '음원 있음'}</option>)}
         </select></label>
-        <p>{cue === undefined ? '저장 후 자동 제작에서 시각을 계획하세요.' : `${cue.startMs}–${cue.endMs} ms · ${cue.timingStatus === 'measured' ? '실측 음원' : '콘티 계획 시각'} · ${cue.assetId === null ? '음원 선택 사항' : '음원 연결됨'}`}</p>
+        <p>{cue === undefined ? '저장 후 자동 제작에서 시각을 계획하세요.' : `${cue.startMs}–${cue.endMs} ms · ${cue.timingStatus === 'measured' ? '실측 음원' : cue.timingStatus === 'prepared' ? '재생 음원 준비됨 · 배치 검토 필요' : '콘티 계획 시각'} · ${cue.assetId === null ? '음원 선택 사항' : '음원 연결됨'}`}</p>
         <details><summary>같은 소리의 보충 원문</summary><p>같은 소리가 지문과 효과음에 함께 적힌 경우에만 묶으세요. 다른 시점의 소리는 별도 발생으로 추가합니다.</p>
           {units.filter((unit): boolean => source.kind !== 'unit' || unit.id !== source.unitId).map((unit): ReactElement => <label className="check-row" key={unit.id}>
             <input type="checkbox" checked={(entry.supportingUnitIds ?? []).includes(unit.id)} onChange={(event): void => replace(index, { ...entry,

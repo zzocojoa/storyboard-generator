@@ -117,6 +117,27 @@ it('legacy_combined_audio_occurrences_remain_reviewable_and_only_unprotected_unm
   const instruction = legacy.dataset.instructions.find((value): boolean => value.id === 'ambient-instruction')!;
   expect(audioOccurrenceReviewIssues(legacy, instruction, legacy.audioInstructionDecisions![0]!)).toHaveLength(1);
   expect(() => confirmAudioInstruction(legacy, instruction.id)).toThrow();
+  const withoutEvidence: Project = { ...legacy, audioInstructionDecisions: legacy.audioInstructionDecisions!.map(({ sourceEvidence: _evidence, ...decision }) => decision) };
+  expect(parseProject(withoutEvidence)).toEqual(withoutEvidence);
+  expect(automaticAudioInstructionTargets(withoutEvidence, 'demonstration').map((value): string => value.id)).toEqual(['ambient-instruction']);
+  expect(nextAutomaticWork(createAutomationRun(initial(withoutEvidence)), withoutEvidence)).toMatchObject({ kind: 'register', jobs: [{ task: { kind: 'audio-instructions', segmentId: 'demonstration' } }] });
+  expect(audioOccurrenceReviewIssues(withoutEvidence, instruction, withoutEvidence.audioInstructionDecisions![0]!)).toContainEqual(expect.objectContaining({ code: 'AUDIO_INSTRUCTION_OCCURRENCE_REVIEW_REQUIRED' }));
+  expect(() => confirmAudioInstruction(withoutEvidence, instruction.id)).toThrow();
+  const original: string = JSON.stringify(withoutEvidence);
+  const withoutEvidenceRepair = compileAudioInstructionPlan(withoutEvidence, 'demonstration', { ...plan, decisions: [plan.decisions[0]!] }, { ...automaticPlanProvenance(), generationId: 'missing-evidence-repair' });
+  expect(withoutEvidenceRepair.audioInstructionDecisions!.find((decision): boolean => decision.instructionId === instruction.id)!.occurrences).toHaveLength(2);
+  expect(automaticAudioInstructionTargets(withoutEvidenceRepair, 'demonstration')).toEqual([]);
+  expect(JSON.stringify(withoutEvidence)).toBe(original);
+  for (const key of ['shots', 'frames', 'dataset', 'sources', 'assets'] as const) expect(withoutEvidenceRepair[key]).toEqual(withoutEvidence[key]);
+  expect(withoutEvidenceRepair.generationRecords.slice(0, -1)).toEqual(withoutEvidence.generationRecords);
+  const alreadyConfirmed: Project = { ...withoutEvidence, audioInstructionDecisions: withoutEvidence.audioInstructionDecisions!.map((decision) => ({ ...decision, reviewStatus: 'confirmed' })) };
+  const manual: Project = { ...withoutEvidence, audioInstructionDecisions: withoutEvidence.audioInstructionDecisions!.map((decision) => ({ ...decision, origin: 'manual' })) };
+  for (const preserved of [alreadyConfirmed, manual]) {
+    expect(automaticAudioInstructionTargets(preserved, 'demonstration')).toEqual([]);
+    expect(audioOccurrenceReviewIssues(preserved, instruction, preserved.audioInstructionDecisions![0]!)).toEqual([]);
+  }
+  const retainedMedia: Project = { ...withoutEvidence, audioCues: withoutEvidence.audioCues.map((cue) => cue.id === early ? { ...cue, assetId: 'preserved-file' } : cue) };
+  expect(automaticAudioInstructionTargets(retainedMedia, 'demonstration')).toEqual([]);
   const repaired = compileAudioInstructionPlan(legacy, 'demonstration', { ...plan, decisions: [plan.decisions[0]!] }, { ...automaticPlanProvenance(), generationId: 'occurrence-repair' });
   expect(repaired.audioCues.some((cue): boolean => cue.id === early)).toBe(false);
   expect(repaired.generationRecords.slice(0, -1)).toEqual(legacy.generationRecords);

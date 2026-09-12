@@ -47,12 +47,13 @@ export function audioOccurrenceStructureIssues(project: Project, instruction: In
   ];
 }
 
-/** 여러 원문 발생을 한 자동 트랙에 합친 과거 제안은 배치 완료로 간주하지 않는다. */
+/** 발생별 근거가 없는 과거 자동 초안은 원문 인용의 유무와 무관하게 다시 검토한다. */
 export function audioOccurrenceReviewIssues(project: Project, instruction: Instruction, decision: AudioInstructionDecision): Issue[] {
   const invalid: Issue[] = audioOccurrenceStructureIssues(project, instruction, decision);
   if (invalid.length > 0) return invalid.map((value): Issue => ({ ...value, severity: 'conflict' }));
-  const combined: boolean = decision.occurrences === undefined && decision.origin === 'automatic' && decision.resolution === 'required'
-    && (decision.sourceEvidence?.length ?? 0) > 1 && decision.cueIds.some((id): boolean => project.audioCues.some((cue): boolean => cue.id === id && cue.instructionId === instruction.id));
-  return combined ? [issue('AUDIO_INSTRUCTION_OCCURRENCE_REVIEW_REQUIRED', 'conflict', instruction.id, 'occurrences',
-    '서로 다른 원문 발생이 한 음향 트랙에 연결되어 있습니다. 발생별 원문·공개 조건·시각을 나누어 계획하세요.', 'source-bound occurrences', null, instruction.sourceRefs)] : [];
+  const missing: boolean = decision.occurrences === undefined && decision.origin === 'automatic' && decision.resolution === 'required'
+    && (decision.reviewStatus === 'proposed' || (decision.sourceEvidence?.length ?? 0) > 1)
+    && decision.cueIds.some((id): boolean => project.audioCues.some((cue): boolean => cue.id === id && cue.instructionId === instruction.id));
+  return missing ? [issue('AUDIO_INSTRUCTION_OCCURRENCE_REVIEW_REQUIRED', 'conflict', instruction.id, 'occurrences',
+    '이전 자동 음향 제안에 발생별 근거가 없습니다. 원문을 다시 검토하여 각 소리의 공개 조건과 시각을 계획하세요.', 'source-bound occurrences', null, instruction.sourceRefs)] : [];
 }
