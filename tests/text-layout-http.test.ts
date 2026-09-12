@@ -1,4 +1,4 @@
-import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -20,10 +20,12 @@ const cleanups: { app: FastifyInstance; root: string }[] = [];
 afterEach(async (): Promise<void> => { for (const value of cleanups.splice(0)) { await value.app.close(); await rm(value.root, { recursive: true, force: true }); } });
 async function fixture(): Promise<{ app: FastifyInstance; store: ProjectStore; project: Project; path: string; currentPath: string }> {
   const root: string = await mkdtemp(join(tmpdir(), 'cutroom-text-')); const dataRoot: string = join(root, 'data');
+  const webRoot: string = join(root, 'web');
+  await mkdir(webRoot); await writeFile(join(webRoot, 'index.html'), '<div id="root"></div>');
   const store = new ProjectStore(dataRoot); const ready = await finalFixture();
   await store.create(await readinessOutline());
   const project = await store.update(ready.project.projectId, 0, (): Project => ready.project, ready.project.assets.map((asset) => ({ relativePath: asset.path, content: ready.media.get(asset.id)! })));
-  const app = await createApp({ host: '127.0.0.1', port: 0, dataRoot, webRoot: resolve('dist/web'), pdfFontPath: resolve('assets/fonts/NanumGothic-Regular.ttf'),
+  const app = await createApp({ host: '127.0.0.1', port: 0, dataRoot, webRoot, pdfFontPath: resolve('assets/fonts/NanumGothic-Regular.ttf'),
     textFonts: [{ id: 'latin-mono', label: 'Latin Mono', path: resolve(TEST_LATIN_FONT_PATH) }],
     audioNormalization: TEST_AUDIO_NORMALIZATION_OPTIONS, codex: { requestRoot: join(root, 'requests'), speechVoice: 'Yuna' } }, store, new CodexRequestStore(join(root, 'requests'), readBuildManifest()));
   cleanups.push({ app, root });

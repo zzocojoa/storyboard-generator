@@ -1,5 +1,15 @@
 # 자동 제작 실행·제작 기준·구간 계획 검증
 
+## 현재 통합 상태
+
+기본 완료 조건은 그림·연출·시간·대사·음향 지시이며 가이드 음성은 선택이다. 구현 커밋 `f5bff56aeb6748e7b2ddddc4eef265c08ee6039a`을 사용자가 승인한 원격 `codex/document-handoff` 브랜치로 전송하고 같은 해시를 확인했다. [초안 PR #8](https://github.com/zzocojoa/storyboard-generator/pull/8)이 열려 있다. `master`의 PR 필수·strict `check`/`e2e`·관리자 적용·강제 푸시/삭제 금지는 유지한다. 공개 합성 자료의 마지막 빈 줄을 정리하고 Manifest의 실제 파일 해시를 갱신한 뒤 문서 입력 4개 검사와 staged diff 검사를 통과했다. 이 변경은 제작 원문에 적용하지 않았다.
+
+[최초 CI 실행 34674475504](https://github.com/zzocojoa/storyboard-generator/actions/runs/34674475504)은 1,505개 검사 통과·7개 실패였으며 `e2e`는 실행되지 않았다. 글자 배치 HTTP fixture가 CI에서 아직 빌드하지 않은 `dist/web`에 의존한 것이 원인이었다. 다른 HTTP fixture와 동일하게 테스트별 임시 웹 폴더와 HTML을 생성하도록 수정했다. 현재 실행 서버의 `dist/web`를 건드리지 않고 Git archive로 분리한 빌드 없는 체크아웃에서 해당 7개 검사와 타입 검사를 통과했다. 이 수정은 제품 출력 조건·검사 수·시간 제한을 바꾸지 않는다. 수정 커밋의 원격 `check`와 `e2e`는 아직 다시 확인해야 한다. 근거는 `.local/validation/automation-runtime/`의 `pr-ci-failure.log`, `pr-ci-clean-text-layout.log`, `pr-ci-fixture-types.log`다.
+
+실제 PRJ-008의 전체 자동 제작은 동일 실행 `cb97bf3b-ad21-4d9b-806f-0ef6d12f44fd`에서 계속된다. revision 55 Snapshot에서 24개 구간의 제작 기준·사용 중인 Resource 66개와 기준 이미지 21개를 확인했다. 모든 21개 이미지의 실제 SHA-256·전체 디코딩·Resource 및 Generation Record 연결을 대조했고 Dataset·Sources·Handoff는 처음과 같다. 음성 자산·컷 승인·프레임 승인은 0개다. 그중 두 인물의 전신·의상과 카페의 창·두 자리·출입문을 직접 검토했다. 같은 인물의 두 복장 기준을 비교하여 얼굴·머리·전신 기준을 유지한 의상 변경도 확인했다. 이는 기준 이미지 검증이며 실제 컷 그림·작품 전체 연출·Final 승인 검증은 아니다. 근거는 `.local/validation/automation-runtime/prj008-whole-story-20260912/`의 `reference-stage-verification.json`과 `character-reference-continuity-review.json`이다.
+
+현재 HEAD의 전체 이력은 Git bundle 생성·검증과 원격 전송을 통과했다. 저장소 객체 전체 읽기에서 27개가 `dataless` 상태의 시간 초과·불완전 압축 데이터로 확인됐고, 현재 파일과 Git 객체 해시가 일치하는 18개를 복원했다. 원래 항목은 같은 inode로 `.local/validation/automation-runtime/git-object-recovery-20260912/originals`에 보존했다. 나머지 9개는 원위치에 보존하며 현재 HEAD 이력에는 없지만 1개는 Codex checkpoint에 연결되어 있어 저장소 전체 복구 완료로 보고하지 않는다. 객체 복구 뒤 발생한 HTTP 400은 해당 전송 명령에만 10 MiB POST 버퍼를 지정한 재시도에서 해소됐다. 원인·동일 해시 복구·접근 가능 범위는 `pr-git-{object-read,repair-sources,repair-identity}.json`과 복구 폴더의 영수증에 있다. 실행 중인 콘티·원본·브랜치 이력은 이 복구로 변경하지 않았다.
+
 ## 글자 자동 배치와 사용자 검토 검증
 
 Project 1.19의 선택적 Cue 표현을 자동 계획·원문 업데이트·수동 편집·화면/PDF에 연결했다. 프로젝트별 글꼴·언어와 별도로 문구마다 위치·영역 폭·크기·정렬·레이어·대비 배경을 저장한다. Codex는 모든 실제 Cue에 공통/개별 배치 결론을 반환하고 직접 지정한 배치·원문·시각·승인을 보존한다. 미리보기·저장·공통 배치 복귀와 미저장 입력 복원을 제공한다. 큰 검토 창은 미저장 글자를 실제 콘티 그림 위에 합성하고 문구 표시 구간 안에서 시점을 이동한다. 기존 시간순 재생과 전환 합성을 공유하며 입력·시점이 다른 응답을 숨기고 Esc/닫기 뒤 원래 버튼으로 돌아간다. 넘침·겹침·미지원 글꼴은 Final 차단을 유지하고, 본문 근거가 미확정이면 미리보기에 차단 이유를 표시한다. 계약은 Design과 실제 코드가 기준이다.
