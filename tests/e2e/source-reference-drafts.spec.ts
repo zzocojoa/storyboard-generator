@@ -93,17 +93,23 @@ test('e2e_source_reference_drafts_restore_without_upload_or_apply_and_recheck_ch
     await source.getByRole('button', { name: '작성한 값을 현재 기준으로 검토', exact: true }).click();
     await expect(apply).toBeDisabled();
     await preview.click(); await expect(apply).toBeEnabled();
+    const applyResponse = page.waitForResponse((response): boolean => response.request().method() === 'POST'
+      && new URL(response.url()).pathname.endsWith('/source-update/apply'));
     await apply.click();
-    await expect.poll(async (): Promise<number> => (await store.read(project.projectId)).revision).toBe(2);
+    expect((await applyResponse).status()).toBe(200);
     const updated: Project = await store.read(project.projectId);
+    expect(updated.revision).toBe(2);
     expect(updated.handoff.packageVersion).toBe('changed-after-preview');
     expect(updated.shots).toEqual(project.shots);
     await reference.getByRole('button', { name: '작성한 값을 현재 기준으로 검토', exact: true }).click();
     await reference.getByLabel('외형·상태 설명', { exact: true }).fill('현재 원본 작업대의 기준 이미지');
     await reference.getByLabel('기준 이미지 파일', { exact: true }).setInputFiles(image);
+    const registerResponse = page.waitForResponse((response): boolean => response.request().method() === 'POST'
+      && new URL(response.url()).pathname.endsWith('/references'));
     await register.click();
-    await expect.poll(async (): Promise<number> => (await store.read(project.projectId)).assets.length).toBe(1);
+    expect((await registerResponse).status()).toBe(201);
     const registered: Project = await store.read(project.projectId);
+    expect(registered.assets).toHaveLength(1);
     expect(registered.assets[0]).toMatchObject({ kind: 'location', subjectId: 'workbench', description: '현재 원본 작업대의 기준 이미지 · 2×2' });
     expect(mutations.filter((path): boolean => path.endsWith('/references'))).toHaveLength(1);
     expect(mutations.filter((path): boolean => path.endsWith('/source-update/apply'))).toHaveLength(2);

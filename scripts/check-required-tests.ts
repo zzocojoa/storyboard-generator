@@ -3,6 +3,7 @@ import { extname, join } from 'node:path';
 import { contractError } from '../src/domain/errors.js';
 
 const REQUIRED_TEST_NAMES: readonly string[] = [
+  'released_update_lock_during_identity_observation_preserves_committed_read',
   'shared_audio_instruction_rejects_independent_segment_sound_without_a_common_scope',
   'shared_audio_model_receives_other_segments_and_reuses_one_scoped_sound_without_early_information',
   'shared_audio_scope_rejects_foreign_invented_conflicting_or_unbound_allocations',

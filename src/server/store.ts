@@ -76,7 +76,7 @@ export type StorageFaultPoint = 'after-update-lock-acquired' | 'after-update-cur
   | 'before-create-directory-publish' | 'after-create-directory-publish' | 'before-create-cleanup'
   | 'before-lock-write' | 'after-lock-file-created' | 'after-lock-write-eexist' | 'before-lock-directory-sync'
   | 'after-lock-directory-sync' | 'after-create-lock-written' | 'before-create-journal-cleanup' | 'before-create-lock-removal'
-  | 'before-root-create-lock-removal' | 'before-audit-current-recheck';
+  | 'before-root-create-lock-removal' | 'before-audit-current-recheck' | 'after-recovery-lock-read';
 export type StorageFaultInjector = { ownerPid: number; trigger(point: StorageFaultPoint): void | Promise<void> };
 export type StorageRuntime = {
   processInstanceId?: string;
@@ -829,7 +829,15 @@ export class ProjectStore {
       recoveryRequired(`Project lock을 해석할 수 없습니다. directory=${directoryName}, cause=${error instanceof Error ? error.message : String(error)}`);
     }
     if (projectKey(metadata.projectId) !== directoryName) recoveryRequired(`Project lock과 저장 디렉터리가 다릅니다. projectId=${metadata.projectId}`);
-    const lock: RecoveryLock = { metadata, path, identity: await this.#fs.identity(path) };
+    await this.#fault('after-recovery-lock-read');
+    let identity: FileIdentity;
+    try { identity = await this.#fs.identity(path); }
+    catch (error: unknown) {
+      // 본문 관측 뒤 정상 Writer가 잠금을 해제할 수 있다. 남아 있는 파일의 오류는 보존한다.
+      if (await this.#fs.kind(path) === 'missing') return null;
+      recoveryRequired(`Project lock identity를 확인할 수 없습니다. directory=${directoryName}, cause=${error instanceof Error ? error.message : String(error)}`);
+    }
+    const lock: RecoveryLock = { metadata, path, identity };
     if (metadata.host !== hostname()) {
       this.#rememberActiveUpdate(lock);
       recoveryRequired(`다른 Host의 Project lock은 자동 삭제할 수 없습니다. projectId=${metadata.projectId}`);
