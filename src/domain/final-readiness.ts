@@ -24,6 +24,7 @@ export type FinalReadinessReport = {
   issues: Issue[];
   optionalAudioIssues: Issue[];
 };
+export type FinalReadinessEvaluation = { report: FinalReadinessReport; safeVisualShotIds: readonly string[] };
 
 export function assetOutputIntegrityIssues(assetIds: readonly string[], integrity: AssetIntegrityStatuses): Issue[] {
   return [...new Set(assetIds)].flatMap((assetId: string): Issue[] => integrity[assetId] === 'verified' ? [] : [issue(
@@ -49,8 +50,8 @@ export function shotFinalVisualIssues(project: Project, shot: Shot, integrity: A
   ]);
 }
 
-/** 생성 횟수나 저장된 성공 플래그와 별개로 현재 프로젝트와 실제 Asset 검사에서 Final 가능 여부를 파생한다. */
-export function reviewFinalReadiness(project: Project, integrity: AssetIntegrityStatuses): FinalReadinessReport {
+/** 같은 Snapshot의 컷별 시각 검사에서 목록과 전체 Final 판정을 함께 파생한다. */
+export function evaluateFinalReadiness(project: Project, integrity: AssetIntegrityStatuses): FinalReadinessEvaluation {
   const visualIssues: Issue[][] = project.shots.map((shot: Shot): Issue[] => shotFinalVisualIssues(project, shot, integrity));
   const textIssues: Issue[] = project.textCues.flatMap((cue: TextCue): Issue[] => reviewTextOutput(project, cue.id, { maturity: 'final', channel: 'readiness' }).issues);
   const audioIssues: Issue[][] = project.audioCues.map((cue: AudioCue): Issue[] => [
@@ -79,8 +80,14 @@ export function reviewFinalReadiness(project: Project, integrity: AssetIntegrity
   const reviewed: boolean = project.shots.length > 0 && approvalIssues.length === 0 && counts.framesAccepted === counts.framesTotal;
   const textConfirmed: boolean = reviewed && textIssues.length === 0;
   const visualSafe: boolean = textConfirmed && counts.visualTimelineSafe === counts.shotsTotal;
-  return { projectId: project.projectId, revision: project.revision, finalReady: issues.length === 0, counts, issues, optionalAudioIssues: uniqueOutputIssues(audioIssues.flat()),
+  const report: FinalReadinessReport = { projectId: project.projectId, revision: project.revision, finalReady: issues.length === 0, counts, issues, optionalAudioIssues: uniqueOutputIssues(audioIssues.flat()),
     stage: issues.length === 0 ? 'final-ready' : visualSafe ? 'visual-timeline-safe' : textConfirmed ? 'text-confirmed' : reviewed ? 'reviewed' : 'generated' };
+  return { report, safeVisualShotIds: project.shots.filter((_shot, index): boolean => visualIssues[index]!.length === 0).map((shot): string => shot.id) };
+}
+
+/** 생성 횟수나 저장된 성공 플래그와 별개로 현재 프로젝트와 실제 Asset 검사에서 Final 가능 여부를 파생한다. */
+export function reviewFinalReadiness(project: Project, integrity: AssetIntegrityStatuses): FinalReadinessReport {
+  return evaluateFinalReadiness(project, integrity).report;
 }
 
 export function assertFinalReadiness(report: FinalReadinessReport): void {

@@ -1,5 +1,5 @@
-import { reviewFinalReadiness, shotFinalVisualIssues } from '../domain/final-readiness.js';
-import type { FinalReadinessReport } from '../domain/final-readiness.js';
+import { evaluateFinalReadiness, reviewFinalReadiness } from '../domain/final-readiness.js';
+import type { FinalReadinessEvaluation, FinalReadinessReport } from '../domain/final-readiness.js';
 import { reviewVisualOutputAt } from '../domain/visual-output.js';
 import { reviewProducerTransitionAt, reviewProducerVisualAt } from '../domain/producer-playback.js';
 import type { ProducerVisualDecision } from '../domain/producer-playback.js';
@@ -1681,7 +1681,8 @@ export class ProjectStore {
 
   async #summary(project: Project, updatedAt: string): Promise<ProjectSummary> {
     const integrity: Record<string, string> = await this.#summaryIntegrityForProject(project);
-    const safeShotIds: Set<string> = new Set(project.shots.filter((shot): boolean => shotFinalVisualIssues(project, shot, integrity).length === 0).map((shot): string => shot.id));
+    const evaluation: FinalReadinessEvaluation = evaluateFinalReadiness(project, integrity);
+    const safeShotIds: Set<string> = new Set(evaluation.safeVisualShotIds);
     let framesOutputSafe: number = 0;
     for (const frame of project.frames) {
       if (!safeShotIds.has(frame.shotId)) continue;
@@ -1699,7 +1700,7 @@ export class ProjectStore {
       if (code === 'verified' && playable) audioPlayable += 1;
       if (code.startsWith('AUDIO_ASSET_') || code.startsWith('STORED_AUDIO_')) audioRepairRequired += 1;
     }
-    const finalReport: FinalReadinessReport = reviewFinalReadiness(project, integrity);
+    const finalReport: FinalReadinessReport = evaluation.report;
     const textPlayable: number = project.textCues.filter((cue): boolean => reviewTextPlaybackAt(project, cue.startMs).playable.some((candidate): boolean => candidate.id === cue.id)).length;
     const blockedOutputCount: number = finalReport.issues.length;
     return { projectId: project.projectId, title: project.title, revision: project.revision,
