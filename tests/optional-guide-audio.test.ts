@@ -19,7 +19,7 @@ import { createPdfProjection, exportProjectPdfForPolicy } from '../src/exporters
 import { importPackage } from '../src/importers/import-package.js';
 import { createSourceOutline } from '../src/proposal/outline.js';
 import { recommendedAutomationSettings } from '../src/server/automation-routes.js';
-import { automaticPlanProvenance, demonstrationPlan } from './automatic-plan-helpers.js';
+import { automaticPlanProvenance, automaticShot, demonstrationPlan } from './automatic-plan-helpers.js';
 import { nativeData, nativePackage, png, TEST_TEXT_FONT_PATH, withNativeData } from './helpers.js';
 
 async function storyboardFixture(): Promise<{ project: Project; plan: AutomaticSegmentPlan }> {
@@ -35,7 +35,62 @@ async function storyboardFixture(): Promise<{ project: Project; plan: AutomaticS
     audioTimings: proposed.audioTimings.map((cue) => ({ ...cue, startMs: cue.startMs - 5000, endMs: cue.endMs - 5000 })) } };
 }
 
+async function narrationStoryboardFixture(): Promise<{ project: Project; plan: AutomaticSegmentPlan }> {
+  const payload = await nativePackage(); const data = nativeData(payload);
+  const units = data.units.filter((unit): boolean => unit.id === '안내-1').map((unit) => ({ ...unit, informationIds: ['narration-reveal'] }));
+  const project = createSourceOutline(importPackage(withNativeData(payload, { ...data,
+    scenes: data.scenes.filter((scene): boolean => scene.id === 'SCN-01'),
+    segments: data.segments.filter((segment): boolean => segment.id === 'demonstration').map((segment) => ({ ...segment, startMs: 0, endMs: 8500 })),
+    units, textPlacements: [], informationRules: [{ id: 'narration-reveal', segmentId: 'demonstration', notBeforeMs: 0,
+      notBeforeUnitId: '안내-1', notBeforeUnitOrder: units[0]!.order, precision: 'unit-order' as const }],
+  })), { proposedTextHoldMs: 2000 });
+  const plan: AutomaticSegmentPlan = { schemaVersion: '1.0.0', segmentId: 'demonstration', summary: '안내 원문 하나를 그림과 발화의 근거로 함께 사용한다.',
+    shots: [{ ...automaticShot(0, 8500), sourceLinks: [{ unitId: '안내-1', usage: 'primary-visual', startOffsetMs: 0, endOffsetMs: 8500, reason: '흙의 건조 상태를 보며 원문 안내를 듣는다.' }] }],
+    mappings: [], placementInformation: [], textTimings: [], audioTimings: [{ cueId: project.audioCues[0]!.id, startMs: 0, endMs: 3500,
+      timingRelation: 'within-segment', reason: '음원 없이 원문 발화 시간을 제안한다.' }] };
+  return { project, plan };
+}
+
 describe('음원 선택 기능과 기본 콘티 완료', (): void => {
+  it('storyboard_narration_visual_source_supports_one_link_and_independent_unmeasured_speech_without_duplicate_units', async (): Promise<void> => {
+    const { project, plan } = await narrationStoryboardFixture(); const before: Project = structuredClone(project);
+    const basis = createSegmentPlanBasis(project, plan.segmentId, project.shots.map((shot): string => shot.id));
+    for (const startMs of [0, 1000]) {
+      const candidate = compileAutomaticSegmentPlan(project, basis, { ...plan,
+        audioTimings: plan.audioTimings.map((cue) => ({ ...cue, startMs, endMs: startMs + 3500 })) }, [], [], automaticPlanProvenance(), 64);
+      expect(candidate.project.shots[0]!.sourceLinks).toHaveLength(1);
+      expect(candidate.project.shots[0]!.sourceLinks[0]!.usage).toBe('primary-visual');
+      expect(candidate.project.audioCues).toHaveLength(1);
+      expect(candidate.project.audioCues[0]).toMatchObject({ startMs, endMs: startMs + 3500, assetId: null, timingStatus: 'proposed' });
+      expect(storyboardAudioIssues(candidate.project, candidate.project.audioCues[0]!)).toEqual([]);
+      expect(effectiveInformationGate(candidate.project, 'narration-reveal')).toMatchObject({ evidenceType: 'source-anchor', effectiveNotBeforeMs: 0, reviewRequired: false });
+      expect(candidate.project.frames.every((frame): boolean => frame.visualReview === 'pending')).toBe(true);
+      expect(candidate.project.shots.every((shot): boolean => shot.approvalStatus === 'proposed')).toBe(true);
+      expect(candidate.writes).toEqual([]); expect(candidate.project.assets).toEqual([]); expect(project).toEqual(before);
+    }
+    const duplicated = { ...plan, shots: plan.shots.map((shot) => ({ ...shot,
+      sourceLinks: [...shot.sourceLinks, { ...shot.sourceLinks[0]!, usage: 'audio-only' as const }] })) };
+    expect(() => compileAutomaticSegmentPlan(project, basis, duplicated, [], [], automaticPlanProvenance(), 64))
+      .toThrowError(expect.objectContaining({ code: 'AUTOMATION_CANDIDATE_INVALID' }));
+  });
+
+  it('storyboard_visual_speech_keeps_unresolved_context_early_reveal_and_explicit_audio_anchor_interlocks', async (): Promise<void> => {
+    const { project, plan } = await narrationStoryboardFixture();
+    const candidate = compileAutomaticSegmentPlan(project, createSegmentPlanBasis(project, plan.segmentId, project.shots.map((shot): string => shot.id)), plan, [], [], automaticPlanProvenance(), 64).project;
+    const shot = candidate.shots[0]!; const link = shot.sourceLinks[0]!; const cue = candidate.audioCues[0]!;
+    const invalidProjects: Project[] = [
+      { ...candidate, shots: [{ ...shot, sourceLinks: [] }] },
+      { ...candidate, shots: [{ ...shot, sourceLinks: [{ ...link, usage: 'context-only' }] }] },
+      { ...candidate, shots: [{ ...shot, sourceLinks: [{ ...link, status: 'mapping-required' }] }] },
+      { ...candidate, shots: [{ ...shot, sourceLinks: [{ ...link, temporalAnchor: { kind: 'unresolved', status: 'review-required', basis: 'estimated' } }] }] },
+      { ...candidate, shots: [{ ...shot, sourceLinks: [{ ...link, temporalAnchor: { kind: 'shot-offset', status: 'confirmed', basis: 'manual', startOffsetMs: 1000, endOffsetMs: 8500 } }] }] },
+      { ...candidate, shots: [{ ...shot, sourceLinks: [link, { ...link, usage: 'audio-only', temporalAnchor: { kind: 'shot-offset', status: 'confirmed', basis: 'manual', startOffsetMs: 1000, endOffsetMs: 3500 } }] }] },
+    ];
+    for (const invalid of invalidProjects) expect(storyboardAudioIssues(invalid, cue)).toContainEqual(expect.objectContaining({ code: 'STORYBOARD_AUDIO_TIMING_REQUIRED' }));
+    const bounded: Project = { ...candidate, dataset: { ...candidate.dataset, informationRules: candidate.dataset.informationRules.map((rule) => ({ ...rule, baseNotBeforeMs: 1000, precision: 'exact-time' })) } };
+    expect(storyboardAudioIssues(bounded, cue)).toContainEqual(expect.objectContaining({ code: 'EARLY_INFORMATION_EMISSION' }));
+  });
+
   it('음성 엔진 없이 콘티를 자동 계획하고 실제 그림 검토 뒤 Final PDF와 CSV에 대사를 출력한다', async (): Promise<void> => {
     const { project, plan } = await storyboardFixture(); const before = structuredClone(project);
     const provenance = automaticPlanProvenance();

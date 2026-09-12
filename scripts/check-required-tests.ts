@@ -4,6 +4,8 @@ import { contractError } from '../src/domain/errors.js';
 
 const REQUIRED_TEST_NAMES: readonly string[] = [
   'automatic_planner_corrects_continuity_with_asset_and_boundary_evidence_without_changing_previous_shots_or_human_review',
+  'storyboard_narration_visual_source_supports_one_link_and_independent_unmeasured_speech_without_duplicate_units',
+  'storyboard_visual_speech_keeps_unresolved_context_early_reveal_and_explicit_audio_anchor_interlocks',
   'audio_instruction_planner_covers_each_source_preserves_originals_and_never_confirms_human_review',
   'audio_instruction_placeholder_requires_exact_audible_source_evidence_and_corrects_the_model',
   'audio_instruction_evidence_rejects_invented_foreign_spoken_duplicate_or_unbound_quotes',
