@@ -58,6 +58,58 @@ async function generatedFrame(project: Project, frameId: string, generationId: s
 }
 
 describe('프레임 자동 그림', (): void => {
+  it('automatic_frame_progression_preserves_earlier_reveals_without_including_current_future_or_foreign_directions', async (): Promise<void> => {
+    const ready = await readyFrame(await automaticPlanProject());
+    const keyed = withKeyFrames(ready.project, ready.frameId, [1000, 2000, 3000]);
+    const project: Project = {
+      ...keyed,
+      shots: keyed.shots.map((shot) => shot.id === 'automatic-plan-test:shot:0' ? { ...shot, continuityBefore: [{ assetId: 'bench-reference', state: '받침은 화면 밖, 밤의 작업대.' }] } : shot),
+      frames: keyed.frames.map((frame) => frame.id === ready.frameId ? { ...frame, description: '받침을 화면에 처음 공개한다.' } : frame.id === 'key-1000' ? { ...frame, description: '물뿌리개를 손에 든다.' } : frame.id === 'key-2000' ? { ...frame, description: '물뿌리개를 내려놓는다.' } : { ...frame, description: '미래 또는 다른 컷의 연출 표식.' }).reverse(),
+    };
+    const before = structuredClone(project);
+    const prompt = automaticFramePrompt(project, createAutomaticFrameBasis(project, 'key-2000'));
+    const input = JSON.parse(prompt.slice(prompt.indexOf('\n') + 1)) as { initialStateAtMs: number; precedingFrameDirections: { frameId: string; atMs: number; description: string; sourceUnitIds: string[] }[] };
+    expect(input.initialStateAtMs).toBe(5000);
+    expect(input.precedingFrameDirections).toEqual([
+      { frameId: ready.frameId, atMs: 5000, description: '받침을 화면에 처음 공개한다.', sourceUnitIds: ['동작'] },
+      { frameId: 'key-1000', atMs: 6000, description: '물뿌리개를 손에 든다.', sourceUnitIds: ['동작'] },
+    ]);
+    expect(prompt).not.toContain('미래 또는 다른 컷의 연출 표식.');
+    expect(project).toEqual(before);
+    const generated = (await generatedFrame(project, 'key-2000', 'progression-key', await image(project))).project;
+    const changed: Project = { ...generated, frames: generated.frames.map((frame) => frame.id === ready.frameId ? { ...frame, description: '받침은 공개하지 않는다.' } : frame) };
+    expect(automaticFrameContinuityReference(changed, 'key-3000')).toMatchObject({ kind: 'none', reason: 'changed-input' });
+  });
+
+  it('automatic_frame_progression_excludes_prior_directions_with_unresolved_or_inactive_sources', async (): Promise<void> => {
+    const payload = await nativePackage(); const data = nativeData(payload); const action = data.units.find((unit): boolean => unit.id === '동작')!;
+    const source = createSourceOutline(importPackage(withNativeData(payload, { ...data, units: [...data.units, { ...action, id: 'late-action', order: 20, text: '다음 화면의 빈 작업대.' }] })), { proposedTextHoldMs: 2000 });
+    const ready = await readyFrame(source);
+    const project: Project = { ...ready.project, shots: ready.project.shots.map((shot) => shot.id === 'automatic-plan-test:shot:0' ? { ...shot, sourceLinks: shot.sourceLinks.map((link) => link.unitId === '동작' ? { ...link, temporalAnchor: { kind: 'shot-offset' as const, startOffsetMs: 0, endOffsetMs: 4000, basis: 'proposal' as const, status: 'confirmed' as const } } : link) } : shot) };
+    const target: string = 'automatic-plan-test:shot:0:reveal:4000';
+    const prompt = automaticFramePrompt(project, createAutomaticFrameBasis(project, target));
+    expect(JSON.parse(prompt.slice(prompt.indexOf('\n') + 1))).toMatchObject({ precedingFrameDirections: [] });
+    const unresolved: Project = { ...project, shots: project.shots.map((shot) => shot.id === 'automatic-plan-test:shot:0' ? { ...shot, sourceLinks: shot.sourceLinks.map((link) => link.unitId === '동작' ? { ...link, status: 'mapping-required' as const } : link) } : shot) };
+    expect(() => createAutomaticFrameBasis(unresolved, target)).toThrow(expect.objectContaining({ code: 'FRAME_GENERATION_BLOCKED' }));
+  });
+
+  it('automatic_frame_progression_preserves_legacy_12_records_and_adds_history_only_to_new_requests', async (): Promise<void> => {
+    const ready = await readyFrame(await automaticPlanProject());
+    const initial = withKeyFrames(ready.project, ready.frameId, [1000, 2000]);
+    const generated = (await generatedFrame(initial, 'key-1000', 'initial-state-only', await image(initial))).project;
+    const record = generated.generationRecords.at(-1)!;
+    const envelope = JSON.parse(record.prompt) as { input: string };
+    const { precedingFrameDirections: _directions, ...oldInput } = JSON.parse(envelope.input.slice(envelope.input.indexOf('\n') + 1)) as Record<string, unknown>;
+    const legacy: Project = { ...generated, generationRecords: generated.generationRecords.map((value) => value.id === record.id ? { ...value, templateVersion: 'automatic-frame-image-1.2.0', prompt: JSON.stringify({ ...JSON.parse(value.prompt) as object, input: `시작 상태만 있는 이전 그림 생성 지시\n${JSON.stringify(oldInput)}` }) } : value) };
+    const before = structuredClone(legacy);
+    expect(automaticFrameContinuityReference(legacy, 'key-2000')).toMatchObject({ kind: 'previous-frame', assetId: 'initial-state-only:image' });
+    const candidate = await generatedFrame(legacy, 'key-2000', 'with-progression', await image(legacy));
+    expect(candidate.project.generationRecords.slice(0, legacy.generationRecords.length)).toEqual(legacy.generationRecords);
+    expect(candidate.project.generationRecords.at(-1)).toMatchObject({ templateVersion: 'automatic-frame-image-1.3.0' });
+    expect(candidate.project.generationRecords.at(-1)?.prompt).toContain('precedingFrameDirections');
+    expect(legacy).toEqual(before);
+  });
+
   it('automatic_frame_continuity_passes_previous_verified_bytes_first_without_changing_human_review_or_history', async (): Promise<void> => {
     const ready = await readyFrame(await automaticPlanProject());
     const initial = withKeyFrames(ready.project, ready.frameId, [1000]);
@@ -127,7 +179,7 @@ describe('프레임 자동 그림', (): void => {
     const current = (await generatedFrame(initial, ready.frameId, 'legacy-image', await image(initial))).project;
     const envelope = JSON.parse(current.generationRecords.at(-1)!.prompt) as { input: string };
     const separator: number = envelope.input.indexOf('\n');
-    const { continuityReference: _reference, initialStateAtMs: _atMs, ...oldInput } = JSON.parse(envelope.input.slice(separator + 1)) as Record<string, unknown>;
+    const { continuityReference: _reference, initialStateAtMs: _atMs, precedingFrameDirections: _directions, ...oldInput } = JSON.parse(envelope.input.slice(separator + 1)) as Record<string, unknown>;
     const legacy: Project = { ...current, generationRecords: current.generationRecords.map((record) => record.id === 'legacy-image' ? { ...record, templateVersion: 'automatic-frame-image-1.0.0', prompt: JSON.stringify({ ...JSON.parse(record.prompt) as object, input: `기존 그림 생성 지시\n${JSON.stringify(oldInput)}` }) } : record) };
     const before = structuredClone(legacy);
     expect(automaticFrameContinuityReference(legacy, 'key-1000')).toMatchObject({ kind: 'previous-frame', assetId: 'legacy-image:image' });
@@ -234,10 +286,10 @@ describe('프레임 자동 그림', (): void => {
     expect(payload.initialStateAtMs).toBe(project.shots.find((shot): boolean => shot.id === 'automatic-plan-test:shot:0')!.startMs);
     expect(payload.initialState).toEqual([{ assetId: 'bench-reference', state: '밤의 작업대, 꺼진 작업등, 바닥의 가방.' }]);
     expect(payload.frame.description).toBe('현재 의자에 앉으며 가방은 바닥에 둔다.');
-    expect(prompt).toContain('현재 프레임에 명시된 착석·이동·조작 등 변화는 시작 상태보다 우선');
+    expect(prompt).toContain('현재 프레임의 명시적 변화가 최우선');
     expect(prompt).not.toContain('화면 밖 인물의 숨은 상태'); expect(prompt).not.toContain('후반에 켜질 작업등');
     const generated = (await generatedFrame(project, 'key-1000', 'dated-key', await image(project))).project;
-    expect(generated.generationRecords.at(-1)?.templateVersion).toBe('automatic-frame-image-1.2.0');
+    expect(generated.generationRecords.at(-1)?.templateVersion).toBe('automatic-frame-image-1.3.0');
     expect(project).toEqual(before);
     const changed: Project = { ...project, shots: project.shots.map((shot) => shot.id === 'automatic-plan-test:shot:0' ? { ...shot, continuityBefore: [{ assetId: 'bench-reference', state: '다른 시작 조명.' }] } : shot) };
     expect(() => assertAutomaticFrameBasis(changed, basis)).toThrow(expect.objectContaining({ code: 'AUTOMATION_STALE_PLAN' }));
@@ -250,13 +302,13 @@ describe('프레임 자동 그림', (): void => {
     const current = (await generatedFrame(initial, 'key-1000', 'legacy-key', await image(initial))).project;
     const record = current.generationRecords.at(-1)!;
     const envelope = JSON.parse(record.prompt) as { input: string };
-    const { initialStateAtMs: _atMs, ...payload } = JSON.parse(envelope.input.slice(envelope.input.indexOf('\n') + 1)) as { initialStateAtMs: number; initialState: object[] };
+    const { initialStateAtMs: _atMs, precedingFrameDirections: _directions, ...payload } = JSON.parse(envelope.input.slice(envelope.input.indexOf('\n') + 1)) as { initialStateAtMs: number; initialState: object[]; precedingFrameDirections: object[] };
     const legacy: Project = { ...current, generationRecords: current.generationRecords.map((value) => value.id === 'legacy-key' ? { ...value, templateVersion: 'automatic-frame-image-1.1.0', prompt: JSON.stringify({ ...JSON.parse(value.prompt) as object, input: `기존 그림 생성 지시\n${JSON.stringify({ ...payload, initialState: [] })}` }) } : value) };
     const before = structuredClone(legacy);
     expect(automaticFrameContinuityReference(legacy, 'key-2000')).toMatchObject({ kind: 'previous-frame', assetId: 'legacy-key:image' });
     const next = (await generatedFrame(legacy, 'key-2000', 'new-key', await image(legacy))).project;
     expect(next.generationRecords.slice(0, legacy.generationRecords.length)).toEqual(legacy.generationRecords);
-    expect(next.generationRecords.at(-1)?.templateVersion).toBe('automatic-frame-image-1.2.0');
+    expect(next.generationRecords.at(-1)?.templateVersion).toBe('automatic-frame-image-1.3.0');
     expect(legacy).toEqual(before);
   });
 
@@ -291,7 +343,7 @@ describe('프레임 자동 그림', (): void => {
         project = await store.update(project.projectId, project.revision, (current): Project => { assertAutomaticFrameBasis(current, basis); return candidate.project; }, candidate.writes);
         const asset = await store.asset(project.projectId, `${id}:image`);
         expect(asset.content).toEqual(result.bytes);
-        expect(project.generationRecords.at(-1)).toMatchObject({ provider: 'codex-app', model: result.model, requestId: id, templateVersion: 'automatic-frame-image-1.2.0' });
+        expect(project.generationRecords.at(-1)).toMatchObject({ provider: 'codex-app', model: result.model, requestId: id, templateVersion: 'automatic-frame-image-1.3.0' });
         expect(project.generationRecords.at(-1)?.prompt).toContain(result.turnId);
       }
       expect(project.assets.filter((asset): boolean => asset.kind === 'image').map((asset): number => asset.version)).toEqual([1, 2]);
