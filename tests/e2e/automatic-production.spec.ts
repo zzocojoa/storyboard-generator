@@ -42,9 +42,25 @@ test('e2e_automatic_production_start_to_pending_image_review_preserves_final_gat
     await panel.getByRole('button', { name: '1개 구간 자동 제작 시작', exact: true }).click();
     await expect(panel.getByText('생성 결과 검토 대기', { exact: true })).toBeVisible({ timeout: 20000 });
     await expect(panel.getByText('7 / 현재 등록 7개 반영', { exact: false })).toBeVisible();
-    await panel.getByRole('button', { name: '생성 결과 불러와 검토' }).click();
     const monitor = page.getByRole('dialog', { name: '콘티 시간순 재생' });
-    await expect(monitor).toContainText('제작자 검토 · 미승인 결과 포함');
+    const projectRoute: string = `**/api/projects/${encodeURIComponent(h.source.projectId)}`;
+    await page.route(projectRoute, async (route): Promise<void> => {
+      await route.fulfill({ status: 503, json: { error: { code: 'REVIEW_REFRESH_UNAVAILABLE', message: '검토용 최신 콘티를 읽지 못했습니다.',
+        issues: [], category: 'unavailable', scope: 'project', retryable: true, operatorActionRequired: false,
+        projectId: h.source.projectId, resourceId: null, mutationBlocked: false } } });
+    });
+    await panel.getByRole('button', { name: '생성 결과 불러와 검토' }).click();
+    await expect(page.getByText('검토용 최신 콘티를 읽지 못했습니다.', { exact: false })).toBeVisible();
+    await expect(monitor).toHaveCount(0);
+    await page.unroute(projectRoute);
+    const summariesGate = Promise.withResolvers<void>();
+    await page.route('**/api/projects', async (route): Promise<void> => {
+      await summariesGate.promise; await route.continue();
+    });
+    try {
+      await panel.getByRole('button', { name: '생성 결과 불러와 검토' }).click();
+      await expect(monitor).toContainText('제작자 검토 · 미승인 결과 포함');
+    } finally { summariesGate.resolve(); await page.unroute('**/api/projects'); }
     await monitor.getByRole('button', { name: 'CLOSE', exact: true }).click();
     const densityReview = panel.getByRole('region', { name: '콘티 표현 검토' });
     await expect(densityReview).toContainText('1컷 · 프레임 1개 · 그림 대상 1개');

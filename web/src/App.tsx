@@ -81,6 +81,7 @@ import { emptyRecoveryUiState, importButtonState, mutationControlsDisabled, proj
 import type { AssetIntegrityUiIssue, RecoveryUiState } from './ui-policy.js';
 
 type Notice = { tone: 'info' | 'error'; text: string };
+type WorkspaceSnapshot = { project: Project; status: AppStatus };
 type SourceGateComparison = { informationId: string; gateMs: number | null; result: 'allowed' | 'blocked' | 'review-required' | 'rule-missing' };
 
 const allLockedFields: LockedField[] = ['timing', 'sources', 'action', 'camera', 'location', 'presence', 'continuity', 'transition', 'frames'];
@@ -879,17 +880,34 @@ export default function App(): ReactElement {
     finally { setWorking(false); }
   };
 
+  const readWorkspaceSnapshot = async (projectId: string): Promise<WorkspaceSnapshot> => {
+    const [nextProject, nextStatus] = await Promise.all([
+      fetchProject(projectId), fetchStatus(), reconcileProjectAssets(projectId),
+    ]);
+    return { project: nextProject, status: nextStatus };
+  };
+  const applyWorkspaceSnapshot = (snapshot: WorkspaceSnapshot): void => {
+    setProject(snapshot.project); setStatus(snapshot.status); setQueuedRequest(null);
+    setRecoveryUi((current: RecoveryUiState): RecoveryUiState => reconcileBlockedProjects(current,
+      snapshot.status.storageRecoveryBlocks.map((block): string => block.projectId)));
+  };
   const refreshWorkspace = async (): Promise<void> => {
     if (project === null) return;
     setWorking(true); setNotice(null);
     try {
-      const [nextProject, nextStatus, nextSummaries] = await Promise.all([
-        fetchProject(project.projectId), fetchStatus(), listProjects(), reconcileProjectAssets(project.projectId),
-      ]);
-      setProject(nextProject); setStatus(nextStatus); setSummaries(nextSummaries);
-      setRecoveryUi((current: RecoveryUiState): RecoveryUiState => reconcileBlockedProjects(current,
-        nextStatus.storageRecoveryBlocks.map((block): string => block.projectId)));
-      setQueuedRequest(null); setNotice({ tone: 'info', text: 'Codex 결과와 프로젝트 상태를 새로 읽었습니다.' });
+      const [snapshot, nextSummaries] = await Promise.all([readWorkspaceSnapshot(project.projectId), listProjects()]);
+      applyWorkspaceSnapshot(snapshot); setSummaries(nextSummaries);
+      setNotice({ tone: 'info', text: 'Codex 결과와 프로젝트 상태를 새로 읽었습니다.' });
+    } catch (error: unknown) { showError(error); }
+    finally { setWorking(false); }
+  };
+
+  const reviewGeneratedResult = async (): Promise<void> => {
+    if (project === null) return;
+    setWorking(true); setNotice(null);
+    try {
+      const snapshot = await readWorkspaceSnapshot(project.projectId);
+      applyWorkspaceSnapshot(snapshot); preview('draft');
     } catch (error: unknown) { showError(error); }
     finally { setWorking(false); }
   };
@@ -1016,7 +1034,7 @@ export default function App(): ReactElement {
       {positionError !== null && <aside className="browser-draft-notice" role="alert"><p>{positionError}</p><button onClick={(): void => { setPositionError(null); }}>현재 작업 위치 다시 기억</button></aside>}<WorkspaceNavigation page={workspacePage} onChange={setWorkspacePage} />
       <section className="final-readiness" aria-label="Final Readiness"><strong>{finalReadiness === null ? '최종 출력 검사 중' : finalReadiness.finalReady ? '최종 출력 가능' : '초안 작업 중'}</strong><span>{finalReadiness === null ? '현재 파일을 확인합니다.' : `그림 ${finalReadiness.counts.visualTimelineSafe}/${finalReadiness.counts.shotsTotal}컷 · 글자 ${finalReadiness.counts.textConfirmed}/${finalReadiness.counts.textTotal}개 확정`}</span><button onClick={(): void => { setWorkspacePage('review'); }}>검토할 항목 {finalReadiness?.issues.length ?? '…'}개 →</button><button onClick={(): void => { preview('draft'); }}>초안 미리보기</button></section>
       <div className="workspace-content" data-workspace-page={workspacePage}>
-      <div hidden={workspacePage !== 'overview'}><AutomaticProductionPanel key={project.projectId} project={project} disabled={mutationDisabled} onRefresh={refreshWorkspace} onInspectAudio={(id): void => { setSegmentId(id); setShotId(project.shots.find((value): boolean => value.segmentId === id)?.id ?? ''); openEditor('audio'); }} onReview={async (): Promise<void> => { await refreshWorkspace(); preview('draft'); }} onInspectShot={(id): void => { const shot = project.shots.find((value): boolean => value.id === id); if (shot !== undefined) { setSegmentId(shot.segmentId); setShotId(id); openEditor('frames'); } }} /><ProjectBackupPanel key={`backup:${project.projectId}`} project={project} /><BrowserDraftArchive key={project.projectId} project={project} onOpen={(destination): void => { if (destination.kind === 'settings') setWorkspacePage('settings'); else openIssue(destination.editor); }} /><ProductionOverview project={project} report={finalReadiness} onPage={setWorkspacePage} onEditor={openEditor} onScene={(id: string): void => { setSegmentId(id); setShotId(''); setWorkspacePage('editor'); }} /></div>
+      <div hidden={workspacePage !== 'overview'}><AutomaticProductionPanel key={project.projectId} project={project} disabled={mutationDisabled} onRefresh={refreshWorkspace} onInspectAudio={(id): void => { setSegmentId(id); setShotId(project.shots.find((value): boolean => value.segmentId === id)?.id ?? ''); openEditor('audio'); }} onReview={reviewGeneratedResult} onInspectShot={(id): void => { const shot = project.shots.find((value): boolean => value.id === id); if (shot !== undefined) { setSegmentId(shot.segmentId); setShotId(id); openEditor('frames'); } }} /><ProjectBackupPanel key={`backup:${project.projectId}`} project={project} /><BrowserDraftArchive key={project.projectId} project={project} onOpen={(destination): void => { if (destination.kind === 'settings') setWorkspacePage('settings'); else openIssue(destination.editor); }} /><ProductionOverview project={project} report={finalReadiness} onPage={setWorkspacePage} onEditor={openEditor} onScene={(id: string): void => { setSegmentId(id); setShotId(''); setWorkspacePage('editor'); }} /></div>
       <div hidden={workspacePage !== 'review'}><ProductionReview project={project} report={finalReadiness} onIssue={openIssue} onPreview={preview} /></div>
       <div className="edit-grid" hidden={workspacePage !== 'editor' && workspacePage !== 'settings'}>{segment !== null && <SceneRail project={project} segmentId={segment.id} onSelect={(id: string): void => { setSegmentId(id); setShotId(''); }} />}
         <section className="board-area">{segment !== null && <><header className="segment-header"><div><span>{segmentModeLabel(segment.mode)}</span><h2>{project.dataset.scenes.find((scene): boolean => scene.id === segment.sceneId)?.title}</h2><p>{formatProjectTimecode(segment.startMs, project.handoff.timebase)} — {formatProjectTimecode(segment.endMs, project.handoff.timebase)} · {shots.length}컷</p></div><button className="propose" disabled={mutationDisabled} onClick={(): void => { void queueGeneration(`/segments/${encodeURIComponent(segment.id)}/propose`); }}>Codex 컷 제안</button></header>
