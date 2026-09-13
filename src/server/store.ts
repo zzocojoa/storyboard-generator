@@ -20,7 +20,7 @@ import { inspectAudioFileBytes, verifyStoredAsset } from '../domain/media-inspec
 import type { InspectedAudioFile } from '../domain/media-inspection.js';
 import { reviewAudioPlaybackAt, reviewTextPlaybackAt } from '../domain/playback.js';
 import { ProjectSchema } from '../domain/schema.js';
-import type { Asset, Project } from '../domain/schema.js';
+import type { Asset, GenerationRecord, Project } from '../domain/schema.js';
 import { exportProjectJson } from '../exporters/json.js';
 import { sha256Bytes, sha256Text } from '../importers/integrity.js';
 import { parseProject, parseProjectSnapshotEvidence } from '../io/project.js';
@@ -699,6 +699,8 @@ export class ProjectStore {
   async #versionSnapshots(projectId: string, excludedRevision: number | null): Promise<ProjectSnapshotEvidence[]> {
     const versionsPath: string = this.#versionsPath(projectId);
     const snapshots: ProjectSnapshotEvidence[] = [];
+    // 같은 생성 지시문만 공유하고 각 revision의 객체·해시·변경 증거는 독립적으로 보존한다.
+    const prompts: Map<string, string> = new Map<string, string>();
     for (const entry of await this.#fs.entries(versionsPath)) {
       if (!entry.isFile() || !/^[0-9]{6}\.json$/.test(entry.name)) recoveryRequired(`revision 저장소에 올바르지 않은 항목이 있습니다. projectId=${projectId}, entry=${entry.name}`);
       const revision: number = Number(entry.name.slice(0, 6));
@@ -709,7 +711,13 @@ export class ProjectStore {
         recoveryRequired(`revision snapshot을 검증할 수 없습니다. projectId=${projectId}, entry=${entry.name}, cause=${error instanceof Error ? error.message : String(error)}`);
       }
       if (snapshot.project.projectId !== projectId || snapshot.project.revision !== revision) recoveryRequired(`revision 파일 이름과 Project가 다릅니다. projectId=${projectId}, entry=${entry.name}`);
-      snapshots.push(snapshot);
+      const generationRecords: GenerationRecord[] = snapshot.project.generationRecords.map((record): GenerationRecord => {
+        const sharedPrompt: string | undefined = prompts.get(record.prompt);
+        if (sharedPrompt !== undefined) return { ...record, prompt: sharedPrompt };
+        prompts.set(record.prompt, record.prompt);
+        return record;
+      });
+      snapshots.push({ ...snapshot, project: { ...snapshot.project, generationRecords } });
     }
     return snapshots;
   }
