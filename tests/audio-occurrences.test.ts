@@ -2,8 +2,9 @@ import { expect, it } from 'vitest';
 import { automaticAudioInstructionTargets } from '../src/automation/audio-instruction-targets.js';
 import { recommendedStoryboardDensity } from '../src/automation/density.js';
 import { nextAutomaticWork } from '../src/automation/job-graph.js';
-import { createSourceRepairBasis } from '../src/automation/repair-basis.js';
+import { createSourceRepairBasis, sourceRepairScope } from '../src/automation/repair-basis.js';
 import { compileSourceRepair } from '../src/automation/repair-compiler.js';
+import { sourceRepairContext } from '../src/automation/repair-context.js';
 import { createAutomationRun } from '../src/automation/run-state.js';
 import { compileAudioInstructionPlan } from '../src/automation/plan-audio-instructions.js';
 import { confirmAudioInstruction, updateAudioInstruction } from '../src/domain/audio-instructions.js';
@@ -97,13 +98,45 @@ it('audio_occurrences_are_automatically_timed_in_existing_cuts_without_audio_fil
   const plan = { schemaVersion: '1.2.0' as const, segmentId: 'demonstration', summary: '이미 정한 컷과 원문 구간 안에서 물소리와 컵 소리를 별도로 배치한다.', links: [],
     audioTimings: [...basis.speechCueIds.map((id) => ({ cueId: id, startMs: 5000, endMs: 6000, timingRelation: 'within-segment' as const, reason: '기존 안내 범위' })),
       ...basis.soundCueIds.map((id, index) => ({ cueId: id, startMs: index === 0 ? 6000 : 11000, endMs: index === 0 ? 6500 : 11500, timingRelation: 'within-segment' as const, reason: '발생별 원문 Anchor 안의 제안' }))] };
-  const provenance = { ...automaticPlanProvenance(), generationId: 'occurrence-timing' };
+  const provenance = { ...automaticPlanProvenance(), generationId: 'occurrence-timing', prompt: sourceRepairContext(project, basis, [], [], null, 32).prompt };
   const candidate = compileSourceRepair(project, basis, plan, [], [], provenance, 32);
   for (const key of ['shots', 'frames', 'dataset', 'sources', 'assets', 'audioInstructionDecisions'] as const) expect(candidate.project[key]).toEqual(project[key]);
   expect(candidate.writes).toEqual([]); expect(candidate.project.generationRecords.slice(0, -1)).toEqual(project.generationRecords);
   for (const id of decision.cueIds) expect(storyboardAudioIssues(candidate.project, candidate.project.audioCues.find((cue): boolean => cue.id === id)!)).toEqual([]);
   expect(() => compileSourceRepair(project, basis, { ...plan, audioTimings: plan.audioTimings.slice(0, -1) }, [], [], provenance, 32)).toThrowError(expect.objectContaining({ code: 'AUTOMATION_REPAIR_AUDIO_SCOPE' }));
   expect(() => compileSourceRepair(project, basis, { ...plan, audioTimings: plan.audioTimings.map((timing) => timing.cueId === decision.cueIds[1] ? { ...timing, startMs: 6000, endMs: 6500 } : timing) }, [], [], provenance, 32)).toThrowError(expect.objectContaining({ code: 'AUTOMATION_REPAIR_INVALID' }));
+
+  // 새 실행도 저장된 배치를 재사용하되 사람 검토·원문 변경·시각 충돌은 별도로 유지한다.
+  const restored = parseProject(JSON.parse(JSON.stringify(candidate.project)) as unknown);
+  const before: string = JSON.stringify(restored);
+  expect(sourceRepairScope(restored, 'demonstration').soundCueIds).toEqual([]);
+  const restarted = createAutomationRun({ ...initial(restored), settings: run.settings });
+  const nextWork = nextAutomaticWork(restarted, restored);
+  expect(nextWork.kind).toBe('register');
+  if (nextWork.kind !== 'register') throw new Error('보존된 콘티의 후속 작업이 없습니다.');
+  expect(nextWork.jobs.every((job): boolean => job.task.kind !== 'repair')).toBe(true);
+  expect(restored.audioInstructionDecisions![0]!.reviewStatus).toBe('proposed');
+  expect(restored.audioCues.filter((cue): boolean => decision.cueIds.includes(cue.id)).every((cue): boolean => cue.assetId === null && cue.timingStatus === 'proposed')).toBe(true);
+  expect(JSON.stringify(restored)).toBe(before);
+
+  const changedTiming: Project = { ...restored, audioCues: restored.audioCues.map((cue) => cue.id === decision.cueIds[0] ? { ...cue, startMs: cue.startMs + 1 } : cue) };
+  expect(sourceRepairScope(changedTiming, 'demonstration').soundCueIds).toEqual([decision.cueIds[0]]);
+  const changedSource: Project = { ...restored, dataset: { ...restored.dataset, units: restored.dataset.units.map((unit) => unit.id === '동작' ? { ...unit, text: `${unit.text} 다시 물을 붓는다.` } : unit) } };
+  expect(sourceRepairScope(changedSource, 'demonstration').soundCueIds).toEqual(decision.cueIds);
+  const changedAnchor: Project = { ...restored, shots: restored.shots.map((shot) => ({ ...shot, sourceLinks: shot.sourceLinks.map((link) => link.unitId === '동작' ? { ...link,
+    temporalAnchor: { kind: 'shot-offset' as const, basis: 'manual' as const, status: 'confirmed' as const, startOffsetMs: 2000, endOffsetMs: 6000 } } : link) })) };
+  expect(sourceRepairScope(changedAnchor, 'demonstration').soundCueIds).toContain(decision.cueIds[0]);
+  expect(sourceRepairScope({ ...restored, generationRecords: restored.generationRecords.slice(0, -1) }, 'demonstration').soundCueIds).toEqual(decision.cueIds);
+
+  const record = restored.generationRecords.at(-1)!;
+  const payload: { input: string; output: typeof plan } = JSON.parse(record.prompt);
+  const newer = { ...record, id: 'newer-timing', requestId: 'newer-timing', prompt: JSON.stringify({ ...payload,
+    output: { ...payload.output, audioTimings: payload.output.audioTimings.map((timing) => timing.cueId === decision.cueIds[0] ? { ...timing, startMs: timing.startMs + 1 } : timing) } }) };
+  expect(sourceRepairScope({ ...restored, generationRecords: [...restored.generationRecords, newer] }, 'demonstration').soundCueIds).toEqual([decision.cueIds[0]]);
+  const legacy = { ...record, prompt: JSON.stringify({ ...payload, input: '입력 스냅샷이 없는 이전 기록' }) };
+  expect(sourceRepairScope({ ...restored, generationRecords: [...restored.generationRecords.slice(0, -1), legacy] }, 'demonstration').soundCueIds).toEqual(decision.cueIds);
+  expect(() => sourceRepairScope({ ...restored, generationRecords: [...restored.generationRecords.slice(0, -1), { ...record, prompt: '{' }] }, 'demonstration'))
+    .toThrowError(expect.objectContaining({ code: 'AUTOMATION_AUDIO_TIMING_EVIDENCE' }));
 });
 
 it('legacy_combined_audio_occurrences_remain_reviewable_and_only_unprotected_unmeasured_plans_are_repaired', async (): Promise<void> => {

@@ -7,6 +7,7 @@ import { HashSchema, IdSchema } from '../domain/schema.js';
 import type { Project, Shot } from '../domain/schema.js';
 import { automaticHash } from './application-evidence.js';
 import { AutomaticAudioTimingSchema, AutomaticSourceSchema } from './plan-schema.js';
+import { plannedSoundCueIds } from './planned-sound-timing.js';
 
 const RepairTargetSchema = z.strictObject({ shotId: IdSchema, linkIndex: z.number().int().nonnegative(), unitId: IdSchema });
 export const SourceRepairBasisSchema = z.strictObject({
@@ -31,10 +32,12 @@ export function sourceRepairScope(project: Project, segmentId: string): SourceRe
   const audioCueIds: string[] = selected.filter((cue): boolean => cue.assetId !== null && cue.timingStatus !== 'measured' && !automaticAudioProtected(project, cue)).map((cue): string => cue.id);
   const speechCueIds: string[] = selected.filter((cue): boolean => cue.assetId === null && cue.timingStatus === 'proposed'
     && ['dialogue', 'voiceover', 'panel'].includes(cue.kind) && !automaticAudioProtected(project, cue)).map((cue): string => cue.id);
-  const soundCueIds: string[] = selected.filter((cue): boolean => cue.assetId === null && cue.timingStatus === 'proposed'
+  const soundCues = selected.filter((cue): boolean => cue.assetId === null && cue.timingStatus === 'proposed'
     && ['sfx', 'music'].includes(cue.kind) && !automaticAudioProtected(project, cue)
     && (project.audioInstructionDecisions ?? []).some((decision): boolean => decision.reviewStatus !== 'confirmed'
-      && (decision.occurrences ?? []).some((occurrence): boolean => occurrence.cueId === cue.id))).map((cue): string => cue.id);
+      && (decision.occurrences ?? []).some((occurrence): boolean => occurrence.cueId === cue.id)));
+  const planned: ReadonlySet<string> = plannedSoundCueIds(project, soundCues);
+  const soundCueIds: string[] = soundCues.filter((cue): boolean => !planned.has(cue.id)).map((cue): string => cue.id);
   const audioUnits: Set<string> = new Set(project.audioCues.filter((cue): boolean => audioCueIds.includes(cue.id) || speechCueIds.includes(cue.id) || soundCueIds.includes(cue.id)).flatMap((cue): string[] => cue.unitId === null ? [] : [cue.unitId]));
   const targets: SourceRepairScope['targets'] = shots.flatMap((shot): SourceRepairScope['targets'] => shot.sourceLinks.flatMap((link, linkIndex): SourceRepairScope['targets'] => {
     const pending: boolean = link.status !== 'confirmed' || link.temporalAnchor.status !== 'confirmed';
