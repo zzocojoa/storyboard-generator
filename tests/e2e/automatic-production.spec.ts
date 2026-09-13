@@ -77,6 +77,18 @@ test('e2e_automatic_production_start_to_pending_image_review_preserves_final_gat
     await expect(preview.locator('img')).toBeVisible();
     await expect(preview.locator('img')).toHaveJSProperty('naturalWidth', 90);
     await expect(page.getByRole('region', { name: 'Final Readiness' })).toContainText('초안 작업 중');
+    const automationRoute: string = `**/api/projects/${encodeURIComponent(h.source.projectId)}/automation`;
+    let hiddenOverviewRequests: number = 0;
+    await page.route(automationRoute, async (route): Promise<void> => { hiddenOverviewRequests += 1; await route.continue(); });
+    // 숨긴 패널의 다음 조회 주기를 지나도 전체 실행 이력을 다시 읽지 않아야 한다.
+    await page.waitForTimeout(3000);
+    expect(hiddenOverviewRequests).toBe(0);
+    const visibleOverview = page.waitForResponse((response): boolean => response.url().endsWith(`/api/projects/${encodeURIComponent(h.source.projectId)}/automation`) && response.request().method() === 'GET' && response.status() === 200);
+    await page.getByRole('navigation', { name: '콘티 작업 공간' }).getByRole('button', { name: '제작 현황', exact: true }).click();
+    await visibleOverview;
+    expect(hiddenOverviewRequests).toBeGreaterThan(0);
+    await page.unroute(automationRoute);
+    await page.getByRole('navigation', { name: '콘티 작업 공간' }).getByRole('button', { name: '컷 편집', exact: true }).click();
     await page.getByRole('navigation', { name: '선택 컷 편집 항목' }).getByRole('button', { name: '음성', exact: true }).click();
     const audio = page.locator('audio[data-storyboard-review]');
     await expect(audio).toBeVisible(); await expect(audio).toHaveJSProperty('duration', 2.3);

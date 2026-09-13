@@ -13,13 +13,14 @@ import { apiErrorMessage, cancelAutomation, fetchAutomation, pauseAutomation, re
 
 const statusLabels: Record<AutomationView['status'], string> = { running: '자동 제작 중', paused: '일시 중지', cancelled: '실행 취소됨', 'needs-attention': '확인이 필요합니다', 'review-ready': '생성 결과 검토 대기' };
 const taskLabels: Record<AutomationView['jobs'][number]['task']['kind'], string> = { 'audio-instructions': '음악·환경 음향 검토', 'speech-retake': '선택 발화 재생성', 'reference-retake': '선택 기준 그림 재생성', 'voice-casting': '화자 음성 배정', 'audio-mix': '음량·페이드 계획', 'text-layout': '글자 배치 계획', production: '제작 기준 계획', reference: '기준 그림', segment: '컷·대사·시각 계획', repair: '기존 컷의 연결·음향 보완', image: '콘티 그림' };
-export function AutomaticProductionPanel(props: { project: Project; disabled: boolean; onReview: () => Promise<void>; onRefresh: () => Promise<void>; onInspectShot: (shotId: string) => void; onInspectAudio: (segmentId: string) => void }): ReactElement {
+export function AutomaticProductionPanel(props: { project: Project; visible: boolean; disabled: boolean; onReview: () => Promise<void>; onRefresh: () => Promise<void>; onInspectShot: (shotId: string) => void; onInspectAudio: (segmentId: string) => void }): ReactElement {
   const [overview, setOverview] = useState<AutomationOverview | null>(null);
   const [busy, setBusy] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
   const [pollError, setPollError] = useState<string>('');
   const [pollVersion, setPollVersion] = useState<number>(0);
   useEffect((): (() => void) => {
+    if (!props.visible) return (): void => {};
     let disposed: boolean = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     const poll = async (): Promise<void> => {
@@ -32,7 +33,7 @@ export function AutomaticProductionPanel(props: { project: Project; disabled: bo
     };
     void poll();
     return (): void => { disposed = true; if (timer !== null) clearTimeout(timer); };
-  }, [props.project.projectId, pollVersion]);
+  }, [props.project.projectId, props.visible, pollVersion]);
   const current = overview?.runs.find((run): boolean => !['review-ready', 'cancelled'].includes(run.status)) ?? overview?.runs[0] ?? null;
   const active: boolean = current !== null && !['review-ready', 'cancelled'].includes(current.status);
   const runDensity = current === null ? null : automationDensity(current.settings);
