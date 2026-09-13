@@ -3,6 +3,8 @@ import { extname, join } from 'node:path';
 import { contractError } from '../src/domain/errors.js';
 
 const REQUIRED_TEST_NAMES: readonly string[] = [
+  'automatic_frame_carries_dated_start_state_to_keys_without_sending_future_or_hidden_states',
+  'automatic_frame_preserves_legacy_key_inputs_without_inventing_the_missing_start_state',
   'snapshot_evidence_preserves_current_legacy_and_review_envelope_hashes_without_mutating_input',
   'automatic_frame_continuity_passes_previous_verified_bytes_first_without_changing_human_review_or_history',
   'automatic_frame_continuity_never_skips_a_missing_rejected_or_changed_immediate_predecessor',

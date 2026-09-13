@@ -127,7 +127,7 @@ describe('프레임 자동 그림', (): void => {
     const current = (await generatedFrame(initial, ready.frameId, 'legacy-image', await image(initial))).project;
     const envelope = JSON.parse(current.generationRecords.at(-1)!.prompt) as { input: string };
     const separator: number = envelope.input.indexOf('\n');
-    const { continuityReference: _reference, ...oldInput } = JSON.parse(envelope.input.slice(separator + 1)) as Record<string, unknown>;
+    const { continuityReference: _reference, initialStateAtMs: _atMs, ...oldInput } = JSON.parse(envelope.input.slice(separator + 1)) as Record<string, unknown>;
     const legacy: Project = { ...current, generationRecords: current.generationRecords.map((record) => record.id === 'legacy-image' ? { ...record, templateVersion: 'automatic-frame-image-1.0.0', prompt: JSON.stringify({ ...JSON.parse(record.prompt) as object, input: `기존 그림 생성 지시\n${JSON.stringify(oldInput)}` }) } : record) };
     const before = structuredClone(legacy);
     expect(automaticFrameContinuityReference(legacy, 'key-1000')).toMatchObject({ kind: 'previous-frame', assetId: 'legacy-image:image' });
@@ -144,10 +144,11 @@ describe('프레임 자동 그림', (): void => {
     const payload = await nativePackage(); const data = nativeData(payload); const action = data.units.find((unit): boolean => unit.id === '동작')!;
     const source = createSourceOutline(importPackage(withNativeData(payload, { ...data, units: [...data.units, { ...action, id: 'late-action', order: 20, text: '다음 화면의 빈 작업대.' }] })), { proposedTextHoldMs: 2000 });
     const ready = await readyFrame(source);
-    const project: Project = { ...ready.project, shots: ready.project.shots.map((shot) => shot.id === 'automatic-plan-test:shot:0' ? { ...shot, sourceLinks: shot.sourceLinks.map((link) => link.unitId === '동작' ? { ...link, temporalAnchor: { kind: 'shot-offset' as const, startOffsetMs: 0, endOffsetMs: 4000, basis: 'proposal' as const, status: 'confirmed' as const } } : link) } : shot) };
+    const project: Project = { ...ready.project, shots: ready.project.shots.map((shot) => shot.id === 'automatic-plan-test:shot:0' ? { ...shot, continuityBefore: [{ assetId: 'bench-reference', state: '밤의 실내 확산광.' }], sourceLinks: shot.sourceLinks.map((link) => link.unitId === '동작' ? { ...link, temporalAnchor: { kind: 'shot-offset' as const, startOffsetMs: 0, endOffsetMs: 4000, basis: 'proposal' as const, status: 'confirmed' as const } } : link) } : shot) };
     const generated = (await generatedFrame(project, ready.frameId, 'earlier-action', await image(project))).project;
     expect(automaticFrameContinuityReference(generated, 'automatic-plan-test:shot:0:reveal:4000')).toMatchObject({ kind: 'none', reason: 'different-active-sources' });
     expect(createAutomaticFrameBasis(generated, 'automatic-plan-test:shot:0:reveal:4000').referenceAssetIds).toEqual(['bench-reference']);
+    expect(automaticFramePrompt(generated, createAutomaticFrameBasis(generated, 'automatic-plan-test:shot:0:reveal:4000'))).toContain('밤의 실내 확산광.');
   });
 
 
@@ -219,6 +220,46 @@ describe('프레임 자동 그림', (): void => {
     expect(project).toEqual(before);
   });
 
+  it('automatic_frame_carries_dated_start_state_to_keys_without_sending_future_or_hidden_states', async (): Promise<void> => {
+    const ready = await readyFrame(await automaticPlanProject());
+    const hidden = await addReferenceAsset(ready.project, { id: 'hidden-reference', kind: 'character', subjectId: ready.project.dataset.people[0]!.id, description: '화면 밖 화자 기준', mimeType: 'image/png', bytes: ready.referenceBytes });
+    const keyed: Project = withKeyFrames(hidden.project, ready.frameId, [1000, 2000]);
+    const project: Project = { ...keyed, shots: keyed.shots.map((shot) => shot.id === 'automatic-plan-test:shot:0' ? {
+      ...shot, presence: [{ personId: ready.project.dataset.people[0]!.id, mode: 'VOICE_OVER' }], continuityBefore: [{ assetId: 'bench-reference', state: '밤의 작업대, 꺼진 작업등, 바닥의 가방.' }, { assetId: 'hidden-reference', state: '화면 밖 인물의 숨은 상태.' }],
+      continuityAfter: [{ assetId: 'bench-reference', state: '후반에 켜질 작업등과 열린 봉투.' }],
+    } : shot), frames: keyed.frames.map((frame) => frame.id === 'key-1000' ? { ...frame, description: '현재 의자에 앉으며 가방은 바닥에 둔다.' } : frame) };
+    const before = structuredClone(project); const basis = createAutomaticFrameBasis(project, 'key-1000');
+    const prompt: string = automaticFramePrompt(project, basis);
+    const payload = JSON.parse(prompt.slice(prompt.indexOf('\n') + 1)) as { initialStateAtMs: number; initialState: Project['shots'][number]['continuityBefore']; frame: { description: string } };
+    expect(payload.initialStateAtMs).toBe(project.shots.find((shot): boolean => shot.id === 'automatic-plan-test:shot:0')!.startMs);
+    expect(payload.initialState).toEqual([{ assetId: 'bench-reference', state: '밤의 작업대, 꺼진 작업등, 바닥의 가방.' }]);
+    expect(payload.frame.description).toBe('현재 의자에 앉으며 가방은 바닥에 둔다.');
+    expect(prompt).toContain('현재 프레임에 명시된 착석·이동·조작 등 변화는 시작 상태보다 우선');
+    expect(prompt).not.toContain('화면 밖 인물의 숨은 상태'); expect(prompt).not.toContain('후반에 켜질 작업등');
+    const generated = (await generatedFrame(project, 'key-1000', 'dated-key', await image(project))).project;
+    expect(generated.generationRecords.at(-1)?.templateVersion).toBe('automatic-frame-image-1.2.0');
+    expect(project).toEqual(before);
+    const changed: Project = { ...project, shots: project.shots.map((shot) => shot.id === 'automatic-plan-test:shot:0' ? { ...shot, continuityBefore: [{ assetId: 'bench-reference', state: '다른 시작 조명.' }] } : shot) };
+    expect(() => assertAutomaticFrameBasis(changed, basis)).toThrow(expect.objectContaining({ code: 'AUTOMATION_STALE_PLAN' }));
+    expect(automaticFrameContinuityReference({ ...generated, shots: changed.shots }, 'key-2000')).toMatchObject({ kind: 'none', reason: 'changed-input' });
+  });
+
+  it('automatic_frame_preserves_legacy_key_inputs_without_inventing_the_missing_start_state', async (): Promise<void> => {
+    const ready = await readyFrame(await automaticPlanProject());
+    const initial: Project = withKeyFrames(ready.project, ready.frameId, [1000, 2000]);
+    const current = (await generatedFrame(initial, 'key-1000', 'legacy-key', await image(initial))).project;
+    const record = current.generationRecords.at(-1)!;
+    const envelope = JSON.parse(record.prompt) as { input: string };
+    const { initialStateAtMs: _atMs, ...payload } = JSON.parse(envelope.input.slice(envelope.input.indexOf('\n') + 1)) as { initialStateAtMs: number; initialState: object[] };
+    const legacy: Project = { ...current, generationRecords: current.generationRecords.map((value) => value.id === 'legacy-key' ? { ...value, templateVersion: 'automatic-frame-image-1.1.0', prompt: JSON.stringify({ ...JSON.parse(value.prompt) as object, input: `기존 그림 생성 지시\n${JSON.stringify({ ...payload, initialState: [] })}` }) } : value) };
+    const before = structuredClone(legacy);
+    expect(automaticFrameContinuityReference(legacy, 'key-2000')).toMatchObject({ kind: 'previous-frame', assetId: 'legacy-key:image' });
+    const next = (await generatedFrame(legacy, 'key-2000', 'new-key', await image(legacy))).project;
+    expect(next.generationRecords.slice(0, legacy.generationRecords.length)).toEqual(legacy.generationRecords);
+    expect(next.generationRecords.at(-1)?.templateVersion).toBe('automatic-frame-image-1.2.0');
+    expect(legacy).toEqual(before);
+  });
+
   it('automatic_frame_generates_an_empty_description_derived_frame_from_only_active_units', async (): Promise<void> => {
     const ready = await readyFrame(await automaticPlanProject());
     const original = ready.project.frames.find((frame): boolean => frame.id === ready.frameId)!;
@@ -250,7 +291,7 @@ describe('프레임 자동 그림', (): void => {
         project = await store.update(project.projectId, project.revision, (current): Project => { assertAutomaticFrameBasis(current, basis); return candidate.project; }, candidate.writes);
         const asset = await store.asset(project.projectId, `${id}:image`);
         expect(asset.content).toEqual(result.bytes);
-        expect(project.generationRecords.at(-1)).toMatchObject({ provider: 'codex-app', model: result.model, requestId: id, templateVersion: 'automatic-frame-image-1.1.0' });
+        expect(project.generationRecords.at(-1)).toMatchObject({ provider: 'codex-app', model: result.model, requestId: id, templateVersion: 'automatic-frame-image-1.2.0' });
         expect(project.generationRecords.at(-1)?.prompt).toContain(result.turnId);
       }
       expect(project.assets.filter((asset): boolean => asset.kind === 'image').map((asset): number => asset.version)).toEqual([1, 2]);
