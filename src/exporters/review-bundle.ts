@@ -1,3 +1,4 @@
+import type { TextFontSource } from '../rendering/text-font-source.js';
 import { mkdir, realpath } from 'node:fs/promises';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import type { BuildManifest } from '../build.js';
@@ -5,6 +6,7 @@ import { collectProjectAssetReferences, currentVisualReferenceAssets } from '../
 import { contractError } from '../domain/errors.js';
 import { assertFinalReadiness, reviewFinalReadiness } from '../domain/final-readiness.js';
 import type { FinalReadinessReport } from '../domain/final-readiness.js';
+import { withProjectTextReadiness } from '../rendering/project-text.js';
 import { auditGenerationRecords } from '../domain/generation-records.js';
 import type { GenerationRecordAuditEntry } from '../domain/generation-records.js';
 import { verifyStoredAsset } from '../domain/media-inspection.js';
@@ -16,9 +18,15 @@ import { stableJsonStringify } from '../io/stable-json.js';
 import { SafeStoreFilesystem } from '../server/safe-filesystem.js';
 import { assetFailureCode, mapStoredAssetIntegrityError } from '../server/store.js';
 import { createCsvProjection, renderCsvProjection } from './csv.js';
-import { createPdfProjection, createPdfTextProjection, renderPdfProjection } from './pdf.js';
+import { createPdfProjection, createPdfTextProjection, createSelectedPdfProjection, createSelectedPdfTextProjection, renderPdfProjection } from './pdf.js';
+import { createSelectedCsvProjection } from './selected-output.js';
+import { selectedOutputFrames, selectedOutputShots, StoryboardOutputOptionsSchema } from './output-options.js';
+import type { StoryboardOutputOptions } from './output-options.js';
 import type { PdfProjection } from './pdf.js';
-import { redactReviewBuild, redactCsvProjection, redactPdfProjection, redactReviewJson, redactReviewText, redactionManifest, reviewProfile, reviewRedactionPatterns } from './review-redaction.js';
+import { redactReviewBuild, redactCsvProjection, redactPdfProjection, redactReviewJson, redactReviewText, redactionManifest, reviewProfile, reviewRedactionPatterns, selectReviewJsonContent } from './review-redaction.js';
+import { ReviewDeliverySchema } from './review-delivery-schema.js';
+import type { ReviewDelivery, ReviewDeliveryReceipt } from './review-delivery-schema.js';
+import { assertRecoverableReviewFiles, reviewDeliveryProof } from './review-delivery-receipt.js';
 import type { RedactionEntry, RedactionPattern, ReviewProfile } from './review-redaction.js';
 import { assertReviewStorageQuiescent, assertReviewStorageUnchanged, inspectReviewStorageHealth } from './review-storage-health.js';
 import type { ReviewStorageHealth, ReviewStorageSnapshot } from './review-storage-health.js';
@@ -36,8 +44,11 @@ export type ReviewArchive = {
   assertUnchanged: () => Promise<void>;
 };
 export type ReviewBundleOptions = {
-  output: string; maturity: OutputMaturity; fontPath: string; createdAt: string; build: BuildManifest;
+  output: string; maturity: OutputMaturity; fontPath: TextFontSource; createdAt: string; build: BuildManifest;
   profile?: ReviewProfile; piiPatterns?: readonly string[]; includeMedia?: boolean;
+  outputOptions?: StoryboardOutputOptions;
+  delivery?: ReviewDelivery;
+  deliveryRecovery?: { receipt: ReviewDeliveryReceipt; recoveryKey: string };
 };
 export type ReviewFile = { path: string; content: Buffer };
 export type ReviewBundleManifest = {
@@ -45,6 +56,10 @@ export type ReviewBundleManifest = {
   projectId: string; revision: number; createdAt: string; maturity: OutputMaturity; label: string; finalReady: boolean;
   bundleBuilderBuild: BuildManifest; generationBuildSummary: GenerationBuildSummary;
   build: BuildManifest; sourceHashes: Readonly<Record<string, string>>;
+  delivery?: ReviewDelivery;
+  deliveryReceipt?: ReviewDeliveryReceipt;
+  deliveryProofSha256?: string;
+  presentation?: { options: StoryboardOutputOptions; shotIds: string[]; frameIds: string[]; archiveScope: 'whole-project'; selectedArtifacts: ['shots.csv', 'storyboard.pdf'] };
   files: { path: string; sha256: string; size: number; maturity: OutputMaturity }[];
 };
 
@@ -171,13 +186,17 @@ async function canonicalReviewOutput(output: string): Promise<string> {
 /** 검사한 Snapshot과 감사 근거를 별도 신규 디렉터리에 작성하고 원본은 변경하지 않는다. */
 export async function writeReviewBundle(archive: ReviewArchive, options: ReviewBundleOptions, media: readonly ReviewFile[]): Promise<ReviewBundleManifest> {
   const profile: ReviewProfile = reviewProfile(options.profile);
+  const delivery: ReviewDelivery | undefined = options.delivery === undefined ? undefined : ReviewDeliverySchema.parse(options.delivery);
+  if (profile === 'external' && delivery !== undefined && (delivery.contents.sourceContent || delivery.contents.generationPrompts)) throw contractError('REVIEW_EXTERNAL_CONTENT_FORBIDDEN', '외부 공유용에는 원문 전문·생성 프롬프트를 포함할 수 없습니다.', []);
   if (profile === 'external' && (options.includeMedia === true || media.length > 0)) throw contractError('REVIEW_EXTERNAL_MEDIA_FORBIDDEN', 'External Profile은 원본 Media를 포함할 수 없습니다. 이미지 검사는 수행하지 않으며 PDF는 Placeholder를 사용합니다.', []);
   await archive.assertStorageUnchanged();
-  if (options.maturity === 'final') { assertReviewStorageQuiescent(archive.storageHealth); assertFinalReadiness(archive.readiness); }
+  const readiness: FinalReadinessReport = await withProjectTextReadiness(archive.project, archive.readiness, options.fontPath);
+  if (options.maturity === 'final') { assertReviewStorageQuiescent(archive.storageHealth); assertFinalReadiness(readiness); }
   const configuredOutput: string = await canonicalReviewOutput(resolve(options.output));
   if (configuredOutput === archive.sourceRoot || configuredOutput.startsWith(`${archive.sourceRoot}${sep}`)) throw contractError('REVIEW_OUTPUT_INSIDE_SOURCE',
     '읽기 전용 검토 Bundle은 원본 Data Root 밖의 경로에 출력하세요.', []);
   const project: Project = archive.project;
+  const selection: StoryboardOutputOptions | undefined = options.outputOptions === undefined ? undefined : StoryboardOutputOptionsSchema.parse(options.outputOptions);
   const baseLabel: string = archive.storageHealth.quiescent ? options.maturity.toUpperCase() : 'DRAFT · SOURCE NOT QUIESCENT';
   const label: string = profile === 'external' ? `${baseLabel} · EXTERNAL REDACTED` : baseLabel;
   const patterns: RedactionPattern[] = profile === 'external' ? reviewRedactionPatterns(options.piiPatterns ?? []) : [];
@@ -188,14 +207,19 @@ export async function writeReviewBundle(archive: ReviewArchive, options: ReviewB
     const redacted = redactReviewText(path, `/bundle-manifest.json/sourceHashes/key:${sha256Text(path)}`, patterns); redactions.push(...redacted.entries); return [redacted.value, hash];
   }));
   const jsonArtifact = (path: string, value: unknown): ReviewFile => {
-    if (profile === 'internal') return jsonFile(path, value);
+    if (profile === 'internal') {
+      if (delivery === undefined) return jsonFile(path, value);
+      const selected = selectReviewJsonContent(value, `/${path}`, delivery.contents); redactions.push(...selected.entries); return jsonFile(path, selected.value);
+    }
     const result = redactReviewJson(value, `/${path}`, patterns); redactions.push(...result.entries); return jsonFile(path, result.value);
   };
-  const csvRows: string[][] = createCsvProjection(project, archive.integrity, { maturity: options.maturity, channel: 'csv-export', exportLabel: label });
+  const csvPolicy = { maturity: options.maturity, channel: 'csv-export' as const, exportLabel: label };
+  const csvRows: string[][] = selection === undefined ? createCsvProjection(project, archive.integrity, csvPolicy) : createSelectedCsvProjection(project, archive.integrity, csvPolicy, selection);
   const csv = profile === 'external' ? redactCsvProjection(csvRows, patterns) : { rows: csvRows, entries: [] }; redactions.push(...csv.entries);
+  const pdfPolicy = { maturity: options.maturity, channel: 'pdf-export' as const, exportLabel: label };
   const pdfInput: PdfProjection = profile === 'external'
-    ? await createPdfTextProjection(project, { maturity: options.maturity, channel: 'pdf-export', exportLabel: label }, archive.integrity)
-    : await createPdfProjection(project, archive.loadAsset, { maturity: options.maturity, channel: 'pdf-export', exportLabel: label }, archive.integrity);
+    ? selection === undefined ? await createPdfTextProjection(project, pdfPolicy, archive.integrity) : await createSelectedPdfTextProjection(project, pdfPolicy, archive.integrity, selection)
+    : selection === undefined ? await createPdfProjection(project, archive.loadAsset, pdfPolicy, archive.integrity) : await createSelectedPdfProjection(project, archive.loadAsset, pdfPolicy, archive.integrity, selection);
   const pdf = profile === 'external' ? redactPdfProjection(pdfInput, patterns) : { projection: pdfInput, entries: [] }; redactions.push(...pdf.entries);
   const references = collectProjectAssetReferences(project);
   const introductions = generationIntroductions(project, archive.versions);
@@ -210,7 +234,7 @@ export async function writeReviewBundle(archive: ReviewArchive, options: ReviewB
     jsonArtifact('project.json', { artifactType: profile === 'external' ? 'storyboard-redacted-review-project' : 'storyboard-review-project', artifactVersion: '1.0.0', maturity: options.maturity, profile, label, project }),
     { path: 'shots.csv', content: Buffer.from(renderCsvProjection(csv.rows)) },
     { path: 'storyboard.pdf', content: await renderPdfProjection(pdf.projection, options.fontPath, options.createdAt) },
-    jsonArtifact('final-readiness.json', { ...metadata, ...archive.readiness }),
+    jsonArtifact('final-readiness.json', { ...metadata, ...readiness }),
     jsonArtifact('generation-audit.json', { ...metadata, records: archive.audit, issues: archive.auditIssues, auditAvailable: archive.auditIssues.length === 0 }),
     jsonArtifact('storage-health.json', { ...metadata, ...archive.storageHealth }),
     jsonArtifact('asset-integrity.json', { ...metadata, assets: archive.integrity }),
@@ -226,12 +250,29 @@ export async function writeReviewBundle(archive: ReviewArchive, options: ReviewB
     jsonArtifact('build-manifest.json', { ...metadata, artifactType: 'storyboard-bundle-builder-build', artifactVersion: '1.0.0', bundleBuilderBuild: options.build }),
     ...media.map((file: ReviewFile): ReviewFile => ({ ...file, path: file.path.replaceAll('\\', '/') })).sort((a: ReviewFile, b: ReviewFile): number => a.path < b.path ? -1 : a.path > b.path ? 1 : 0),
   ];
+  const rawPresentation: ReviewBundleManifest['presentation'] = selection === undefined ? undefined : {
+    options: selection, shotIds: selectedOutputShots(project, selection).map((shot): string => shot.id),
+    frameIds: selectedOutputFrames(project, selection).map((frame): string => frame.id), archiveScope: 'whole-project', selectedArtifacts: ['shots.csv', 'storyboard.pdf'],
+  };
+  const presentation = rawPresentation === undefined ? undefined : profile === 'external'
+    ? redactReviewJson(rawPresentation, '/bundle-manifest.json/presentation', patterns) : { value: rawPresentation, entries: [] };
+  if (presentation !== undefined) redactions.push(...presentation.entries);
+  const displayedDelivery = delivery === undefined ? undefined : profile === 'external'
+    ? redactReviewJson(delivery, '/bundle-manifest.json/delivery', patterns) : { value: delivery, entries: [] };
+  if (displayedDelivery !== undefined) redactions.push(...displayedDelivery.entries);
   files.push(jsonFile('redaction-manifest.json', redactionManifest(profile, label, profile === 'external' ? options.piiPatterns ?? [] : [], redactions)));
   if (new Set(files.map((file: ReviewFile): string => file.path)).size !== files.length
     || files.some((file: ReviewFile): boolean => !isSafePackagePath(file.path))) throw contractError('REVIEW_BUNDLE_PATH_INVALID', 'Bundle 경로는 중복 없는 상대경로여야 합니다.', []);
-  const manifest: ReviewBundleManifest = { ...metadata, bundleName: `${displayedProjectId.value} · ${label}`, externalImagePolicy: profile === 'external' ? 'placeholder' : 'not-applicable', embeddedImageRedaction: 'not-performed', createdAt: options.createdAt, finalReady: archive.readiness.finalReady && archive.storageHealth.quiescent,
+  const manifest: ReviewBundleManifest = { ...metadata, bundleName: `${displayedProjectId.value} · ${label}`, externalImagePolicy: profile === 'external' ? 'placeholder' : 'not-applicable', embeddedImageRedaction: 'not-performed', createdAt: options.createdAt, finalReady: readiness.finalReady && archive.storageHealth.quiescent,
     build: buildAlias.build, bundleBuilderBuild: builder.build, generationBuildSummary, sourceHashes,
+    ...(options.deliveryRecovery === undefined ? {} : { deliveryReceipt: options.deliveryRecovery.receipt }),
+    ...(displayedDelivery === undefined ? {} : { delivery: displayedDelivery.value as ReviewDelivery }),
+    ...(presentation === undefined ? {} : { presentation: presentation.value as NonNullable<ReviewBundleManifest['presentation']> }),
     files: files.map((file: ReviewFile) => ({ path: file.path, sha256: sha256Bytes(file.content), size: file.content.length, maturity: options.maturity })) };
+  const authenticatedManifest: ReviewBundleManifest = options.deliveryRecovery === undefined ? manifest
+    : { ...manifest, deliveryProofSha256: reviewDeliveryProof(manifest, options.deliveryRecovery.recoveryKey) };
+  const manifestFile: ReviewFile = jsonFile('bundle-manifest.json', authenticatedManifest);
+  if (options.deliveryRecovery !== undefined) assertRecoverableReviewFiles(files, manifestFile.content.length);
   await archive.assertUnchanged();
   const parent: string = dirname(configuredOutput);
   await mkdir(parent, { recursive: true });
@@ -240,6 +281,6 @@ export async function writeReviewBundle(archive: ReviewArchive, options: ReviewB
   if (output === archive.sourceRoot || output.startsWith(`${archive.sourceRoot}${sep}`)) throw contractError('REVIEW_OUTPUT_INSIDE_SOURCE',
     '읽기 전용 검토 Bundle은 원본 Data Root 밖의 경로에 출력하세요.', []);
   const publisher: ReviewBundlePublisher = new ReviewBundlePublisher(outputFs, output);
-  await publisher.publish([...files, jsonFile('bundle-manifest.json', manifest)], archive.assertUnchanged);
-  return manifest;
+  await publisher.publish([...files, manifestFile], archive.assertUnchanged);
+  return authenticatedManifest;
 }

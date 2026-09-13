@@ -1,3 +1,4 @@
+import { legacyTextProject } from './legacy-text-helpers.js';
 import { describe, expect, it } from 'vitest';
 import { approveShot, mergeShots, reorderShots, splitShot } from '../src/domain/edit.js';
 import {
@@ -114,20 +115,20 @@ describe('Shot Source Link', (): void => {
 describe('Migration과 Source Update', (): void => {
   it('old_1_1_project_migrates_to_source_links', async (): Promise<void> => {
     const project: Project = await nativeOutline();
-    const legacy = JSON.parse(JSON.stringify(project)) as { schemaVersion: string; shots: { sourceLinks: ShotSourceLink[]; sourceUnitIds?: string[] }[]; textMappingDecisions?: unknown; dataset: { informationRules: { id: string; segmentId: string; baseNotBeforeMs: number; notBeforeMs?: number; sourceRefs: unknown[] }[]; segments: { id: string; startMs: number }[] } };
+    const legacy = JSON.parse(JSON.stringify(legacyTextProject(project))) as { schemaVersion: string; shots: { sourceLinks: ShotSourceLink[]; sourceUnitIds?: string[] }[]; textMappingDecisions?: unknown; dataset: { informationRules: { id: string; segmentId: string; baseNotBeforeMs: number; notBeforeMs?: number; sourceRefs: unknown[] }[]; segments: { id: string; startMs: number }[] } };
     legacy.schemaVersion = '1.1.0';
     delete legacy.textMappingDecisions;
     legacy.dataset.informationRules = legacy.dataset.informationRules.map((rule) => ({ id: rule.id, segmentId: rule.segmentId, baseNotBeforeMs: rule.baseNotBeforeMs, notBeforeMs: legacy.dataset.segments.find((segment) => segment.id === rule.segmentId)?.startMs ?? rule.baseNotBeforeMs, sourceRefs: [rule.sourceRefs[0]] }));
     for (const rule of legacy.dataset.informationRules) { delete (rule as { segmentId?: string }).segmentId; }
     for (const shot of legacy.shots) { shot.sourceUnitIds = shot.sourceLinks.map((link: ShotSourceLink): string => link.unitId); delete (shot as { sourceLinks?: ShotSourceLink[] }).sourceLinks; }
     const migrated: Project = parseProject(legacy);
-    expect(migrated.schemaVersion).toBe('1.9.0');
+    expect(migrated.schemaVersion).toBe('1.24.0');
     expect(migrated.shots.every((shot: Shot): boolean => shot.sourceLinks.length > 0)).toBe(true);
   });
 
   it('migration_does_not_silently_confirm_ambiguous_mapping', async (): Promise<void> => {
     const project: Project = await productionOutline();
-    const legacy = JSON.parse(JSON.stringify(project)) as { schemaVersion: string; shots: { sourceLinks: ShotSourceLink[]; sourceUnitIds?: string[] }[]; textMappingDecisions?: unknown; dataset: { informationRules: { id: string; segmentId: string; baseNotBeforeMs: number; notBeforeMs?: number; sourceRefs: unknown[] }[]; segments: { id: string; startMs: number }[] } };
+    const legacy = JSON.parse(JSON.stringify(legacyTextProject(project))) as { schemaVersion: string; shots: { sourceLinks: ShotSourceLink[]; sourceUnitIds?: string[] }[]; textMappingDecisions?: unknown; dataset: { informationRules: { id: string; segmentId: string; baseNotBeforeMs: number; notBeforeMs?: number; sourceRefs: unknown[] }[]; segments: { id: string; startMs: number }[] } };
     legacy.schemaVersion = '1.1.0';
     delete legacy.textMappingDecisions;
     legacy.dataset.informationRules = legacy.dataset.informationRules.map((rule) => ({ id: rule.id, segmentId: rule.segmentId, baseNotBeforeMs: rule.baseNotBeforeMs, notBeforeMs: legacy.dataset.segments.find((segment) => segment.id === rule.segmentId)?.startMs ?? rule.baseNotBeforeMs, sourceRefs: [rule.sourceRefs[0]] }));

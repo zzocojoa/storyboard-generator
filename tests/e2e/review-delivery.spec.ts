@@ -1,0 +1,155 @@
+import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { expect, test } from '@playwright/test';
+import { readBuildManifest } from '../../src/build.js';
+import { CodexRequestStore } from '../../src/codex/requests.js';
+import type { ReviewBundleManifest } from '../../src/exporters/review-bundle.js';
+import type { ReviewBundlePreview, ReviewBundleResult } from '../../src/exporters/review-delivery-schema.js';
+import { createApp } from '../../src/server/app.js';
+import { ProjectStore } from '../../src/server/store.js';
+import { TEST_AUDIO_NORMALIZATION_OPTIONS, TEST_TEXT_FONT_PATH } from '../helpers.js';
+import { readinessOutline } from '../readiness-fixtures.js';
+import type { Project } from '../../src/domain/schema.js';
+
+test('e2e_review_delivery_previews_current_choices_creates_internal_external_and_preserves_project', async ({ page }): Promise<void> => {
+  const root: string = await mkdtemp(join(tmpdir(), 'cutroom-review-delivery-ui-')); const dataRoot: string = join(root, 'data'); const store = new ProjectStore(dataRoot);
+  const source = await readinessOutline(); await store.create(source);
+  const app = await createApp({ host: '127.0.0.1', port: 0, dataRoot, webRoot: resolve(process.env.CUTROOM_E2E_WEB_ROOT ?? 'dist/web'), pdfFontPath: TEST_TEXT_FONT_PATH,
+    audioNormalization: TEST_AUDIO_NORMALIZATION_OPTIONS, codex: { requestRoot: join(root, 'requests'), speechVoice: 'Yuna' } }, store, new CodexRequestStore(join(root, 'requests'), readBuildManifest()));
+  const mutations: string[] = [];
+  page.on('request', (request): void => { if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method())) mutations.push(request.url()); });
+  try {
+    await page.goto(await app.listen({ host: '127.0.0.1', port: 0 }));
+    await page.getByRole('navigation', { name: '콘티 작업 공간' }).getByRole('button', { name: '검토·출력', exact: true }).click();
+    const settings = page.getByRole('region', { name: '출력 설정', exact: true }); const panel = page.getByRole('region', { name: '검토 패키지 만들기', exact: true });
+    await settings.getByLabel('출력 범위', { exact: true }).selectOption('segments');
+    const segments = settings.getByRole('group', { name: '포함할 구간' }).getByRole('checkbox');
+    for (let index: number = 1; index < source.dataset.segments.length; index += 1) await segments.nth(index).uncheck();
+    await settings.getByRole('button', { name: '출력 설정 저장', exact: true }).click();
+    await panel.getByLabel('검토 패키지 이름', { exact: true }).fill('검토본');
+    await panel.getByLabel('패키지 수신자', { exact: true }).fill('내부 제작자');
+    await panel.getByLabel('검토 패키지 상위 폴더', { exact: true }).fill(root);
+    await panel.getByLabel('패키지 수신자', { exact: true }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: '.local/validation/automation-runtime/review-delivery-settings-browser.png' });
+    const previewRequest = page.waitForResponse((response): boolean => response.url().endsWith('/review-bundles/preview') && response.status() === 200);
+    await panel.getByRole('button', { name: '생성 내용 확인', exact: true }).click(); const first = await (await previewRequest).json() as ReviewBundlePreview;
+    await expect(panel.getByRole('region', { name: '패키지 생성 내용' })).toContainText('PDF·CSV 1컷');
+    expect(first.output).toContain('검토본-01-draft-r0');
+    const afterPreview: number = mutations.length;
+    await page.reload();
+    await expect(panel.getByLabel('검토 패키지 이름', { exact: true })).toHaveValue('검토본');
+    await expect(panel.getByLabel('패키지 수신자', { exact: true })).toHaveValue('내부 제작자');
+    await expect(panel.getByLabel('검토 패키지 상위 폴더', { exact: true })).toHaveValue(root);
+    await expect(panel.getByRole('button', { name: '검토 패키지 생성', exact: true })).toHaveCount(0);
+    expect(mutations).toHaveLength(afterPreview);
+    await settings.getByLabel('PDF 용지', { exact: true }).selectOption('A3');
+    await settings.getByRole('button', { name: '출력 설정 저장', exact: true }).click();
+    await expect(panel.getByRole('button', { name: '생성 내용 확인', exact: true })).toBeDisabled();
+    await expect(panel.getByRole('alert')).toContainText('작성 이후 저장된 기준이 바뀌었습니다.');
+    await panel.getByRole('button', { name: '작성한 값을 현재 기준으로 검토', exact: true }).click();
+    expect(mutations).toHaveLength(afterPreview);
+    await panel.getByRole('button', { name: '생성 내용 확인', exact: true }).click();
+    await expect(panel.getByRole('button', { name: '검토 패키지 생성', exact: true })).toBeEnabled();
+    await panel.getByLabel('검토 패키지 버전', { exact: true }).fill('02');
+    await expect(panel.getByRole('button', { name: '검토 패키지 생성', exact: true })).toHaveCount(0);
+    await expect(panel).toContainText('생성 내용 확인을 다시 실행하세요.');
+    await panel.getByRole('button', { name: '생성 내용 확인', exact: true }).click();
+    await expect(panel.getByRole('button', { name: '검토 패키지 생성', exact: true })).toBeEnabled();
+    const creation = page.waitForResponse((response): boolean => response.url().endsWith('/review-bundles') && response.status() === 201);
+    await panel.getByRole('button', { name: '검토 패키지 생성', exact: true }).click(); const internal = await (await creation).json() as ReviewBundleResult;
+    await expect(panel.getByRole('region', { name: '생성된 검토 패키지' })).toContainText('내부 제작용');
+    expect(internal.output).toBe(join(await realpath(root), '검토본-02-draft-r0')); expect(internal.files.length).toBe(11);
+    const manifest = JSON.parse(await readFile(join(internal.output, 'bundle-manifest.json'), 'utf8')) as ReviewBundleManifest;
+    expect(manifest.delivery?.recipient).toBe('내부 제작자'); expect(manifest.presentation?.shotIds).toHaveLength(1);
+    const afterCreate: number = mutations.length;
+    await page.reload();
+    const savedResult = panel.getByRole('region', { name: '생성된 검토 패키지' });
+    await expect(savedResult).toContainText(internal.output);
+    await expect(savedResult).toContainText(internal.createdAt);
+    await expect(savedResult).toContainText('지금 콘티의 최종 완료 여부를 다시 검사한 결과는 아닙니다.');
+    await savedResult.getByText('파일 목록·생성 당시 해시', { exact: true }).click();
+    await expect(savedResult).toContainText(internal.files[0]!.sha256);
+    await expect(panel.getByRole('button', { name: '검토 패키지 생성', exact: true })).toHaveCount(0);
+    expect(mutations).toHaveLength(afterCreate);
+    await panel.getByRole('button', { name: '생성 내용 확인', exact: true }).click();
+    await expect(panel.getByRole('alert')).toContainText('같은 이름의 패키지 폴더가 이미 있습니다.');
+    await expect(panel.getByRole('button', { name: '검토 패키지 생성', exact: true })).toBeDisabled();
+    await panel.getByLabel('검토 패키지 버전', { exact: true }).fill('03');
+    await panel.getByLabel('패키지 공유 범위', { exact: true }).selectOption('external');
+    await expect(panel.getByLabel('입력 문서 전문 포함', { exact: true })).toBeDisabled();
+    await expect(panel.getByLabel('전체 미디어 파일 포함 · 기준 그림·콘티 그림·음성', { exact: true })).toBeDisabled();
+    await panel.getByLabel('추가 비식별화 문구', { exact: true }).fill('내부 제작자');
+    await panel.getByRole('button', { name: '생성 내용 확인', exact: true }).click();
+    await expect(panel.getByRole('button', { name: '검토 패키지 생성', exact: true })).toBeEnabled();
+    const externalRequest = page.waitForResponse((response): boolean => response.url().endsWith('/review-bundles') && response.status() === 201);
+    await panel.getByRole('button', { name: '검토 패키지 생성', exact: true }).click(); const external = await (await externalRequest).json() as ReviewBundleResult;
+    const result = panel.getByRole('region', { name: '생성된 검토 패키지' }); await expect(result).toContainText('외부 공유용');
+    expect(await readFile(join(external.output, 'bundle-manifest.json'), 'utf8')).not.toContain('내부 제작자');
+    await panel.getByLabel('검토 패키지 버전', { exact: true }).fill('');
+    const beforeReload: number = mutations.length;
+    await page.reload();
+    await expect(panel.getByLabel('검토 패키지 버전', { exact: true })).toHaveValue('');
+    await expect(panel.getByLabel('추가 비식별화 문구', { exact: true })).toHaveValue('내부 제작자');
+    await expect(panel.getByRole('button', { name: '생성 내용 확인', exact: true })).toBeDisabled();
+    await expect(result).toContainText(external.output);
+    expect(mutations).toHaveLength(beforeReload);
+    await result.scrollIntoViewIfNeeded(); await page.screenshot({ path: '.local/validation/automation-runtime/review-delivery-browser.png' });
+    expect(await store.read(source.projectId)).toEqual(source);
+    expect((await app.inject('/api/review-bundles/status')).json().activeProjectId).toBeNull();
+  } finally { await page.context().close(); await app.close(); await store.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test('e2e_review_delivery_records_attempt_before_post_and_recovers_lost_response_after_edit_without_recreate', async ({ page }): Promise<void> => {
+  const root: string = await mkdtemp(join(tmpdir(), 'cutroom-review-recovery-ui-')); const dataRoot: string = join(root, 'data');
+  const store = new ProjectStore(dataRoot); const source = await readinessOutline(); await store.create(source);
+  const app = await createApp({ host: '127.0.0.1', port: 0, dataRoot, webRoot: resolve(process.env.CUTROOM_E2E_WEB_ROOT ?? 'dist/web'), pdfFontPath: TEST_TEXT_FONT_PATH,
+    audioNormalization: TEST_AUDIO_NORMALIZATION_OPTIONS, codex: { requestRoot: join(root, 'requests'), speechVoice: 'Yuna' } }, store, new CodexRequestStore(join(root, 'requests'), readBuildManifest()));
+  let published: ReviewBundleResult | null = null; let creates: number = 0; const unexpected: string[] = [];
+  page.on('request', (request): void => {
+    if (request.method() === 'POST' && request.url().endsWith('/review-bundles')) creates += 1;
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method()) && !/\/review-bundles(?:\/(?:preview|verify))?$/u.test(request.url())) unexpected.push(request.url());
+  });
+  try {
+    await page.goto(await app.listen({ host: '127.0.0.1', port: 0 }));
+    await page.getByRole('navigation', { name: '콘티 작업 공간' }).getByRole('button', { name: '검토·출력', exact: true }).click();
+    const panel = page.getByRole('region', { name: '검토 패키지 만들기', exact: true });
+    await panel.getByLabel('검토 패키지 이름', { exact: true }).fill('복구 검토본');
+    await panel.getByLabel('검토 패키지 상위 폴더', { exact: true }).fill(root);
+    await panel.getByRole('button', { name: '생성 내용 확인', exact: true }).click();
+    await expect(panel.getByRole('button', { name: '검토 패키지 생성', exact: true })).toBeEnabled();
+    await page.evaluate((): void => {
+      const original = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (key: string, value: string): void {
+        if (key.includes('review-bundle-attempts')) throw new DOMException('테스트 저장 공간 부족', 'QuotaExceededError');
+        original.call(this, key, value);
+      };
+    });
+    await panel.getByRole('button', { name: '검토 패키지 생성', exact: true }).click();
+    await expect(panel.getByText('생성 시도를 브라우저에 보관하지 못해 전송하지 않았습니다.', { exact: false })).toBeVisible(); expect(creates).toBe(0);
+    await page.reload();
+    await panel.getByRole('button', { name: '생성 내용 확인', exact: true }).click();
+    await expect(panel.getByRole('button', { name: '검토 패키지 생성', exact: true })).toBeEnabled();
+    await page.route('**/review-bundles', async (route): Promise<void> => {
+      const request = route.request().postDataJSON() as { credential: { requestId: string } };
+      const stored: string[] = await page.evaluate((): string[] => Object.keys(localStorage).filter((key): boolean => key.includes('review-bundle-attempts')).map((key): string => localStorage.getItem(key)!));
+      expect(stored.some((entry): boolean => entry.includes(request.credential.requestId))).toBe(true);
+      const response = await route.fetch(); expect(response.status()).toBe(201); published = await response.json() as ReviewBundleResult;
+      await route.abort('failed');
+    });
+    await panel.getByRole('button', { name: '검토 패키지 생성', exact: true }).click();
+    await expect.poll((): boolean => published !== null).toBe(true);
+    await expect(panel.getByRole('region', { name: '생성된 검토 패키지' })).toHaveCount(0);
+    const edited: Project = await store.update(source.projectId, source.revision, (current: Project): Project => ({ ...current, title: '생성 뒤 사용자 편집' }), []);
+    await page.reload(); expect(creates).toBe(1);
+    const attempts = panel.getByRole('region', { name: '검토 패키지 생성 시도' });
+    await expect(attempts).toContainText('복구 검토본'); await attempts.locator('summary').last().click();
+    await attempts.getByRole('button', { name: '파일 확인·기록 복구', exact: true }).click();
+    const recovered = panel.getByRole('region', { name: '생성된 검토 패키지' });
+    await expect(recovered).toContainText('REV 0'); await expect(recovered).toContainText('복구 검토본-01-draft-r0');
+    await expect(panel.getByText('현재 콘티를 수정하거나 승인하지 않았습니다.', { exact: false })).toBeVisible();
+    expect(creates).toBe(1); expect(unexpected).toEqual([]); expect(await store.read(source.projectId)).toEqual(edited);
+    await page.reload(); await expect(recovered).toContainText('REV 0'); expect(creates).toBe(1);
+    await recovered.scrollIntoViewIfNeeded(); await page.screenshot({ path: '.local/validation/automation-runtime/review-delivery-recovery-browser.png' });
+  } finally { await page.context().close(); await app.close(); await store.close(); await rm(root, { recursive: true, force: true }); }
+});

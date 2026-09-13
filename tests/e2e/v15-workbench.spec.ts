@@ -60,6 +60,65 @@ function nonSourcedShot(shot: Shot, visualMode: 'black' | 'hold-previous'): Shot
     usage: link.usage === 'primary-visual' || link.usage === 'continued-visual' ? 'context-only' as const : link.usage })) };
 }
 
+test('studio_navigation_preserves_unsaved_edits_and_project_settings', async ({ page }): Promise<void> => {
+  const rootPath: string = await root('storyboard-e2e-studio-navigation-');
+  const store: ProjectStore = new ProjectStore(join(rootPath, 'data'));
+  const original: Project = await store.create(await outline('studio-navigation', '편집 흐름 검증'));
+  const running: RunningApp = await startApp(rootPath, store);
+  try {
+    await page.goto(running.url);
+    const navigation = page.getByRole('navigation', { name: '콘티 작업 공간' });
+    const inspector = page.getByRole('navigation', { name: '선택 컷 편집 항목' });
+    await page.getByRole('textbox', { name: '행동·연출', exact: true }).fill('저장 전 카메라 연출');
+    await inspector.getByRole('button', { name: '원문 연결', exact: true }).click();
+    await expect(page.locator('.visual-plan-editor')).toBeVisible();
+    await navigation.getByRole('button', { name: '제작 설정', exact: true }).click();
+    await page.getByLabel('그림 스타일', { exact: true }).fill('연필 선화');
+    await navigation.getByRole('button', { name: '제작 현황', exact: true }).click();
+    await expect(page.getByRole('heading', { name: '이야기를, 장면으로.' })).toBeVisible();
+    await expect(page.locator('.next-action')).toContainText('원문 기반 초안');
+    await navigation.getByRole('button', { name: '컷 편집', exact: true }).click();
+    await inspector.getByRole('button', { name: '연출', exact: true }).click();
+    await expect(page.getByRole('textbox', { name: '행동·연출', exact: true })).toHaveValue('저장 전 카메라 연출');
+    await navigation.getByRole('button', { name: '제작 설정', exact: true }).click();
+    await expect(page.getByLabel('그림 스타일', { exact: true })).toHaveValue('연필 선화');
+    expect((await store.read(original.projectId)).revision).toBe(original.revision);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.getByLabel('그림 스타일', { exact: true })).toHaveValue('연필 선화');
+    expect(await page.locator('body').evaluate((element): boolean => element.scrollWidth <= element.clientWidth)).toBe(true);
+    await page.getByRole('button', { name: '프로젝트', exact: true }).click();
+    await expect(page.locator('.project-tile.active')).toContainText(original.title);
+    await page.getByRole('button', { name: '프로젝트', exact: true }).click();
+    await navigation.getByRole('button', { name: '컷 편집', exact: true }).click();
+    await page.getByRole('button', { name: '컷 저장', exact: true }).click();
+    await expect.poll(async (): Promise<string | undefined> => (await store.read(original.projectId)).shots[0]?.action).toBe('저장 전 카메라 연출');
+  } finally { await stopApp(running, page); }
+});
+
+test('studio_review_opens_target_editor_without_bypassing_final_gates', async ({ page }): Promise<void> => {
+  const rootPath: string = await root('storyboard-e2e-studio-review-');
+  const store: ProjectStore = new ProjectStore(join(rootPath, 'data'));
+  const original: Project = await store.create(await outline('studio-review', '검토 연결 검증'));
+  const running: RunningApp = await startApp(rootPath, store);
+  try {
+    await page.goto(running.url);
+    await page.getByRole('navigation', { name: '콘티 작업 공간' }).getByRole('button', { name: '검토·출력', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'FINAL PDF', exact: true })).toBeDisabled();
+    await expect(page.getByRole('link', { name: 'DRAFT PDF', exact: true })).toHaveAttribute('href', /maturity=draft/u);
+    const group = page.locator('.review-group').filter({ has: page.locator('summary > strong', { hasText: /^그림$/u }) });
+    await group.locator('summary').first().click();
+    await group.getByRole('button', { name: '편집하기 ↗', exact: true }).first().click();
+    await expect(page.getByRole('navigation', { name: '선택 컷 편집 항목' }).getByRole('button', { name: '그림', exact: true })).toHaveAttribute('aria-current', 'page');
+    await expect(page.locator('.frame-editor').first()).toBeVisible();
+    await page.locator('.inspector .generation-guide summary').click();
+    await expect(page.locator('.inspector').getByLabel('Codex 생성 작업 문구')).toContainText(original.projectId);
+    await expect(page.locator('.inspector .generation-guide')).toContainText('그림·글자·컷 승인과 최종 출력 검사는 유지됩니다.');
+    expect((await store.read(original.projectId)).revision).toBe(original.revision);
+    const response = await page.request.get(`${running.url}/api/projects/${original.projectId}/export.pdf?maturity=final`);
+    expect(response.ok()).toBe(false);
+  } finally { await stopApp(running, page); }
+});
+
 test('e2e_open_text_placement_end_is_edited_and_confirmed', async ({ page }): Promise<void> => {
   const rootPath: string = await root('storyboard-e2e-text-confirm-'); const dataRoot: string = join(rootPath, 'data'); const store = new ProjectStore(dataRoot);
   const payload: PackagePayload = await nativePackage(); const data: NativeDataset = nativeData(payload);
@@ -75,6 +134,7 @@ test('e2e_open_text_placement_end_is_edited_and_confirmed', async ({ page }): Pr
   await store.create(open); const running: RunningApp = await startApp(rootPath, store);
   try {
     await page.goto(running.url); await expect(page.getByRole('heading', { name: 'Text Timing Confirmation' })).toBeVisible();
+    await page.getByRole('navigation', { name: '선택 컷 편집 항목' }).getByRole('button', { name: '글자', exact: true }).click();
     const editor = page.locator('.inspector-section.text-block .track-editor').filter({ hasText: cue.text }).first();
     const type = editor.locator('label.field').filter({ hasText: /^TYPE/ }).locator('select');
     const start = editor.locator('label.field').filter({ hasText: /^START MS/ }).locator('input');
@@ -104,6 +164,7 @@ test('web_visual_plan_uses_single_mutation', async ({ page }): Promise<void> => 
   try {
     await page.goto(running.url);
     await expect(page.getByRole('heading', { name: 'Atomic Visual Plan' })).toBeVisible();
+    await page.getByRole('navigation', { name: '선택 컷 편집 항목' }).getByRole('button', { name: '원문 연결', exact: true }).click();
     const editor = page.locator('.visual-plan-editor');
     await expect(editor).toBeVisible();
     await editor.getByLabel('VISUAL MODE', { exact: true }).selectOption('black');
@@ -139,8 +200,10 @@ test('e2e_late_anchor_key_frame_is_visible', async ({ page }): Promise<void> => 
   try {
     await page.goto(running.url); await expect(page.getByRole('heading', { name: 'Late Anchor' })).toBeVisible();
     await page.locator('.segment-row').nth(1).click();
+    await page.getByRole('navigation', { name: '선택 컷 편집 항목' }).getByRole('button', { name: '그림', exact: true }).click();
     await expect(page.locator('.frame-editor header b', { hasText: 'KEY' })).toBeVisible();
     await expect(page.locator('.frame-editor').filter({ hasText: '+5950ms' })).toBeVisible();
+    await page.getByRole('navigation', { name: '선택 컷 편집 항목' }).getByRole('button', { name: '원문 연결', exact: true }).click();
     await expect(page.locator('.mapping-editor').filter({ hasText: '동작' })).toContainText('ABSOLUTE REVEAL · 10950ms');
   } finally { await stopApp(running, page); }
 });
@@ -175,7 +238,7 @@ test('e2e_asset_integrity_notice_clears_after_reconcile', async ({ page }): Prom
   const running: RunningApp = await startApp(rootPath, store);
   try {
     await page.goto(running.url); await expect(page.locator('.asset-integrity-banner')).toContainText('STORED_ASSET_HASH_MISMATCH');
-    await writeFile(assetPath, content); await page.getByRole('button', { name: 'REFRESH' }).click();
+    await writeFile(assetPath, content); await page.getByRole('button', { name: '새로고침' }).click();
     await expect(page.locator('.asset-integrity-banner')).toHaveCount(0);
   } finally { await stopApp(running, page); }
 });
@@ -258,10 +321,10 @@ test('e2e_409_and_503_do_not_create_persistent_project_block', async ({ page }):
   const initial: Project = await creator.create(await outline('e2e-errors', 'Transient Errors')); const fault: MutableFault = mutableFault();
   const running: RunningApp = await startApp(rootPath, new ProjectStore(dataRoot, fault.injector));
   try {
-    await page.goto(running.url); const external = new ProjectStore(dataRoot);
+    await page.goto(running.url); await page.getByRole('navigation', { name: '선택 컷 편집 항목' }).getByRole('button', { name: '그림', exact: true }).click(); const external = new ProjectStore(dataRoot);
     await external.update(initial.projectId, 0, (project: Project): Project => ({ ...project, title: 'Transient Errors' }), []); await external.close();
     await page.getByRole('button', { name: '프레임 저장' }).click(); await expect(page.locator('.notice.error')).toContainText('Revision');
-    await expect(page.locator('.storage-recovery-banner')).toHaveCount(0); await page.getByRole('button', { name: 'REFRESH' }).click();
+    await expect(page.locator('.storage-recovery-banner')).toHaveCount(0); await page.getByRole('button', { name: '새로고침' }).click();
     fault.enabled = true; await page.getByRole('button', { name: '프레임 저장' }).click(); await expect(page.locator('.notice.error')).toContainText('STORAGE TEMPORARILY UNAVAILABLE');
     await expect(page.locator('.storage-recovery-banner')).toHaveCount(0);
   } finally { await stopApp(running, page); }
@@ -273,7 +336,7 @@ test('e2e_black_and_hold_previous_visual_modes', async ({ page }): Promise<void>
     index === 0 ? nonSourcedShot(shot, 'hold-previous') : index === 1 ? nonSourcedShot(shot, 'black') : index === 2 ? nonSourcedShot(shot, 'hold-previous') : shot);
   await store.create({ ...base, shots }); const running: RunningApp = await startApp(rootPath, store);
   try {
-    await page.goto(running.url); await expect(page.locator('.shot-frame[data-visual-mode="hold-previous"] .frame-placeholder')).toContainText('HOLD_PREVIOUS_SOURCE_UNAVAILABLE');
+    await page.goto(running.url); await expect(page.locator('.shot-frame[data-visual-mode="hold-previous"] .frame-placeholder')).toHaveAttribute('title', /HOLD_PREVIOUS_SOURCE_UNAVAILABLE/u);
     await expect(page.locator('.frame-generate')).toBeDisabled();
     await page.locator('.segment-row').nth(1).click(); await expect(page.locator('.shot-frame[data-visual-mode="black"] img')).toBeVisible();
     await expect(page.locator('.frame-output-state')).toContainText('BLACK · OUTPUT SAFE');

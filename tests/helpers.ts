@@ -6,6 +6,8 @@ import sharp from 'sharp';
 import { WorkerAudioNormalizer } from '../src/domain/audio-normalizer.js';
 import type { AudioNormalizationWorkerOptions } from '../src/domain/audio-normalizer.js';
 
+export const TEST_TEXT_FONT_PATH: string = 'assets/fonts/NanumGothic-Regular.ttf';
+
 export const TEST_AUDIO_NORMALIZATION_OPTIONS: AudioNormalizationWorkerOptions = {
   maxWorkers: 2,
   maxQueuedJobs: 4,
@@ -61,5 +63,5 @@ export function pcmWav(durationMs: number, sampleRate: number, channels: 1 | 2, 
 }
 
 export function testGeneratorBuild(): GeneratorBuildProvenance {
-  return { provenanceVersion: 1, gitStateAvailable: null, headCommitSha: null, worktreeDirty: null, generationInputsDirty: null, generationContractSha256: null, runtimeGenerationConfigSha256: null, commitSha: null, appVersion: 'test-fixture', projectSchemaVersion: '1.9.0', builtAt: null, sourceTreeSha256: null };
+  return { provenanceVersion: 1, gitStateAvailable: null, headCommitSha: null, worktreeDirty: null, generationInputsDirty: null, generationContractSha256: null, runtimeGenerationConfigSha256: null, commitSha: null, appVersion: 'test-fixture', projectSchemaVersion: '1.19.0', builtAt: null, sourceTreeSha256: null };
 }

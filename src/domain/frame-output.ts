@@ -56,11 +56,28 @@ export function reviewFrameOutput(project: Project, frameId: string, channel: Fr
   return reviewFrameBitmap(project, frame, channel);
 }
 
-/** 이미지 자체의 검토와 생성 기준 안전성을 검사하며 Playhead Coverage는 호출자가 별도로 판정한다. */
+function frameReviewIssues(frame: StoryboardFrame): Issue[] {
+  return frame.visualReview === 'accepted' ? [] : [issue(
+    frame.visualReview === 'rejected' ? 'FRAME_OUTPUT_REJECTED' : 'FRAME_OUTPUT_REVIEW_REQUIRED', 'conflict', frame.id, 'visualReview',
+    frame.visualReview === 'rejected' ? '거부된 프레임 이미지는 안전 출력에 사용할 수 없습니다.' : '검토가 끝나지 않은 프레임 이미지는 안전 출력에 사용할 수 없습니다.',
+    'accepted', frame.visualReview, [],
+  )];
+}
+
+/** 안전 출력은 사람의 그림 승인과 원문·시각 검사를 모두 요구한다. */
 export function reviewFrameBitmap(project: Project, frame: StoryboardFrame, channel: FrameOutputChannel): FrameOutputDecision {
+  if (channel === 'transition-preview') return reviewFrameOutput(project, frame.id, channel);
+  return frameBitmapDecision(project, frame, channel, frameReviewIssues(frame));
+}
+
+/** 제작자에게 pending 그림을 검토용으로 보여 주되 거부·원문·시각 오류는 보존한다. */
+export function reviewProducerFrameBitmap(project: Project, frame: StoryboardFrame, channel: FrameOutputChannel): FrameOutputDecision {
+  return frameBitmapDecision(project, frame, channel, frame.visualReview === 'pending' ? [] : frameReviewIssues(frame));
+}
+
+function frameBitmapDecision(project: Project, frame: StoryboardFrame, channel: FrameOutputChannel, reviewIssues: readonly Issue[]): FrameOutputDecision {
   const frameId: string = frame.id;
   const shot: Shot | undefined = project.shots.find((candidate: Shot): boolean => candidate.id === frame.shotId);
-  if (shot !== undefined && channel === 'transition-preview') return reviewFrameOutput(project, frame.id, channel);
   const asset: Asset | undefined = frame.imageAssetId === null ? undefined
     : project.assets.find((candidate: Asset): boolean => candidate.id === frame.imageAssetId);
   const assetIssues: Issue[] = frame.imageAssetId === null
@@ -69,11 +86,6 @@ export function reviewFrameBitmap(project: Project, frame: StoryboardFrame, chan
       ? [issue('FRAME_OUTPUT_ASSET_INVALID', 'conflict', frame.id, 'imageAssetId', '프레임 이미지 자산을 찾을 수 없거나 유형이 다릅니다.', 'image asset', frame.imageAssetId, [])]
       : asset.subjectId !== frame.id
         ? [issue('FRAME_OUTPUT_ASSET_SUBJECT_MISMATCH', 'conflict', frame.id, 'imageAssetId', '이미지 자산의 대상 프레임이 일치하지 않습니다.', frame.id, String(asset.subjectId), [])] : [];
-  const reviewIssues: Issue[] = frame.visualReview === 'accepted' ? [] : [issue(
-    frame.visualReview === 'rejected' ? 'FRAME_OUTPUT_REJECTED' : 'FRAME_OUTPUT_REVIEW_REQUIRED', 'conflict', frame.id, 'visualReview',
-    frame.visualReview === 'rejected' ? '거부된 프레임 이미지는 안전 출력에 사용할 수 없습니다.' : '검토가 끝나지 않은 프레임 이미지는 안전 출력에 사용할 수 없습니다.',
-    'accepted', frame.visualReview, [],
-  )];
   const emissionIssues: Issue[] = shot === undefined ? [] : reviewInformationEmission(project, {
     entityId: frame.id, channel: 'image', informationIds: frameInformationIds(project, frame.id), atMs: frameEvaluationAbsoluteMs(shot, frame),
   });

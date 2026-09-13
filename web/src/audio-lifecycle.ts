@@ -1,5 +1,11 @@
+import { audioVolumeAt } from '../../src/domain/audio-mix.js';
+import type { AudioMix } from '../../src/domain/audio-mix.js';
+import type { ReviewPlaybackRate } from './review-playback.js';
+
 export type AudioElementPort = {
   currentTime: number;
+  volume: number;
+  playbackRate: number;
   pause: () => void;
   play: () => Promise<void>;
   dispose?: () => void;
@@ -9,6 +15,7 @@ export type AudioLifecycleCue = {
   id: string;
   startMs: number;
   endMs: number;
+  mix?: AudioMix | undefined;
 };
 
 export type AudioScheduler = {
@@ -47,17 +54,19 @@ export class BrowserAudioController {
     this.#active.delete(cueId);
   }
 
-  start(projectId: string, cue: AudioLifecycleCue, playheadMs: number, url: string, onError: (error: unknown) => void): void {
+  start(projectId: string, cue: AudioLifecycleCue, playheadMs: number, url: string, rate: ReviewPlaybackRate, onError: (error: unknown) => void): void {
     if (this.#projectId !== null && this.#projectId !== projectId) this.reset();
     this.#projectId = projectId;
     if (playheadMs < cue.startMs || playheadMs >= cue.endMs || this.#played.has(cue.id)) return;
     const element: AudioElementPort = this.#createAudio(url);
+    element.volume = audioVolumeAt(cue, playheadMs);
+    element.playbackRate = rate;
     element.currentTime = Math.max(0, (playheadMs - cue.startMs) / 1000);
     const epoch: number = this.#epoch;
     const timerId: number = this.#scheduler.schedule((): void => {
       const current: ActiveAudio | undefined = this.#active.get(cue.id);
-      if (current?.epoch === epoch && current.element === element) this.#stopEntry(cue.id);
-    }, cue.endMs - playheadMs);
+      if (current?.epoch === epoch && current.element === element && current.timerId === timerId) this.#stopEntry(cue.id);
+    }, (cue.endMs - playheadMs) / rate);
     const active: ActiveAudio = { projectId, cue, element, timerId, epoch };
     this.#active.set(cue.id, active);
     this.#played.add(cue.id);
@@ -73,7 +82,7 @@ export class BrowserAudioController {
     });
   }
 
-  reconcile(projectId: string, playheadMs: number, playing: boolean): void {
+  reconcile(projectId: string, playheadMs: number, playing: boolean, rate: ReviewPlaybackRate): void {
     if (!playing) {
       this.reset();
       return;
@@ -82,6 +91,20 @@ export class BrowserAudioController {
     this.#projectId = projectId;
     for (const [cueId, active] of this.#active) {
       if (active.projectId !== projectId || playheadMs < active.cue.startMs || playheadMs >= active.cue.endMs) this.#stopEntry(cueId);
+      else {
+        active.element.volume = audioVolumeAt(active.cue, playheadMs);
+        if (active.element.playbackRate !== rate) {
+          active.element.playbackRate = rate;
+          this.#scheduler.cancel(active.timerId);
+          const timerId: number = this.#scheduler.schedule((): void => {
+            if (this.#active.get(cueId) === active && active.timerId === timerId) this.#stopEntry(cueId);
+          }, (active.cue.endMs - playheadMs) / rate);
+          active.timerId = timerId;
+        }
+        // 로딩 대기나 백그라운드 복귀의 지연을 원본 시각에 맞춘다.
+        const expectedTime: number = (playheadMs - active.cue.startMs) / 1000;
+        if (Math.abs(active.element.currentTime - expectedTime) > 0.15) active.element.currentTime = expectedTime;
+      }
     }
   }
 
@@ -104,11 +127,16 @@ export function createBrowserAudio(url: string): AudioElementPort {
   audio.hidden = true;
   audio.dataset.storyboardAudio = 'active';
   audio.preload = 'auto';
+  audio.preservesPitch = true;
   let requestedTime: number = 0;
   const seekAfterMetadata = (): void => { audio.currentTime = requestedTime; };
   audio.addEventListener('loadedmetadata', seekAfterMetadata);
   document.body.append(audio);
   return {
+    get volume(): number { return audio.volume; },
+    set volume(value: number) { audio.volume = value; },
+    get playbackRate(): number { return audio.playbackRate; },
+    set playbackRate(value: number) { audio.playbackRate = value; },
     get currentTime(): number { return audio.currentTime; },
     set currentTime(value: number) { requestedTime = value; if (audio.readyState >= 1) audio.currentTime = value; },
     play: (): Promise<void> => audio.play(),

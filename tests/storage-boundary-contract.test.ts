@@ -243,7 +243,7 @@ describe('A. Asset reference collection', (): void => {
   });
   it('asset_reference_policy_covers_all_current_foreign_keys', async (): Promise<void> => {
     expect(PROJECT_ASSET_REFERENCE_FIELDS).toEqual(['frames.imageAssetId', 'audioCues.assetId', 'generationRecords.resultAssetIds',
-      'shots.propIds', 'shots.continuityBefore.assetId', 'shots.continuityAfter.assetId']);
+      'shots.propIds', 'shots.continuityBefore.assetId', 'shots.continuityAfter.assetId', 'productionPlan.resources.referenceAssetId']);
   });
 });
 

@@ -1,16 +1,18 @@
 import { contractError, issue } from './errors.js';
+import { audioCueTimingSource } from './audio-source.js';
+import type { AudioSource } from './audio-source.js';
 import type { AudioCue, Issue, Project, Segment, SourceUnit } from './schema.js';
 
 export type AudioTimingContext = {
-  unit: SourceUnit;
+  unit: AudioSource;
   sourceSegment: Segment;
   previousSegment: Segment | null;
   nextSegment: Segment | null;
 };
 
 export function audioTimingContext(project: Project, cue: AudioCue): AudioTimingContext | null {
-  const unit: SourceUnit | undefined = project.dataset.units.find((candidate: SourceUnit): boolean => candidate.id === cue.unitId);
-  if (unit === undefined) return null;
+  const unit: AudioSource | null = audioCueTimingSource(project, cue);
+  if (unit === null) return null;
   const sourceIndex: number = project.dataset.segments.findIndex((segment: Segment): boolean => segment.id === unit.segmentId);
   const sourceSegment: Segment | undefined = project.dataset.segments[sourceIndex];
   if (sourceSegment === undefined) return null;
@@ -46,10 +48,13 @@ function overhangIssue(cue: AudioCue, expected: string, refs: SourceUnit['source
 
 /** Audio Cue의 명시적 구간 관계와 실제 Master Timeline 범위를 함께 검사한다. */
 export function audioTimingIssues(project: Project, cue: AudioCue): Issue[] {
+  if (cue.mix !== undefined && cue.mix.fadeInMs + cue.mix.fadeOutMs > cue.endMs - cue.startMs) {
+    return [issue('AUDIO_MIX_FADE_RANGE', 'error', cue.id, 'mix', '페이드 합계가 음원 배치 길이보다 깁니다. 페이드 시간을 줄이세요.', String(cue.endMs - cue.startMs), String(cue.mix.fadeInMs + cue.mix.fadeOutMs), [])];
+  }
   const context: AudioTimingContext | null = audioTimingContext(project, cue);
   if (context === null) {
     return [issue('AUDIO_SOURCE_CONTEXT_MISSING', 'error', cue.id, 'unitId',
-      'Audio Cue의 원본 Unit과 Segment를 찾을 수 없습니다.', 'existing source unit and segment', cue.unitId, [])];
+      'Audio Cue의 대본 또는 음향 지시와 기준 구간을 찾을 수 없습니다.', 'existing audio source and segment', cue.instructionId ?? cue.unitId, [])];
   }
   const { sourceSegment, previousSegment, nextSegment, unit } = context;
   const totalEndMs: number = project.dataset.segments.at(-1)?.endMs ?? 0;

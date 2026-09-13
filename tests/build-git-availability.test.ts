@@ -1,3 +1,4 @@
+import { legacyTextProject } from './legacy-text-helpers.js';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -22,7 +23,7 @@ function legacyBuild(): LegacyBuild {
 }
 async function legacyProject(): Promise<object> {
   const { project } = await readyVisualFixture();
-  return { ...project, schemaVersion: '1.8.0', generationRecords: [{ id: 'legacy-record', provider: 'codex-app', model: 'image-gen', modelVersion: null,
+  return { ...legacyTextProject(project), schemaVersion: '1.8.0', generationRecords: [{ id: 'legacy-record', provider: 'codex-app', model: 'image-gen', modelVersion: null,
     requestId: null, prompt: '보존해야 하는 과거 프롬프트', templateVersion: '1', seed: null, referenceHashes: [], resultAssetIds: [], shotIds: [],
     createdAt: '2026-09-08T00:00:00.000Z', generatorBuild: legacyBuild() }] };
 }
@@ -48,16 +49,16 @@ describe('Git 확인 불가 Provenance와 1.9 이관', (): void => {
     expect(readBuildGitState(await temporaryRoot())).toEqual({ gitStateAvailable: false, headCommitSha: null, worktreeDirty: null, generationInputsDirty: null });
   });
   it('current_build_manifest_uses_provenance_version_3', (): void => {
-    expect(readBuildManifest()).toMatchObject({ provenanceVersion: 3, gitStateAvailable: true, projectSchemaVersion: '1.9.0' });
+    expect(readBuildManifest()).toMatchObject({ provenanceVersion: 3, gitStateAvailable: true, projectSchemaVersion: '1.24.0' });
     expect(generatorBuildProvenance(readBuildManifest())).toHaveProperty('gitStateAvailable', true);
   });
   it('project_18_to_19_migration_is_idempotent', async (): Promise<void> => {
     const migrated: Project = parseProject(await legacyProject());
-    expect(migrated.schemaVersion).toBe('1.9.0'); expect(parseProject(migrated)).toEqual(migrated);
+    expect(migrated.schemaVersion).toBe('1.24.0'); expect(parseProject(migrated)).toEqual(migrated);
   });
   it('project_18_to_19_preserves_original_data', async (): Promise<void> => {
     const input: object = await legacyProject(); const before: string = JSON.stringify(input); const migrated: Project = parseProject(input);
-    const normalized: object = { ...migrated, schemaVersion: '1.8.0', generationRecords: migrated.generationRecords.map((record) => ({
+    const normalized: object = { ...legacyTextProject(migrated), schemaVersion: '1.8.0', generationRecords: migrated.generationRecords.map((record) => ({
       ...record, generatorBuild: legacyBuild(),
     })) };
     expect(normalized).toEqual(input); expect(JSON.stringify(input)).toBe(before);

@@ -19,7 +19,7 @@ import { exportProjectJson } from '../src/exporters/json.js';
 import { exportProjectPdf } from '../src/exporters/pdf.js';
 import { importPackage } from '../src/importers/import-package.js';
 import { sha256Bytes, sha256Text } from '../src/importers/integrity.js';
-import { parseProject } from '../src/io/project.js';
+import { parseProject, parseProjectSnapshotEvidence } from '../src/io/project.js';
 import { buildFrameImageContext } from '../src/proposal/context.js';
 import { createSourceOutline } from '../src/proposal/outline.js';
 import { applySegmentProposal, SegmentProposalSchema } from '../src/proposal/model.js';
@@ -201,6 +201,40 @@ function demonstrationProposal(anchor: { startPermille: number; endPermille: num
 }
 
 describe('A. historical generation target', (): void => {
+  it('history_prompt_sharing_preserves_changed_metadata_hashes_and_independent_records', async (): Promise<void> => {
+    const dataRoot: string = await temporaryDataRoot('history-prompt-sharing-');
+    const store: ProjectStore = trackedStore(dataRoot);
+    const initial: Project = await store.create(nativeProject);
+    const directory: string = projectDirectory(dataRoot, initial.projectId);
+    const originalPrompt: string = '긴 생성 지시문과 원문 근거\n'.repeat(8192);
+    const record: GenerationRecord = { ...generationRecord('shared-prompt', [initial.shots[0]!.id], [], null), prompt: originalPrompt };
+    const snapshots: Project[] = [initial, ...[1, 2, 3].map((revision): Project => ({ ...initial, revision,
+      generationRecords: [{ ...record, prompt: revision === 2 ? `${originalPrompt}변경된 지시` : originalPrompt }] }))];
+    const paths: string[] = [];
+    for (const snapshot of snapshots) {
+      const path: string = join(directory, 'versions', `${String(snapshot.revision).padStart(6, '0')}.json`);
+      paths.push(path);
+      await writeFile(path, JSON.stringify(snapshot));
+    }
+    const currentPath: string = join(directory, 'project.json');
+    paths.push(currentPath);
+    await writeFile(currentPath, JSON.stringify(snapshots[3]));
+    const before: string[] = await Promise.all(paths.map((path): Promise<string> => readFile(path, 'utf8')));
+    const history = await store.generationHistorySnapshot(initial.projectId);
+    expect(history.versionEvidence).toEqual(snapshots.map(parseProjectSnapshotEvidence));
+    const audit = auditGenerationRecords(history.current, history.versions);
+    expect(audit).toEqual(auditGenerationRecords(snapshots[3]!, snapshots));
+    expect(audit[0]?.mutatedAtRevisions).toEqual([2]);
+    const first: GenerationRecord = history.versions.find((project): boolean => project.revision === 1)!.generationRecords[0]!;
+    const restored: GenerationRecord = history.versions.find((project): boolean => project.revision === 3)!.generationRecords[0]!;
+    expect(first).not.toBe(restored);
+    first.prompt = '호출자의 독립 수정';
+    first.shotIds.push('caller-change');
+    expect(restored).toEqual(record);
+    expect(history.current.generationRecords[0]).toEqual(record);
+    expect(await Promise.all(paths.map((path): Promise<string> => readFile(path, 'utf8')))).toEqual(before);
+  });
+
   const names: readonly string[] = [
     'existing_historical_shot_id_may_be_absent_from_current_project',
     'generation_record_structural_validation_does_not_require_current_shot',

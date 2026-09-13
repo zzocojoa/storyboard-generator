@@ -25,7 +25,7 @@ export function importShooting(file: Snapshot, segments: readonly Segment[]): { 
   return { instructions: records.map((row): Instruction => row.instruction), issues: records.flatMap((row): Issue[] => row.issues) };
 }
 
-export function importEdit(file: Snapshot, segments: readonly Segment[]): { instructions: Instruction[]; issues: Issue[] } {
+export function readEditTimeline(file: Snapshot): { segment: Segment; instruction: Instruction; sourceText: string }[] {
   const rows = file.content.split(/\r?\n/u).map((text: string, index: number) => ({ text, line: index + 1 }))
     .filter((row): boolean => row.text.startsWith('| `'));
   const records = rows.map((row) => {
@@ -33,19 +33,31 @@ export function importEdit(file: Snapshot, segments: readonly Segment[]): { inst
     if (match === null || match[1] === undefined || match[2] === undefined || match[3] === undefined || match[4] === undefined || match[5] === undefined || match[6] === undefined) {
       throw contractError('UNSUPPORTED_EDIT_ROW', `${file.path}:${row.line}: 지원하지 않는 편집 큐 형식입니다.`, []);
     }
-    const segmentId: string = match[1];
-    const refs = [sourceRef(file.id, `line:${row.line}`, segmentId)];
-    const segment = segments.find((value): boolean => value.id === segmentId);
-    const mismatch: boolean = segment === undefined || segment.sceneId !== match[5] || segment.mode !== match[4].trim()
-      || segment.startMs !== parseMinuteTime(match[2]) || segment.endMs !== parseMinuteTime(match[3]);
-    const instruction: Instruction = { id: `${file.id}:${row.line}`, segmentId, kind: 'edit', text: match[6], sourceRefs: refs };
-    return { instruction, issues: mismatch ? [issue('EDIT_TIMELINE_CONFLICT', 'conflict', segmentId, 'timing', '편집 큐와 기준 시간표가 다릅니다.', JSON.stringify(segment), row.text, refs)] : [] };
+    const refs = [sourceRef(file.id, `line:${row.line}`, match[1])];
+    const segment: Segment = { id: match[1], sceneId: match[5], mode: match[4].trim(), startMs: parseMinuteTime(match[2]),
+      endMs: parseMinuteTime(match[3]), timingStatus: 'fixed', reactionId: null, sourceRefs: refs };
+    const instruction: Instruction = { id: `${file.id}:${row.line}`, segmentId: match[1], kind: 'edit', text: match[6], sourceRefs: refs };
+    return { segment, instruction, sourceText: row.text };
   });
   if (records.length === 0) throw contractError('EMPTY_EDIT_CUES', `${file.path}: 읽을 수 있는 편집 큐가 없습니다.`, []);
-  const cueIds: string[] = records.map((row): string => row.instruction.segmentId);
+  const cueIds: string[] = records.map((row): string => row.segment.id);
   if (new Set(cueIds).size !== cueIds.length) throw contractError('DUPLICATE_EDIT_CUE', `${file.path}: 구간 편집 큐가 중복되었습니다.`, []);
+  return records;
+}
+
+export function importEdit(file: Snapshot, segments: readonly Segment[]): { instructions: Instruction[]; issues: Issue[] } {
+  const records = readEditTimeline(file);
+  const issues: Issue[] = records.flatMap((record): Issue[] => {
+    const candidate: Segment = record.segment;
+    const segment: Segment | undefined = segments.find((value): boolean => value.id === candidate.id);
+    const mismatch: boolean = segment === undefined || segment.sceneId !== candidate.sceneId || segment.mode !== candidate.mode
+      || segment.startMs !== candidate.startMs || segment.endMs !== candidate.endMs;
+    return mismatch ? [issue('EDIT_TIMELINE_CONFLICT', 'conflict', candidate.id, 'timing', '편집 큐와 기준 시간표가 다릅니다.',
+      JSON.stringify(segment), record.sourceText, candidate.sourceRefs)] : [];
+  });
+  const cueIds: string[] = records.map((row): string => row.segment.id);
   if (segments.some((segment): boolean => !cueIds.includes(segment.id))) throw contractError('INCOMPLETE_EDIT_CUES', `${file.path}: 전체 구간의 편집 큐가 필요합니다. 누락: ${segments.filter((segment): boolean => !cueIds.includes(segment.id)).map((segment): string => segment.id).join(', ')}`, []);
-  return { instructions: records.map((row): Instruction => row.instruction), issues: records.flatMap((row): Issue[] => row.issues) };
+  return { instructions: records.map((row): Instruction => row.instruction), issues };
 }
 
 export function importSubtitles(file: Snapshot, units: readonly SourceUnit[]): { placements: TextPlacement[]; issues: Issue[] } {

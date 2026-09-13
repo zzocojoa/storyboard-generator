@@ -4,7 +4,8 @@ import { contractError } from '../domain/errors.js';
 import { sha256Text } from '../importers/integrity.js';
 import { stableJsonStringify } from '../io/stable-json.js';
 import type { JsonValue } from '../io/stable-json.js';
-import type { PdfFramePageItem, PdfProjection } from './pdf.js';
+import type { PdfFramePageItem, PdfProjection, PdfTrackEntry } from './pdf.js';
+import type { ReviewContentPolicy } from './review-delivery-schema.js';
 
 export type ReviewProfile = 'internal' | 'external';
 export type RedactionCategory = 'source-content' | 'generation-prompt' | 'absolute-path' | 'email' | 'phone' | 'resident-id' | 'explicit-pii';
@@ -55,21 +56,30 @@ function wholeField(input: string, fieldPath: string, category: RedactionCategor
 function pointerPart(value: string): string { return value.replaceAll('~', '~0').replaceAll('/', '~1'); }
 
 export function redactReviewJson(input: unknown, fieldPath: string, patterns: readonly RedactionPattern[]): RedactedJson {
+  return projectReviewJson(input, fieldPath, patterns, { sourceContent: false, generationPrompts: false });
+}
+
+/** 내부 전달물에서도 사용자가 제외한 전문·프롬프트는 범주와 원본 해시만 보존한다. */
+export function selectReviewJsonContent(input: unknown, fieldPath: string, contents: ReviewContentPolicy): RedactedJson {
+  return projectReviewJson(input, fieldPath, [], contents);
+}
+
+function projectReviewJson(input: unknown, fieldPath: string, patterns: readonly RedactionPattern[], contents: ReviewContentPolicy): RedactedJson {
   if (typeof input === 'string') {
-    if (fieldPath.endsWith('/prompt')) return wholeField(input, fieldPath, 'generation-prompt');
-    if (fieldPath.includes('/sources/') && fieldPath.endsWith('/content')) return wholeField(input, fieldPath, 'source-content');
+    if (!contents.generationPrompts && fieldPath.endsWith('/prompt')) return wholeField(input, fieldPath, 'generation-prompt');
+    if (!contents.sourceContent && fieldPath.includes('/sources/') && fieldPath.endsWith('/content')) return wholeField(input, fieldPath, 'source-content');
     return redactReviewText(input, fieldPath, patterns);
   }
   if (input === null || typeof input === 'boolean' || typeof input === 'number' && Number.isFinite(input)) return { value: input, entries: [] };
   if (Array.isArray(input)) {
-    const results: RedactedJson[] = input.map((value: unknown, index: number): RedactedJson => redactReviewJson(value, `${fieldPath}/${index}`, patterns));
+    const results: RedactedJson[] = input.map((value: unknown, index: number): RedactedJson => projectReviewJson(value, `${fieldPath}/${index}`, patterns, contents));
     return { value: results.map((result: RedactedJson): JsonValue => result.value), entries: results.flatMap((result: RedactedJson): RedactionEntry[] => result.entries) };
   }
   if (typeof input === 'object' && Object.getPrototypeOf(input) === Object.prototype) {
     const entries: RedactionEntry[] = []; const pairs: [string, JsonValue][] = [];
     for (const [key, value] of Object.entries(input).sort(([a], [b]): number => a < b ? -1 : a > b ? 1 : 0)) {
       const redactedKey: RedactedText = redactReviewText(key, `${fieldPath}/key:${sha256Text(key)}`, patterns);
-      const result: RedactedJson = redactReviewJson(value, `${fieldPath}/${pointerPart(redactedKey.value)}`, patterns);
+      const result: RedactedJson = projectReviewJson(value, `${fieldPath}/${pointerPart(redactedKey.value)}`, patterns, contents);
       pairs.push([redactedKey.value, result.value]); entries.push(...redactedKey.entries, ...result.entries);
     }
     if (new Set(pairs.map(([key]): string => key)).size !== pairs.length) throw contractError('REVIEW_REDACTION_KEY_COLLISION', '비식별화한 출력 필드 이름이 중복됩니다.', []);
@@ -95,11 +105,19 @@ export function redactCsvProjection(rows: readonly string[][], patterns: readonl
 export function redactPdfProjection(input: PdfProjection, patterns: readonly RedactionPattern[]): { projection: PdfProjection; entries: RedactionEntry[] } {
   const entries: RedactionEntry[] = [];
   const text = (value: string, field: string): string => { const result: RedactedText = redactReviewText(value, `/storyboard.pdf/${field}`, patterns); entries.push(...result.entries); return result.value; };
-  const items: PdfFramePageItem[] = input.items.map((item: PdfFramePageItem, index: number): PdfFramePageItem => ({ ...item, image: null,
-    shotId: text(item.shotId, `${index}/shotId`), timeText: text(item.timeText, `${index}/timeText`), cameraText: text(item.cameraText, `${index}/cameraText`),
+  const track = (entry: PdfTrackEntry, field: string): PdfTrackEntry => ({ id: text(entry.id, `${field}/id`),
+    label: text(entry.label, `${field}/label`), timeText: text(entry.timeText, `${field}/timeText`),
+    body: text(entry.body, `${field}/body`), statusText: text(entry.statusText, `${field}/statusText`) });
+  const items: PdfFramePageItem[] = input.items.map((item: PdfFramePageItem, index: number): PdfFramePageItem => ({ ...item, image: null, overlayInputs: [],
+    shotId: text(item.shotId, `${index}/shotId`), frameId: text(item.frameId, `${index}/frameId`), timeText: text(item.timeText, `${index}/timeText`), cameraText: text(item.cameraText, `${index}/cameraText`),
     action: text(item.action, `${index}/action`), frameText: text(item.frameText, `${index}/frameText`), sourceText: text(item.sourceText, `${index}/sourceText`),
-    gateText: text(item.gateText, `${index}/gateText`), outputText: text(item.outputText, `${index}/outputText`), placeholderText: text(item.placeholderText, `${index}/placeholderText`) }));
-  return { projection: { ...input, title: text(input.title, 'title'), items }, entries };
+    gateText: text(item.gateText, `${index}/gateText`), outputText: text(item.outputText, `${index}/outputText`), placeholderText: text(item.placeholderText, `${index}/placeholderText`),
+    description: text(item.description, `${index}/description`),
+    textEntries: item.textEntries.map((entry: PdfTrackEntry, trackIndex: number): PdfTrackEntry => track(entry, `${index}/textEntries/${trackIndex}`)),
+    audioEntries: item.audioEntries.map((entry: PdfTrackEntry, trackIndex: number): PdfTrackEntry => track(entry, `${index}/audioEntries/${trackIndex}`)) }));
+  const { textTypography: _textTypography, ...visibleProjection } = input;
+  return { projection: { ...visibleProjection, title: text(input.title, 'title'), outputLabel: text(input.outputLabel, 'outputLabel'),
+    ...(input.selectionLabel === undefined ? {} : { selectionLabel: text(input.selectionLabel, 'selectionLabel') }), items }, entries };
 }
 export function redactionManifest(profile: ReviewProfile, label: string, explicit: readonly string[], entries: readonly RedactionEntry[]): RedactionManifest {
   const categories: Record<string, number> = {};

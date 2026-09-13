@@ -210,7 +210,7 @@ type FakeAudio = AudioElementPort & { pauseCount: number; playCount: number };
 
 function fakeAudio(playResult: Promise<void>): FakeAudio {
   const audio: FakeAudio = {
-    currentTime: 0, pauseCount: 0, playCount: 0,
+    currentTime: 0, volume: 1, playbackRate: 1, pauseCount: 0, playCount: 0,
     pause(): void { audio.pauseCount += 1; },
     play(): Promise<void> { audio.playCount += 1; return playResult; },
   };
@@ -636,7 +636,7 @@ describe('브라우저 Audio 수명주기', (): void => {
   it('Cue 종료 timer가 Audio를 정지한다', (): void => {
     const scheduler = manualScheduler(); const audio: FakeAudio = fakeAudio(Promise.resolve());
     const controller = new BrowserAudioController((_url: string): FakeAudio => audio, scheduler);
-    controller.start('project-a', cue, 1500, '/audio.wav', (): void => {});
+    controller.start('project-a', cue, 1500, '/audio.wav', 1, (): void => {});
     const callback: (() => void) | undefined = [...scheduler.callbacks.values()][0];
     if (callback === undefined) throw new Error('Cue 종료 timer가 등록되지 않았습니다.');
     callback(); expect(audio.pauseCount).toBe(1); expect(controller.activeCount()).toBe(0);
@@ -645,23 +645,23 @@ describe('브라우저 Audio 수명주기', (): void => {
   it('playhead가 Cue 끝을 지나면 Audio를 정지한다', (): void => {
     const scheduler = manualScheduler(); const audio: FakeAudio = fakeAudio(Promise.resolve());
     const controller = new BrowserAudioController((_url: string): FakeAudio => audio, scheduler);
-    controller.start('project-a', cue, 1500, '/audio.wav', (): void => {}); controller.reconcile('project-a', 3000, true);
+    controller.start('project-a', cue, 1500, '/audio.wav', 1, (): void => {}); controller.reconcile('project-a', 3000, true, 1);
     expect(audio.pauseCount).toBe(1); expect(controller.activeCount()).toBe(0);
   });
 
   it('일시정지는 Audio와 재생 이력을 초기화한다', (): void => {
     const scheduler = manualScheduler(); const audios: FakeAudio[] = [];
     const controller = new BrowserAudioController((_url: string): FakeAudio => { const audio: FakeAudio = fakeAudio(Promise.resolve()); audios.push(audio); return audio; }, scheduler);
-    controller.start('project-a', cue, 1500, '/audio.wav', (): void => {}); controller.reconcile('project-a', 1500, false);
-    controller.start('project-a', cue, 1500, '/audio.wav', (): void => {});
+    controller.start('project-a', cue, 1500, '/audio.wav', 1, (): void => {}); controller.reconcile('project-a', 1500, false, 1);
+    controller.start('project-a', cue, 1500, '/audio.wav', 1, (): void => {});
     expect(audios).toHaveLength(2); expect(audios[0]?.pauseCount).toBe(1);
   });
 
   it('Project가 바뀌면 이전 Audio를 정지하고 같은 Cue ID도 새로 재생한다', (): void => {
     const scheduler = manualScheduler(); const audios: FakeAudio[] = [];
     const controller = new BrowserAudioController((_url: string): FakeAudio => { const audio: FakeAudio = fakeAudio(Promise.resolve()); audios.push(audio); return audio; }, scheduler);
-    controller.start('project-a', cue, 1500, '/a.wav', (): void => {}); controller.reconcile('project-b', 1500, true);
-    controller.start('project-b', cue, 1500, '/b.wav', (): void => {});
+    controller.start('project-a', cue, 1500, '/a.wav', 1, (): void => {}); controller.reconcile('project-b', 1500, true, 1);
+    controller.start('project-b', cue, 1500, '/b.wav', 1, (): void => {});
     expect(audios).toHaveLength(2); expect(audios[0]?.pauseCount).toBe(1);
   });
 
@@ -670,7 +670,7 @@ describe('브라우저 Audio 수명주기', (): void => {
     const pending: Promise<void> = new Promise<void>((resolvePlayPromise): void => { resolver.current = resolvePlayPromise; });
     const scheduler = manualScheduler(); const audio: FakeAudio = fakeAudio(pending);
     const controller = new BrowserAudioController((_url: string): FakeAudio => audio, scheduler);
-    controller.start('project-a', cue, 1500, '/audio.wav', (): void => {}); controller.reset();
+    controller.start('project-a', cue, 1500, '/audio.wav', 1, (): void => {}); controller.reset();
     const resolvePlay: (() => void) | null = resolver.current;
     if (resolvePlay === null) throw new Error('Audio play Promise resolver가 없습니다.');
     resolvePlay(); await pending; await Promise.resolve();
@@ -685,8 +685,8 @@ describe('브라우저 Audio 수명주기', (): void => {
     const controller = new BrowserAudioController((_url: string): FakeAudio => {
       const audio: FakeAudio | undefined = audios.shift(); if (audio === undefined) throw new Error('검증 Audio가 부족합니다.'); return audio;
     }, scheduler);
-    controller.start('project-a', cue, 1500, '/first.wav', (): void => {}); controller.reset();
-    controller.start('project-a', cue, 1500, '/second.wav', (): void => {});
+    controller.start('project-a', cue, 1500, '/first.wav', 1, (): void => {}); controller.reset();
+    controller.start('project-a', cue, 1500, '/second.wav', 1, (): void => {});
     const rejectPlay: ((error: Error) => void) | null = rejecter.current;
     if (rejectPlay === null) throw new Error('Audio play Promise rejecter가 없습니다.');
     rejectPlay(new Error('이전 Audio 실패')); await pending.catch((): void => {}); await Promise.resolve();
@@ -696,7 +696,7 @@ describe('브라우저 Audio 수명주기', (): void => {
   it('Cue 중간에서 재생하면 Audio offset을 정확히 설정한다', (): void => {
     const scheduler = manualScheduler(); const audio: FakeAudio = fakeAudio(Promise.resolve());
     const controller = new BrowserAudioController((_url: string): FakeAudio => audio, scheduler);
-    controller.start('project-a', cue, 2250, '/audio.wav', (): void => {});
+    controller.start('project-a', cue, 2250, '/audio.wav', 1, (): void => {});
     expect(audio.currentTime).toBe(1.25);
   });
 });

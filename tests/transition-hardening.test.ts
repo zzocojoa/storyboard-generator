@@ -1,3 +1,4 @@
+import { legacyTextProject } from './legacy-text-helpers.js';
 import { describe, expect, it } from 'vitest';
 import { approveShot } from '../src/domain/edit.js';
 import { reviewFinalReadiness } from '../src/domain/final-readiness.js';
@@ -93,7 +94,7 @@ describe('전환의 실제 Incoming 노출', (): void => {
 
   it('legacy_transition_migration_preserves_fade_and_custom_meaning', async (): Promise<void> => {
     const { project } = await readyVisualFixture();
-    const input = { ...project, schemaVersion: '1.7.0', shots: project.shots.map((shot: Shot, index: number): Shot => ({ ...shot,
+    const input = { ...legacyTextProject(project), schemaVersion: '1.7.0', shots: project.shots.map((shot: Shot, index: number): Shot => ({ ...shot,
       transitionOut: index === 0 ? { kind: 'fade', durationMs: 500, note: '기존 페이드' } : index === 1 ? { kind: 'custom', durationMs: 500, note: '미정 효과' } : shot.transitionOut,
     })) };
     const before: string = JSON.stringify(input);

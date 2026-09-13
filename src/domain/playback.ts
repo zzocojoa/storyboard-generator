@@ -1,3 +1,5 @@
+import { audioCueSource } from './audio-source.js';
+import { audioCueInstructionIssues } from './audio-instruction-evidence.js';
 import { audioTimingIssues } from './audio.js';
 import { reviewInformationEmission, textCueInformationIds } from './emission.js';
 import { issue } from './errors.js';
@@ -56,6 +58,8 @@ export function playableTextCuesAt(project: Project, playheadMs: number): TextCu
 }
 
 function audioAssetIssues(project: Project, cue: AudioCue): Issue[] {
+  if (cue.timingStatus === 'prepared') return [issue('AUDIO_PLACEMENT_REQUIRED', 'conflict', cue.id, 'timingStatus',
+    '음향 파일은 준비됐습니다. 자동 제작으로 실제 길이와 원문 공개 시점을 검증해 배치하세요.', 'measured', 'prepared', [])];
   if (cue.timingStatus !== 'measured') return [issue('AUDIO_NOT_MEASURED', 'conflict', cue.id, 'timingStatus',
     '제안 상태 Audio Cue는 재생할 수 없습니다.', 'measured', cue.timingStatus, [])];
   const asset: Asset | undefined = cue.assetId === null ? undefined
@@ -70,11 +74,12 @@ export function reviewAudioPlaybackAt(project: Project, playheadMs: number): Aud
   const playable: AudioCue[] = [];
   const blocked: BlockedCue[] = [];
   for (const cue of project.audioCues.filter((candidate: AudioCue): boolean => candidate.startMs <= playheadMs && playheadMs < candidate.endMs)) {
-    const unit = project.dataset.units.find((candidate): boolean => candidate.id === cue.unitId);
+    const unit = audioCueSource(project, cue);
     const informationIds: string[] = unit?.informationIds ?? [];
     const issues: Issue[] = [
       ...audioAssetIssues(project, cue),
       ...audioTimingIssues(project, cue),
+      ...audioCueInstructionIssues(project, cue),
       ...reviewInformationEmission(project, { entityId: cue.id, channel: 'audio-playback', informationIds, atMs: cue.startMs }),
     ];
     if (issues.length === 0) playable.push(cue);

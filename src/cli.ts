@@ -8,6 +8,11 @@ import { importPackage } from './importers/import-package.js';
 import { readPackage } from './io/package.js';
 import { readProject, writeNewText } from './io/project.js';
 import { createSourceOutline } from './proposal/outline.js';
+import { inspectDocuments } from './documents/compile.js';
+import { readDocumentSources, writeDocumentPackage } from './documents/io.js';
+import { readUtf8 } from './io/package.js';
+import { parseJson } from './importers/integrity.js';
+import { DocumentBindingsSchema } from './documents/schema.js';
 
 function required(value: string | undefined, name: string): string {
   if (value === undefined || value.trim() === '') throw contractError('MISSING_ARGUMENT', `${name} 인수를 지정하세요.`, []);
@@ -49,7 +54,21 @@ async function exportCsv(args: string[]): Promise<void> {
   printProject(project);
 }
 
-const help: string = `콘티 제작 도구\n\noutline --handoff <storyboard_handoff.json> --output <project.json> --text-hold-ms <정수>\nvalidate --project <project.json>\nexport-json --project <project.json> --output <새 JSON 경로>\nexport-csv --project <project.json> --output <새 CSV 경로>\n\noutline은 수동 편집용 초안을 생성합니다. 구도·그림과 실제 음성 길이는 아직 확정되지 않습니다.\n`;
+const help: string = `콘티 제작 도구\n\ndocuments-preview --input <제작 문서 디렉터리> [--bindings <연결 JSON>]\ndocuments-package --input <제작 문서 디렉터리> --settings <설정 JSON> --output <새 패키지 디렉터리>\noutline --handoff <storyboard_handoff.json> --output <project.json> --text-hold-ms <정수>\nvalidate --project <project.json>\nexport-json --project <project.json> --output <새 JSON 경로>\nexport-csv --project <project.json> --output <새 CSV 경로>\n\noutline은 수동 편집용 초안을 생성합니다. 구도·그림과 실제 음성 길이는 아직 확정되지 않습니다.\n`;
+
+async function documentsPreview(args: string[]): Promise<void> {
+  const { values } = parseArgs({ args, options: { input: { type: 'string' }, bindings: { type: 'string' } }, strict: true, allowPositionals: false });
+  const bindings = values.bindings === undefined ? { people: [], scenes: [], units: [] } : DocumentBindingsSchema.parse(parseJson(await readUtf8(values.bindings), values.bindings));
+  const preview = inspectDocuments(await readDocumentSources(required(values.input, '--input')), bindings).preview;
+  process.stdout.write(`${JSON.stringify(preview, null, 2)}\n`);
+}
+
+async function documentsPackage(args: string[]): Promise<void> {
+  const { values } = parseArgs({ args, options: { input: { type: 'string' }, settings: { type: 'string' }, output: { type: 'string' } }, strict: true, allowPositionals: false });
+  const settingsPath: string = required(values.settings, '--settings');
+  const result = await writeDocumentPackage(required(values.input, '--input'), parseJson(await readUtf8(settingsPath), settingsPath), required(values.output, '--output'));
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+}
 
 async function main(args: string[]): Promise<void> {
   const [command, ...rest] = args;
@@ -58,6 +77,8 @@ async function main(args: string[]): Promise<void> {
     case 'validate': await validate(rest); return;
     case 'export-json': await exportJson(rest); return;
     case 'export-csv': await exportCsv(rest); return;
+    case 'documents-preview': await documentsPreview(rest); return;
+    case 'documents-package': await documentsPackage(rest); return;
     case '--help': process.stdout.write(help); return;
     default: throw contractError('UNKNOWN_COMMAND', help, []);
   }
