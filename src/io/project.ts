@@ -5,6 +5,7 @@ import { storyboardReadingPreset } from '../domain/text-readability.js';
 import { link, mkdir, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { assertNoErrors, contractError } from '../domain/errors.js';
 import { intrinsicIncomingExposure } from '../domain/transition.js';
@@ -317,7 +318,9 @@ export type ProjectSnapshotEvidence = { project: Project; projectionHashes: read
 export function parseProjectSnapshotEvidence(input: unknown): ProjectSnapshotEvidence {
   const states: readonly unknown[] = projectMigrationInputs(input);
   const project: Project = parseProject(states[states.length - 1]);
-  return { project, projectionHashes: [...new Set([...states, project].map((value): string => sha256Text(stableJsonStringify(value))))] };
+  // 검증된 전체 값이 마지막 이관 값과 같을 때만 동일한 큰 JSON의 재직렬화·해시 계산을 생략한다.
+  const projections: readonly unknown[] = isDeepStrictEqual(states[states.length - 1], project) ? states : [...states, project];
+  return { project, projectionHashes: [...new Set(projections.map((value): string => sha256Text(stableJsonStringify(value))))] };
 }
 
 /** 저장된 원본 스냅샷에서 데이터를 다시 계산해 편집 가능한 값과 원문을 구분한다. */

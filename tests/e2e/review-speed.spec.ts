@@ -67,7 +67,8 @@ test('e2e_review_speed_synchronizes_real_delayed_audio_frames_text_and_cue_end_w
     const slowNext = await sample(page); expect((slowNext.atMs - slow.atMs) / (slowNext.wall - slow.wall)).toBeCloseTo(0.5, 1);
     await speed.selectOption('2'); await expect(audio).toHaveJSProperty('playbackRate', 2);
     const fast = await sample(page); expect(fast.atMs).toBeGreaterThanOrEqual(slowNext.atMs); expect(fast.atMs - slowNext.atMs).toBeLessThan(500);
-    await expect.poll(async (): Promise<number> => (await sample(page)).wall - fast.wall).toBeGreaterThan(150);
+    // 2배속의 짧은 남은 구간을 기본 100→250ms 간격으로 건너뛰어 정상 종료 뒤에 검사하지 않는다.
+    await expect.poll(async (): Promise<number> => (await sample(page)).wall - fast.wall, { intervals: [25] }).toBeGreaterThan(150);
     const fastNext = await sample(page); expect((fastNext.atMs - fast.atMs) / (fastNext.wall - fast.wall)).toBeCloseTo(2, 0);
     expect(Math.abs(fastNext.audioMs - (fastNext.atMs - 5000))).toBeLessThan(200);
     await expect(audio).toHaveCount(0); await expect(image).not.toHaveAttribute('src', first);

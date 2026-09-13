@@ -20,6 +20,7 @@ import { exportProjectPdf } from '../src/exporters/pdf.js';
 import { importPackage } from '../src/importers/import-package.js';
 import { sha256Bytes, sha256Text } from '../src/importers/integrity.js';
 import { parseProject, parseProjectSnapshotEvidence } from '../src/io/project.js';
+import { stableJsonStringify } from '../src/io/stable-json.js';
 import { buildFrameImageContext } from '../src/proposal/context.js';
 import { createSourceOutline } from '../src/proposal/outline.js';
 import { applySegmentProposal, SegmentProposalSchema } from '../src/proposal/model.js';
@@ -201,6 +202,29 @@ function demonstrationProposal(anchor: { startPermille: number; endPermille: num
 }
 
 describe('A. historical generation target', (): void => {
+  it('snapshot_evidence_preserves_current_legacy_and_review_envelope_hashes_without_mutating_input', (): void => {
+    const first: GenerationRecord = { ...generationRecord('first', [nativeProject.shots[0]!.id], [], null), prompt: '생성 원문과 근거\n'.repeat(8192) };
+    const second: GenerationRecord = { ...first, id: 'second', model: 'another-model', prompt: `${first.prompt}다른 지시` };
+    const current: Project = { ...nativeProject, generationRecords: [first, second] };
+    const changed: Project = { ...current, generationRecords: [second, first] };
+    const legacy = { ...current, schemaVersion: '1.23.0' };
+    const envelope = { artifactType: 'storyboard-review-project', artifactVersion: '1.0.0', maturity: 'draft', project: current };
+    const hash = (value: unknown): string => sha256Text(stableJsonStringify(value));
+    const cases: readonly { input: unknown; expectedProject: Project; expectedHashes: readonly string[] }[] = [
+      { input: current, expectedProject: current, expectedHashes: [hash(current)] },
+      { input: legacy, expectedProject: current, expectedHashes: [hash(legacy), hash(current)] },
+      { input: envelope, expectedProject: current, expectedHashes: [hash(envelope), hash(current)] },
+      { input: changed, expectedProject: changed, expectedHashes: [hash(changed)] },
+    ];
+    expect(hash(changed)).not.toBe(hash(current));
+    for (const entry of cases) {
+      const before: string = JSON.stringify(entry.input);
+      expect(parseProjectSnapshotEvidence(entry.input)).toEqual({ project: entry.expectedProject, projectionHashes: entry.expectedHashes });
+      expect(JSON.stringify(entry.input)).toBe(before);
+    }
+    expect(() => parseProjectSnapshotEvidence({ ...current, unknownEvidence: true })).toThrow();
+  });
+
   it('history_prompt_sharing_preserves_changed_metadata_hashes_and_independent_records', async (): Promise<void> => {
     const dataRoot: string = await temporaryDataRoot('history-prompt-sharing-');
     const store: ProjectStore = trackedStore(dataRoot);
