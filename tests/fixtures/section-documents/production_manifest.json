@@ -1,0 +1,249 @@
+{
+  "schema_family": "production-manifest",
+  "schema_version": "1.1.0",
+  "project_id": "garden-steps-demo",
+  "source_footprint_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "scenes": [
+    {
+      "scene_id": "SCN-01",
+      "location_id": "작업대-01",
+      "cast_ids": [
+        "CHAR-01",
+        "CHAR-03",
+        "CHAR-02",
+        "CHAR-05",
+        "CHAR-04",
+        "CHAR-06"
+      ],
+      "child_actor_use": "NONE",
+      "vehicle_scene": "NONE",
+      "special_effect_level": "NONE",
+      "graphic_violence": "NONE",
+      "production_complexity": "LOW"
+    },
+    {
+      "scene_id": "SCN-02",
+      "location_id": "작업대-02",
+      "cast_ids": [
+        "CHAR-01",
+        "CHAR-03",
+        "CHAR-02",
+        "CHAR-05",
+        "CHAR-04",
+        "CHAR-06"
+      ],
+      "child_actor_use": "NONE",
+      "vehicle_scene": "NONE",
+      "special_effect_level": "NONE",
+      "graphic_violence": "NONE",
+      "production_complexity": "LOW"
+    },
+    {
+      "scene_id": "SCN-03",
+      "location_id": "작업대-03",
+      "cast_ids": [
+        "CHAR-01",
+        "CHAR-03",
+        "CHAR-02",
+        "CHAR-05",
+        "CHAR-04",
+        "CHAR-06"
+      ],
+      "child_actor_use": "NONE",
+      "vehicle_scene": "NONE",
+      "special_effect_level": "NONE",
+      "graphic_violence": "NONE",
+      "production_complexity": "LOW"
+    },
+    {
+      "scene_id": "SCN-04",
+      "location_id": "작업대-04",
+      "cast_ids": [
+        "CHAR-01",
+        "CHAR-03",
+        "CHAR-02",
+        "CHAR-05",
+        "CHAR-04",
+        "CHAR-06"
+      ],
+      "child_actor_use": "NONE",
+      "vehicle_scene": "NONE",
+      "special_effect_level": "NONE",
+      "graphic_violence": "NONE",
+      "production_complexity": "LOW"
+    },
+    {
+      "scene_id": "SCN-05",
+      "location_id": "작업대-05",
+      "cast_ids": [
+        "CHAR-01",
+        "CHAR-03",
+        "CHAR-02",
+        "CHAR-05",
+        "CHAR-04",
+        "CHAR-06"
+      ],
+      "child_actor_use": "NONE",
+      "vehicle_scene": "NONE",
+      "special_effect_level": "NONE",
+      "graphic_violence": "NONE",
+      "production_complexity": "LOW"
+    },
+    {
+      "scene_id": "SCN-06",
+      "location_id": "작업대-06",
+      "cast_ids": [
+        "CHAR-01",
+        "CHAR-03",
+        "CHAR-02",
+        "CHAR-05",
+        "CHAR-04",
+        "CHAR-06"
+      ],
+      "child_actor_use": "NONE",
+      "vehicle_scene": "NONE",
+      "special_effect_level": "NONE",
+      "graphic_violence": "NONE",
+      "production_complexity": "LOW"
+    },
+    {
+      "scene_id": "SCN-07",
+      "location_id": "작업대-07",
+      "cast_ids": [
+        "CHAR-01",
+        "CHAR-03",
+        "CHAR-02",
+        "CHAR-05",
+        "CHAR-04",
+        "CHAR-06"
+      ],
+      "child_actor_use": "NONE",
+      "vehicle_scene": "NONE",
+      "special_effect_level": "NONE",
+      "graphic_violence": "NONE",
+      "production_complexity": "LOW"
+    },
+    {
+      "scene_id": "SCN-08",
+      "location_id": "작업대-08",
+      "cast_ids": [
+        "CHAR-01",
+        "CHAR-03",
+        "CHAR-02",
+        "CHAR-05",
+        "CHAR-04",
+        "CHAR-06"
+      ],
+      "child_actor_use": "NONE",
+      "vehicle_scene": "NONE",
+      "special_effect_level": "NONE",
+      "graphic_violence": "NONE",
+      "production_complexity": "LOW"
+    },
+    {
+      "scene_id": "SCN-09",
+      "location_id": "작업대-09",
+      "cast_ids": [
+        "CHAR-01",
+        "CHAR-03",
+        "CHAR-02",
+        "CHAR-05",
+        "CHAR-04",
+        "CHAR-06"
+      ],
+      "child_actor_use": "NONE",
+      "vehicle_scene": "NONE",
+      "special_effect_level": "NONE",
+      "graphic_violence": "NONE",
+      "production_complexity": "LOW"
+    },
+    {
+      "scene_id": "SCN-10",
+      "location_id": "작업대-10",
+      "cast_ids": [
+        "CHAR-01",
+        "CHAR-03",
+        "CHAR-02",
+        "CHAR-05",
+        "CHAR-04",
+        "CHAR-06"
+      ],
+      "child_actor_use": "NONE",
+      "vehicle_scene": "NONE",
+      "special_effect_level": "NONE",
+      "graphic_violence": "NONE",
+      "production_complexity": "LOW"
+    },
+    {
+      "scene_id": "SCN-11",
+      "location_id": "작업대-11",
+      "cast_ids": [
+        "CHAR-01",
+        "CHAR-03",
+        "CHAR-02",
+        "CHAR-05",
+        "CHAR-04",
+        "CHAR-06"
+      ],
+      "child_actor_use": "NONE",
+      "vehicle_scene": "NONE",
+      "special_effect_level": "NONE",
+      "graphic_violence": "NONE",
+      "production_complexity": "LOW"
+    },
+    {
+      "scene_id": "SCN-12",
+      "location_id": "작업대-12",
+      "cast_ids": [
+        "CHAR-01",
+        "CHAR-03",
+        "CHAR-02",
+        "CHAR-05",
+        "CHAR-04",
+        "CHAR-06"
+      ],
+      "child_actor_use": "NONE",
+      "vehicle_scene": "NONE",
+      "special_effect_level": "NONE",
+      "graphic_violence": "NONE",
+      "production_complexity": "LOW"
+    }
+  ],
+  "deliverables": [
+    {
+      "artifact_name": "broadcast_readable_script",
+      "path": "09_PRODUCTION/broadcast_readable_script.md",
+      "sha256": "71b75950d4a17ebd40f8057a2ab0576704ee21b5c36d08b41af239f69cde75e5"
+    },
+    {
+      "artifact_name": "reenactment_character_script",
+      "path": "09_PRODUCTION/reenactment_character_script.md",
+      "sha256": "1e7bbc8ae35acc07dce8273450a132ab4269b8019242e7964c1277f5184b4598"
+    },
+    {
+      "artifact_name": "edit_script",
+      "path": "09_PRODUCTION/edit_script.md",
+      "sha256": "d10f249c8ca1e8b27f3353460d14fdf37a75d0d48c05843f1a791619d7d4af9c"
+    },
+    {
+      "artifact_name": "shooting_script",
+      "path": "09_PRODUCTION/shooting_script.md",
+      "sha256": "12ad8db31803fc1ecf2892b26648be50d359764f5bf8643ece9377ac3be15236"
+    },
+    {
+      "artifact_name": "narration",
+      "path": "09_PRODUCTION/narration.md",
+      "sha256": "16772f62532210ae8d4d907a926537a0d4c025862019c5b406a136df42ea7102"
+    },
+    {
+      "artifact_name": "panel_reaction_script",
+      "path": "09_PRODUCTION/panel_reaction_script.md",
+      "sha256": "64e64bc3639d175e353eb04686a12ff041cf8d8eb7073f93c71d32f456828051"
+    },
+    {
+      "artifact_name": "subtitle_script",
+      "path": "09_PRODUCTION/subtitle_script.md",
+      "sha256": "438e8cdd18bb52b76828bf994cafe7dea72e02eff8f23ce85673d354288013d7"
+    }
+  ]
+}

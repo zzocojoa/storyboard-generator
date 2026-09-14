@@ -141,6 +141,17 @@
             "items": {
               "$ref": "#/$defs/__schema0"
             }
+          },
+          "delivery": {
+            "type": "string",
+            "const": "inner-monologue"
+          },
+          "subtitleSourceRefs": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/__schema4"
+            }
           }
         },
         "required": [
@@ -400,6 +411,34 @@
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991
+    },
+    "__schema4": {
+      "type": "object",
+      "properties": {
+        "fileId": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "locator": {
+          "type": "string",
+          "minLength": 1
+        },
+        "originalId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/__schema0"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "fileId",
+        "locator",
+        "originalId"
+      ],
+      "additionalProperties": false
     }
   }
 }

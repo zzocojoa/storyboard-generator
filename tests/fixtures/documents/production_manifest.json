@@ -1,0 +1,39 @@
+{
+  "schema_family": "production-manifest",
+  "schema_version": "1.1.0",
+  "project_id": "plant-doc-demo",
+  "source_footprint_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "scenes": [
+    {
+      "scene_id": "garden",
+      "location_id": "window",
+      "cast_ids": [
+        "host"
+      ],
+      "child_actor_use": "NONE",
+      "vehicle_scene": "NONE",
+      "special_effect_level": "NONE",
+      "graphic_violence": "NONE",
+      "production_complexity": "LOW"
+    },
+    {
+      "scene_id": "sink",
+      "location_id": "washroom",
+      "cast_ids": [
+        "helper"
+      ],
+      "child_actor_use": "NONE",
+      "vehicle_scene": "NONE",
+      "special_effect_level": "NONE",
+      "graphic_violence": "NONE",
+      "production_complexity": "LOW"
+    }
+  ],
+  "deliverables": [
+    {
+      "artifact_name": "readable",
+      "path": "09_PRODUCTION/broadcast_readable_script.md",
+      "sha256": "2a53d4d15bddc3bb1fdc7014db9786b7d0d72b376fff829ab15554f0c8cda0cf"
+    }
+  ]
+}

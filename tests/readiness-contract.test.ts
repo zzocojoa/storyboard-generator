@@ -15,6 +15,7 @@ import { exportShotCsvForPolicy } from '../src/exporters/csv.js';
 import { exportProjectPdfForPolicy } from '../src/exporters/pdf.js';
 import { parseProject } from '../src/io/project.js';
 import { buildFrameImageContext } from '../src/proposal/context.js';
+import { legacyTextProject } from './legacy-text-helpers.js';
 import { finalFixture, nonSourcedShot, readyVisualFixture, withFirstGap } from './readiness-fixtures.js';
 
 const font: string = resolve('assets/fonts/NanumGothic-Regular.ttf');
@@ -193,11 +194,11 @@ describe('Frame 공개 점과 표시 구간', (): void => {
     expect(proposedFrameVisualIntervals(point, shot)[0]?.proposedRange).toEqual({ startMs: 0, endMs: 5000 });
   });
   it('legacy_frame_anchor_migration_preserves_source_and_timing', async (): Promise<void> => {
-    const { project } = await readyVisualFixture(); const point: Project = pointAnchored(project); const migrated: Project = parseProject({ ...point, schemaVersion: '1.6.0' });
+    const { project } = await readyVisualFixture(); const point: Project = pointAnchored(project); const migrated: Project = parseProject({ ...legacyTextProject(point), schemaVersion: '1.6.0' });
     expect(migrated.shots).toEqual(point.shots); expect(migrated.frames).toEqual(point.frames); expect(migrated.dataset).toEqual(point.dataset); expect(parseProject(migrated)).toEqual(migrated);
   });
   it('migrated_unresolved_frame_anchor_blocks_output', async (): Promise<void> => {
-    const { project } = await readyVisualFixture(); const migrated: Project = parseProject({ ...pointAnchored(project), schemaVersion: '1.6.0' });
+    const { project } = await readyVisualFixture(); const migrated: Project = parseProject({ ...legacyTextProject(pointAnchored(project)), schemaVersion: '1.6.0' });
     expect(reviewVisualOutputAt(migrated, 0, 'program-monitor').issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'SOURCE_VISUAL_INTERVAL_REQUIRED' })]));
   });
 });

@@ -3,10 +3,12 @@ import { FrameSchema, HandoffSchema, NativeDatasetSchema, ProjectSchema, ShotSch
 import { GeneratorBuildProvenanceSchema } from '../src/domain/schema.js';
 import { CodexRequestSchema } from '../src/codex/request-schema.js';
 import { ApplyIntentSchema } from '../src/codex/apply-schema.js';
+import { DocumentSettingsSchema } from '../src/documents/schema.js';
 
 export function schemaArtifacts(): { name: string; content: string }[] {
   const schemas = [
     { name: 'storyboard_handoff.schema.json', schema: HandoffSchema },
+    { name: 'document_settings.schema.json', schema: DocumentSettingsSchema },
     { name: 'storyboard_project.schema.json', schema: ProjectSchema },
     { name: 'storyboard_frame.schema.json', schema: FrameSchema },
     { name: 'shot.schema.json', schema: ShotSchema },

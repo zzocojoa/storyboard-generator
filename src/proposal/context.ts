@@ -12,7 +12,7 @@ import { frameDisplayAbsoluteMs, frameEvaluationAbsoluteMs } from '../domain/tim
 import { effectiveTextPlacementRange } from '../domain/text-placement.js';
 
 export type ProposalPerson = Pick<Person, 'id' | 'name' | 'visualDescription'>;
-export type ProposalUnit = Pick<SourceUnit, 'id' | 'kind' | 'order' | 'text' | 'speakerId' | 'informationIds'> & {
+export type ProposalUnit = Pick<SourceUnit, 'id' | 'kind' | 'order' | 'text' | 'speakerId' | 'informationIds' | 'delivery'> & {
   mappingStatus: 'confirmed' | 'mapping-required';
 };
 export type ContextTextMapping = Pick<TextMappingDecision, 'id' | 'canonicalUnitId' | 'relation' | 'status' | 'renderCanonicalSeparately'> & {
@@ -65,6 +65,7 @@ function mappingStatus(project: Project, unitId: string, segmentId: string): Pro
 function proposalUnit(project: Project, unit: SourceUnit): ProposalUnit {
   return {
     id: unit.id, kind: unit.kind, order: unit.order, text: unit.text, speakerId: unit.speakerId,
+    ...(unit.delivery === undefined ? {} : { delivery: unit.delivery }),
     informationIds: [...unit.informationIds], mappingStatus: mappingStatus(project, unit.id, unit.segmentId),
   };
 }

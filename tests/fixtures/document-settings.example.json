@@ -1,0 +1,41 @@
+{
+  "formatVersion": "1.0.0",
+  "sourceFingerprint": "b4d660aa42f12d6a7183e338bc6888f34136c6f3739992573d4e62eb34df90ec",
+  "packageVersion": "explicit-test-1",
+  "timebase": {
+    "fpsNumerator": 25,
+    "fpsDenominator": 1,
+    "dropFrame": false,
+    "sampleRate": 44100,
+    "startTimecode": "01:00:00:00"
+  },
+  "profile": {
+    "medium": "ai",
+    "aspectWidth": 9,
+    "aspectHeight": 16,
+    "visualStyle": "테스트 전용"
+  },
+  "bindings": {
+    "people": [
+      {
+        "key": "민아",
+        "targetId": "host"
+      },
+      {
+        "key": "준",
+        "targetId": "helper"
+      }
+    ],
+    "scenes": [
+      {
+        "key": "물을 주는 아침",
+        "targetId": "garden"
+      },
+      {
+        "key": "받침 정리",
+        "targetId": "sink"
+      }
+    ],
+    "units": []
+  }
+}

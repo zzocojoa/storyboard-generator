@@ -1,0 +1,118 @@
+import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { expect, test } from '@playwright/test';
+import { readBuildManifest } from '../../src/build.js';
+import { CodexRequestStore } from '../../src/codex/requests.js';
+import { HandoffSchema } from '../../src/domain/schema.js';
+import type { Project } from '../../src/domain/schema.js';
+import { createApp } from '../../src/server/app.js';
+import { ProjectStore } from '../../src/server/store.js';
+import { png, TEST_AUDIO_NORMALIZATION_OPTIONS } from '../helpers.js';
+
+test('e2e_source_reference_drafts_restore_without_upload_or_apply_and_recheck_changed_basis', async ({ page }): Promise<void> => {
+  const root: string = await mkdtemp(join(tmpdir(), 'cutroom-source-reference-'));
+  const dataRoot: string = join(root, 'data');
+  const store = new ProjectStore(dataRoot);
+  const incoming: string = join(root, 'incoming');
+  await cp(resolve('tests/fixtures/native'), incoming, { recursive: true });
+  const handoffPath: string = join(incoming, 'storyboard_handoff.json');
+  const app = await createApp({ host: '127.0.0.1', port: 0, dataRoot, webRoot: resolve('dist/web'),
+    pdfFontPath: resolve('assets/fonts/NanumGothic-Regular.ttf'), audioNormalization: TEST_AUDIO_NORMALIZATION_OPTIONS,
+    codex: { requestRoot: join(root, 'requests'), speechVoice: 'Yuna' } }, store, new CodexRequestStore(join(root, 'requests'), readBuildManifest()));
+  const mutations: string[] = [];
+  page.on('request', (request): void => { if (['POST', 'PATCH', 'DELETE'].includes(request.method())) mutations.push(new URL(request.url()).pathname); });
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error): void => { pageErrors.push(error.message); });
+  try {
+    const imported = await app.inject({ method: 'POST', url: '/api/projects/import', payload: { handoffPath, proposedTextHoldMs: 2000 } });
+    expect(imported.statusCode).toBe(201);
+    const project: Project = imported.json<{ project: Project }>().project;
+    const address: string = await app.listen({ host: '127.0.0.1', port: 0 });
+    await page.goto(address);
+    await page.getByRole('navigation', { name: '콘티 작업 공간' }).getByRole('button', { name: '제작 설정', exact: true }).click();
+    const source = page.getByRole('region', { name: '원본 업데이트', exact: true });
+    const reference = page.getByRole('form', { name: '기준 이미지 등록', exact: true });
+    const apply = source.getByRole('button', { name: '새 원본 적용', exact: true });
+    const preview = source.getByRole('button', { name: '변경 영향 확인', exact: true });
+    const register = reference.getByRole('button', { name: '기준 이미지 등록', exact: true });
+    const image = { name: 'reference.png', mimeType: 'image/png', buffer: await png(2, 2) };
+    await source.getByLabel('새 handoff 파일 경로', { exact: true }).fill(handoffPath);
+    await source.getByLabel('원본 업데이트 초안 글자 유지 시간 (ms)').fill('-2');
+    await reference.getByLabel('기준 이미지 대상', { exact: true }).selectOption('CHAR-01');
+    await reference.getByLabel('외형·상태 설명', { exact: true }).fill('안내자의 검토용 의상');
+    await reference.getByLabel('기준 이미지 파일', { exact: true }).setInputFiles(image);
+    await expect(register).toBeEnabled();
+    await page.reload();
+    await expect(source.getByLabel('새 handoff 파일 경로', { exact: true })).toHaveValue(handoffPath);
+    await expect(source.getByLabel('원본 업데이트 초안 글자 유지 시간 (ms)')).toHaveValue('-2');
+    await expect(preview).toBeDisabled();
+    await expect(apply).toBeDisabled();
+    await expect(reference.getByLabel('기준 이미지 대상', { exact: true })).toHaveValue('CHAR-01');
+    await expect(reference.getByLabel('외형·상태 설명', { exact: true })).toHaveValue('안내자의 검토용 의상');
+    await expect(reference.getByLabel('기준 이미지 파일', { exact: true })).toHaveValue('');
+    await expect(register).toBeDisabled();
+    expect(mutations).toEqual([]);
+    expect(await store.read(project.projectId)).toEqual(project);
+
+    await reference.getByLabel('기준 이미지 파일', { exact: true }).setInputFiles(image);
+    await expect(register).toBeEnabled();
+    await reference.getByLabel('기준 이미지 종류', { exact: true }).selectOption('location');
+    await reference.getByLabel('기준 이미지 대상', { exact: true }).selectOption('workbench');
+    await expect(reference.getByLabel('기준 이미지 파일', { exact: true })).toHaveValue('');
+    await expect(register).toBeDisabled();
+    await source.getByLabel('원본 업데이트 초안 글자 유지 시간 (ms)').fill('2400');
+    await preview.click(); await expect(apply).toBeEnabled();
+    await source.getByLabel('원본 업데이트 초안 글자 유지 시간 (ms)').fill('2500');
+    await expect(apply).toBeDisabled();
+    await preview.click(); await expect(apply).toBeEnabled();
+    await source.getByLabel('새 handoff 파일 경로', { exact: true }).fill(resolve('tests/fixtures/native/storyboard_handoff.json'));
+    await expect(apply).toBeDisabled();
+    await source.getByLabel('새 handoff 파일 경로', { exact: true }).fill(handoffPath);
+    const requestsBeforeReload: string[] = [...mutations];
+    await page.reload();
+    await expect(apply).toBeDisabled();
+    expect(mutations).toEqual(requestsBeforeReload);
+    await preview.click(); await expect(apply).toBeEnabled();
+    const handoff = HandoffSchema.parse(JSON.parse(await readFile(handoffPath, 'utf8')));
+    await writeFile(handoffPath, JSON.stringify({ ...handoff, packageVersion: 'changed-after-preview' }));
+    await apply.click();
+    await expect(page.getByRole('button', { name: /확인한 원본·경로·설정·버전과 다릅니다/ })).toBeVisible();
+    await expect(apply).toBeDisabled();
+    expect(await store.read(project.projectId)).toEqual(project);
+
+    await preview.click(); await expect(apply).toBeEnabled();
+    await reference.getByLabel('기준 이미지 파일', { exact: true }).setInputFiles(image);
+    await store.update(project.projectId, 0, (current: Project): Project => ({ ...current, title: '다른 작업에서 편집한 제목' }), []);
+    await page.getByRole('button', { name: '새로고침', exact: true }).click();
+    await expect(source).toContainText('작성 이후 저장된 기준이 바뀌었습니다.');
+    await expect(reference).toContainText('작성 이후 저장된 기준이 바뀌었습니다.');
+    await expect(reference.getByLabel('기준 이미지 파일', { exact: true })).toHaveValue('');
+    await expect(apply).toBeDisabled();
+    await expect(register).toBeDisabled();
+    await source.getByRole('button', { name: '작성한 값을 현재 기준으로 검토', exact: true }).click();
+    await expect(apply).toBeDisabled();
+    await preview.click(); await expect(apply).toBeEnabled();
+    const applyResponse = page.waitForResponse((response): boolean => response.request().method() === 'POST'
+      && new URL(response.url()).pathname.endsWith('/source-update/apply'));
+    await apply.click();
+    expect((await applyResponse).status()).toBe(200);
+    const updated: Project = await store.read(project.projectId);
+    expect(updated.revision).toBe(2);
+    expect(updated.handoff.packageVersion).toBe('changed-after-preview');
+    expect(updated.shots).toEqual(project.shots);
+    await reference.getByRole('button', { name: '작성한 값을 현재 기준으로 검토', exact: true }).click();
+    await reference.getByLabel('외형·상태 설명', { exact: true }).fill('현재 원본 작업대의 기준 이미지');
+    await reference.getByLabel('기준 이미지 파일', { exact: true }).setInputFiles(image);
+    const registerResponse = page.waitForResponse((response): boolean => response.request().method() === 'POST'
+      && new URL(response.url()).pathname.endsWith('/references'));
+    await register.click();
+    expect((await registerResponse).status()).toBe(201);
+    const registered: Project = await store.read(project.projectId);
+    expect(registered.assets).toHaveLength(1);
+    expect(registered.assets[0]).toMatchObject({ kind: 'location', subjectId: 'workbench', description: '현재 원본 작업대의 기준 이미지 · 2×2' });
+    expect(mutations.filter((path): boolean => path.endsWith('/references'))).toHaveLength(1);
+    expect(mutations.filter((path): boolean => path.endsWith('/source-update/apply'))).toHaveLength(2);
+    expect(pageErrors).toEqual([]);
+  } finally { await page.context().close(); await app.close(); await rm(root, { recursive: true, force: true }); }
+});

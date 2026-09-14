@@ -56,6 +56,13 @@ function entryOwner(entry: EvidenceEntry): string | null {
   const result = IdentitySchema.safeParse(rawJson(entry)); return result.success ? result.data.projectId : null;
 }
 function relevantRootEntry(entry: EvidenceEntry, projectId: string, projectKey: string): boolean {
+  if (entry.path.startsWith('.recovery-blocks/') && !entry.path.startsWith('.recovery-blocks/.invalid/')) {
+    const scoped = StorageRecoveryBlockSchema.safeParse(rawJson(entry));
+    // 원본 ID를 못 읽었어도 검증한 파일명·폴더 key가 일치하면 다른 폴더의 복구 표시로 분리한다.
+    if (scoped.success && scoped.data.directoryName !== projectKey
+      && scoped.data.projectId === `unknown:${scoped.data.directoryName}`
+      && entry.path === `.recovery-blocks/${scoped.data.directoryName}.json`) return false;
+  }
   const owner: string | null = entryOwner(entry);
   if (owner === null || owner.startsWith('unknown:') || owner === projectId || entry.path.includes(projectKey)) return true;
   const raw: unknown = rawJson(entry);

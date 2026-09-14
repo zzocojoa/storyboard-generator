@@ -142,6 +142,38 @@ async function errorCode(action: Promise<unknown>): Promise<string> {
 }
 
 describe('A. lock-before-read 저장 순서', (): void => {
+  it('released_update_lock_during_identity_observation_preserves_committed_read', async (): Promise<void> => {
+    for (const releaseOnRead of [1, 2]) {
+      const gate: Barrier = barrier('before-update-cleanup');
+      const fixture: StoreFixture = await storeFixture(gate.injector);
+      let pending: Promise<Project> | null = null;
+      let observations: number = 0;
+      const reader: ProjectStore = trackedStore(fixture.dataRoot, {
+        ownerPid: process.pid,
+        async trigger(point: StorageFaultPoint): Promise<void> {
+          if (point !== 'after-recovery-lock-read') return;
+          observations += 1;
+          if (observations !== releaseOnRead) return;
+          gate.release();
+          await pending;
+        },
+      });
+      await reader.initialize();
+      pending = fixture.store.update(fixture.project.projectId, 0, (current: Project): Project => ({ ...current, title: '잠금 해제 뒤 저장본' }), []);
+      await gate.reached;
+      try {
+        if (releaseOnRead === 1) await expect(reader.read(fixture.project.projectId)).resolves.toMatchObject({ revision: 1, title: '잠금 해제 뒤 저장본' });
+        else await expect(reader.read(fixture.project.projectId)).rejects.toMatchObject({ code: 'PROJECT_BUSY' });
+        const committed: Project = await pending;
+        expect(await reader.read(committed.projectId)).toEqual(committed);
+        expect(reader.recoveryBlocks()).toEqual([]);
+        expect(await recoveryBlockCount(fixture.dataRoot)).toBe(0);
+        expect(await transactions(fixture.dataRoot, committed.projectId)).toEqual([]);
+        expect(await exists(join(projectDirectory(fixture.dataRoot, committed.projectId), 'write.lock'))).toBe(false);
+      } finally { gate.release(); await pending; }
+    }
+  });
+
   it('update_acquires_lock_before_reading_current', async (): Promise<void> => {
     const gate: Barrier = barrier('after-update-lock-acquired'); const fixture: StoreFixture = await storeFixture(gate.injector);
     const pending: Promise<Project> = fixture.store.update(fixture.project.projectId, 0, (current: Project): Project => ({ ...current, title: '첫 저장' }), []);

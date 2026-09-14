@@ -28,7 +28,10 @@ export type GenerationRecordAuditEntry = {
 };
 
 function recordsEqual(left: GenerationRecord, right: GenerationRecord): boolean {
-  return JSON.stringify(GenerationSchema.parse(left)) === JSON.stringify(GenerationSchema.parse(right));
+  const { prompt: leftPrompt, ...leftMetadata }: GenerationRecord = GenerationSchema.parse(left);
+  const { prompt: rightPrompt, ...rightMetadata }: GenerationRecord = GenerationSchema.parse(right);
+  // 검증된 원문 문자열은 직접 대조하고 나머지 전체 metadata는 기존 JSON 동등성으로 판정한다.
+  return leftPrompt === rightPrompt && JSON.stringify(leftMetadata) === JSON.stringify(rightMetadata);
 }
 
 function duplicateValues(values: readonly string[]): string[] {

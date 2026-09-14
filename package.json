@@ -29,6 +29,7 @@
     "presmoke": "npm run build:manifest",
     "precodex-workbench": "npm run build:manifest",
     "review-bundle": "node --import tsx src/review-cli.ts",
+    "project-backup": "node --import tsx src/backup-cli.ts",
     "prereview-bundle": "npm run build:manifest"
   },
   "dependencies": {
@@ -37,6 +38,7 @@
     "@fontsource/ibm-plex-mono": "5.3.0",
     "@fontsource/noto-serif-kr": "5.3.0",
     "fastify": "5.12.3",
+    "fontkit": "2.0.4",
     "pdfkit": "0.20.2",
     "react": "19.2.8",
     "react-dom": "19.2.8",

@@ -115,6 +115,28 @@ export class SafeStoreFilesystem {
     return (await this.read(path)).toString('utf8');
   }
 
+  /** 파일 크기만큼만 할당하고 읽는 도중의 변경도 거부한다. */
+  async readBounded(path: string, maxBytes: number): Promise<Buffer> {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) unsafe(path, 'invalid read byte limit');
+    await this.requireFile(path);
+    const handle: FileHandle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const before = await handle.stat();
+      if (!before.isFile() || before.size <= 0 || before.size > maxBytes) unsafe(path, `file exceeds read limit: bytes=${before.size}, maxBytes=${maxBytes}`);
+      const bytes: Buffer = Buffer.alloc(before.size);
+      let offset: number = 0;
+      while (offset < bytes.length) {
+        const read = await handle.read(bytes, offset, bytes.length - offset, offset);
+        if (read.bytesRead === 0) unsafe(path, 'file truncated while reading');
+        offset += read.bytesRead;
+      }
+      const after = await handle.stat();
+      if (before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs
+        || !sameFileIdentity(before, await this.identity(path))) unsafe(path, 'file changed while reading');
+      return bytes;
+    } finally { await handle.close(); }
+  }
+
   async writeExclusive(path: string, content: string | Buffer): Promise<void> {
     await this.#assertCreateTarget(path);
     const handle: FileHandle = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
@@ -277,6 +299,18 @@ export class SafeStoreFilesystem {
     await this.requireDirectory(path);
     const handle: FileHandle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
     try { await handle.sync(); } finally { await handle.close(); }
+  }
+
+  /** 중단된 파일을 복구 게시하기 전에 동일 inode의 내용을 내구성 있게 기록한다. */
+  async syncFile(path: string, expected: FileIdentity): Promise<void> {
+    await this.requireFile(path);
+    const handle: FileHandle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const metadata = await handle.stat();
+      if (!metadata.isFile() || !sameFileIdentity(expected, metadata)) unsafe(path, 'file identity changed before sync');
+      await handle.sync();
+      if (!sameFileIdentity(expected, await this.identity(path))) unsafe(path, 'file identity changed after sync');
+    } finally { await handle.close(); }
   }
 
   #assertWithin(path: string): void {

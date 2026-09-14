@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { assertAudioTimingRelation } from './audio.js';
+import { automaticAudioProtected } from './edit-protection.js';
 import { reviewIssuesForTextCue } from './emission.js';
 import { assertNoErrors, contractError } from './errors.js';
 import type { Asset, AudioCue, InformationRule, Issue, Project, Shot, ShotSourceLink, SourceUnit, StoryboardFrame, TextCue, TextPlacement } from './schema.js';
@@ -61,6 +62,14 @@ export function updateAudioCueTiming(project: Project, cueId: string, input: Aud
   const timing: AudioCueTimingInput = AudioCueTimingInputSchema.parse(input);
   const current: AudioCue = requireAudioCue(project, cueId);
   if (current.startMs === timing.startMs && current.endMs === timing.endMs && current.timingRelation === timing.timingRelation) return project;
+  if (current.timingStatus === 'prepared') {
+    const nextCue: AudioCue = { ...current, ...timing };
+    assertAudioTimingRelation(project, nextCue);
+    if (automaticAudioProtected(project, current) || automaticAudioProtected(project, nextCue)) throw contractError('AUDIO_PREPARATION_PROTECTED', `${cueId}: 보호된 컷의 음향 배치 범위를 변경할 수 없습니다.`, []);
+    const asset = project.assets.find((value): boolean => value.id === current.assetId);
+    if (asset?.durationMs === null || asset?.durationMs === undefined || asset.durationMs > timing.endMs - timing.startMs) throw contractError('AUDIO_PREPARATION_TOO_LONG', `${cueId}: 실제 음원 길이를 담을 수 있는 배치 범위를 지정하세요.`, []);
+    return finishTrackEdit(project, { ...project, audioCues: project.audioCues.map((cue): AudioCue => cue.id === cueId ? nextCue : cue) });
+  }
   const durationChanged: boolean = current.endMs - current.startMs !== timing.endMs - timing.startMs;
   const nextCue: AudioCue = { ...current, ...timing, assetId: durationChanged ? null : current.assetId, timingStatus: 'proposed' };
   assertAudioTimingRelation(project, nextCue);

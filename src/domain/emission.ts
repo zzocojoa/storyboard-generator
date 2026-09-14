@@ -1,3 +1,4 @@
+import { audioCueSource } from './audio-source.js';
 import { contractError, issue } from './errors.js';
 import { directVisualLinks, effectiveInformationGate, sourceAnchorRange } from './mapping.js';
 import type { EffectiveInformationGate } from './mapping.js';
@@ -134,7 +135,7 @@ function relatedInformationIds(project: Project, input: InformationEmissionInput
   }
   if (input.channel === 'audio-playback' || input.channel === 'speech-generation') {
     const cue = project.audioCues.find((candidate): boolean => candidate.id === input.entityId);
-    return cue === undefined ? null : unitInformationIds(project, cue.unitId);
+    return cue === undefined ? null : audioCueSource(project, cue)?.informationIds ?? null;
   }
   if (input.channel === 'image') {
     const frame: StoryboardFrame | undefined = project.frames.find((candidate: StoryboardFrame): boolean => candidate.id === input.entityId);
@@ -152,7 +153,7 @@ function relatedInformationIds(project: Project, input: InformationEmissionInput
   const textCue: TextCue | undefined = project.textCues.find((candidate: TextCue): boolean => candidate.id === input.entityId);
   if (textCue !== undefined) return textCueInformationIds(project, textCue);
   const audioCue = project.audioCues.find((candidate): boolean => candidate.id === input.entityId);
-  return audioCue === undefined ? null : unitInformationIds(project, audioCue.unitId);
+  return audioCue === undefined ? null : audioCueSource(project, audioCue)?.informationIds ?? null;
 }
 
 /** 실제 출력 채널이 동일한 Information Gate와 원문 관계를 사용하도록 검사한다. */

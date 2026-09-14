@@ -1,8 +1,9 @@
 import { assertNoErrors, contractError, issue } from './errors.js';
+import { productionResourceSubject, segmentReferenceAssets } from './production-resources.js';
 import type { Asset, Issue, Project, Shot } from './schema.js';
 
 export type AssetReferenceKind = 'frame-image' | 'audio-cue' | 'generation-result' | 'shot-prop'
-  | 'continuity-before' | 'continuity-after';
+  | 'continuity-before' | 'continuity-after' | 'production-resource';
 
 export type ProjectAssetReference = {
   relation: AssetReferenceKind;
@@ -21,6 +22,7 @@ export const PROJECT_ASSET_REFERENCE_FIELDS: readonly string[] = [
   'shots.propIds',
   'shots.continuityBefore.assetId',
   'shots.continuityAfter.assetId',
+  'productionPlan.resources.referenceAssetId',
 ];
 
 const GENERATION_RESULT_KINDS: readonly Asset['kind'][] = ['image', 'audio', 'character', 'location', 'prop'];
@@ -30,11 +32,17 @@ const CONTINUITY_KINDS: readonly Asset['kind'][] = ['character', 'location', 'pr
 export function currentVisualReferenceAssets(project: Project, shot: Shot): Asset[] {
   const visiblePersonIds: string[] = shot.presence.filter((presence): boolean =>
     ['VISIBLE', 'HAND_ONLY', 'SILHOUETTE', 'ARCHIVE_IMAGE'].includes(presence.mode)).map((presence): string => presence.personId);
-  const candidates: Asset[] = project.assets.filter((asset: Asset): boolean =>
+  const hasPlan: boolean = project.productionPlan?.segments.some((segment): boolean => segment.segmentId === shot.segmentId) ?? false;
+  const scoped: Asset[] = hasPlan ? segmentReferenceAssets(project, shot.segmentId) : project.assets;
+  const candidates: Asset[] = scoped.filter((asset: Asset): boolean =>
     asset.kind === 'character' && asset.subjectId !== null && visiblePersonIds.includes(asset.subjectId)
     || asset.kind === 'location' && asset.subjectId !== null && asset.subjectId === shot.visualLocationId);
-  return candidates.filter((asset: Asset): boolean => !candidates.some((candidate: Asset): boolean =>
-    candidate.kind === asset.kind && candidate.subjectId === asset.subjectId && candidate.version > asset.version));
+  const explicitIds: Set<string> = new Set(shot.continuityBefore.map((state): string => state.assetId));
+  const explicit: Asset[] = project.assets.filter((asset): boolean => explicitIds.has(asset.id) &&
+    (asset.kind === 'character' && asset.subjectId !== null && visiblePersonIds.includes(asset.subjectId)
+      || asset.kind === 'location' && asset.subjectId === shot.visualLocationId));
+  return [...explicit, ...candidates.filter((asset: Asset): boolean => !explicit.some((value): boolean => value.kind === asset.kind && value.subjectId === asset.subjectId) && !candidates.some((candidate: Asset): boolean =>
+    candidate.kind === asset.kind && candidate.subjectId === asset.subjectId && candidate.version > asset.version))];
 }
 
 function reference(
@@ -47,6 +55,10 @@ function reference(
 /** 현재 Project Schema의 명시된 Asset 외래 키와 허용 정책을 수집한다. */
 export function collectProjectAssetReferences(project: Project): ProjectAssetReference[] {
   const references: ProjectAssetReference[] = [];
+  for (const resource of project.productionPlan?.resources ?? []) if (resource.referenceAssetId !== null) {
+    references.push(reference('production-resource', resource.id, resource.referenceAssetId,
+      `productionPlan.resources.${resource.id}.referenceAssetId`, [resource.kind], resource.kind === 'prop' ? undefined : productionResourceSubject(resource)));
+  }
   for (const frame of project.frames) if (frame.imageAssetId !== null) {
     references.push(reference('frame-image', frame.id, frame.imageAssetId, `frames.${frame.id}.imageAssetId`, ['image'], frame.id));
   }

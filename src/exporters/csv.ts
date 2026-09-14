@@ -1,3 +1,7 @@
+import { storyboardAudioIssues } from '../domain/audio-storyboard.js';
+import { audioMixValues } from '../domain/audio-mix.js';
+import { audioInstructions } from '../domain/audio-instructions.js';
+import { audioCueSource } from '../domain/audio-source.js';
 import { intrinsicIncomingExposure } from '../domain/transition.js';
 import { reviewTextOutput } from '../domain/output-policy.js';
 import type { OutputPolicy } from '../domain/output-policy.js';
@@ -6,12 +10,13 @@ import { contractError } from '../domain/errors.js';
 import { reviewFrameOutput } from '../domain/frame-output.js';
 import type { FrameOutputDecision } from '../domain/frame-output.js';
 import { reviewAudioPlaybackAt } from '../domain/playback.js';
-import type { BlockedCue } from '../domain/playback.js';
 import type { Issue, Project, Shot, ShotSourceLink, SourceUnit, StoryboardFrame, TextCue } from '../domain/schema.js';
 import { effectiveInformationGate, reviewIssuesForShot } from '../domain/mapping.js';
 import type { EffectiveInformationGate } from '../domain/mapping.js';
 import { formatAbsoluteProjectTimecode, frameDisplayAbsoluteMs, frameEvaluationAbsoluteMs } from '../domain/time.js';
 import { parseProject } from '../io/project.js';
+
+type BlockedStoryboardAudio = { cueId: string; issues: Issue[] };
 
 /** 스프레드시트가 사용자 원문을 수식으로 실행하지 않도록 위험한 접두사에 작은따옴표를 붙인다. */
 export function csvCell(value: string): string {
@@ -28,7 +33,7 @@ function shotRow(project: Project, shot: Shot, assetIntegrity: Readonly<Record<s
   });
   const audio = project.audioCues.filter((cue): boolean => cue.startMs < shot.endMs && cue.endMs > shot.startMs);
   const text = project.textCues.filter((cue): boolean => cue.startMs < shot.endMs && cue.endMs > shot.startMs);
-  const blockedAudio: BlockedCue[] = audio.flatMap((cue): BlockedCue[] => reviewAudioPlaybackAt(project, cue.startMs).blocked.filter((entry: BlockedCue): boolean => entry.cueId === cue.id));
+  const blockedAudio: BlockedStoryboardAudio[] = audio.flatMap((cue): BlockedStoryboardAudio[] => { const issues: Issue[] = storyboardAudioIssues(project, cue); return issues.length === 0 ? [] : [{ cueId: cue.id, issues }]; });
   const blockedText: { cue: TextCue; issues: Issue[] }[] = text.flatMap((cue: TextCue): { cue: TextCue; issues: Issue[] }[] => {
     const issues: Issue[] = reviewTextOutput(project, cue.id, policy).issues;
     return issues.length === 0 ? [] : [{ cue, issues }];
@@ -38,7 +43,7 @@ function shotRow(project: Project, shot: Shot, assetIntegrity: Readonly<Record<s
   const frameDecisions: FrameOutputDecision[] = project.frames.filter((frame: StoryboardFrame): boolean => frame.shotId === shot.id)
     .map((frame: StoryboardFrame): FrameOutputDecision => reviewFrameOutput(project, frame.id, 'csv-export'));
   const blockedCodes: string[] = [...new Set([...shotIssues.map((item: Issue): string => item.code),
-    ...blockedAudio.flatMap((entry: BlockedCue): string[] => entry.issues.map((item: Issue): string => item.code)),
+    ...blockedAudio.flatMap((entry: BlockedStoryboardAudio): string[] => entry.issues.map((item: Issue): string => item.code)),
     ...blockedText.flatMap((entry): string[] => entry.issues.map((item: Issue): string => item.code)),
     ...frameDecisions.flatMap((decision: FrameOutputDecision): string[] => decision.issues.map((item: Issue): string => item.code))])];
   const frames: StoryboardFrame[] = project.frames.filter((frame: StoryboardFrame): boolean => frame.shotId === shot.id);
@@ -53,13 +58,14 @@ function shotRow(project: Project, shot: Shot, assetIntegrity: Readonly<Record<s
     shot.transitionOut.kind, String(shot.transitionOut.durationMs), shot.transitionOut.note, shot.transitionOut.incomingExposure ?? intrinsicIncomingExposure(shot.transitionOut.kind),
     JSON.stringify(shot.presence), JSON.stringify(shot.propIds), JSON.stringify(shot.sourceLinks),
     JSON.stringify(shot.sourceLinks.map((link: ShotSourceLink) => ({ unitId: link.unitId, temporalAnchor: link.temporalAnchor }))),
-    JSON.stringify(units.map((unit: SourceUnit) => ({ ...shot.sourceLinks.find((link: ShotSourceLink): boolean => link.unitId === unit.id), id: unit.id, kind: unit.kind, order: unit.order, speakerId: unit.speakerId,
+    JSON.stringify(units.map((unit: SourceUnit) => ({ ...shot.sourceLinks.find((link: ShotSourceLink): boolean => link.unitId === unit.id), id: unit.id, kind: unit.kind, ...(unit.delivery === undefined ? {} : { delivery: unit.delivery }), order: unit.order, speakerId: unit.speakerId,
       ...(shotIssues.length === 0 ? { text: unit.text } : {}), sourceRefs: unit.sourceRefs, outputSafety: shotIssues.length === 0 ? 'safe' : 'blocked' }))),
     JSON.stringify(gates), blockedCodes.length === 0 ? policy.maturity.toUpperCase() : 'DRAFT · OUTPUT INTERLOCK REVIEW REQUIRED',
     String(blockedAudio.length + blockedText.length), JSON.stringify(blockedCodes),
-    JSON.stringify(audio.map((cue) => ({ ...cue, assetMetadata: cue.assetId === null ? null : project.assets.find((asset): boolean => asset.id === cue.assetId) ?? null,
+    JSON.stringify(audio.map((cue) => ({ ...cue, playbackMix: audioMixValues(cue), playbackIssues: reviewAudioPlaybackAt(project, cue.startMs).blocked.find((entry): boolean => entry.cueId === cue.id)?.issues ?? [], audioOptional: true, assetMetadata: cue.assetId === null ? null : project.assets.find((asset): boolean => asset.id === cue.assetId) ?? null,
+      source: blockedAudio.some((entry: BlockedStoryboardAudio): boolean => entry.cueId === cue.id) ? null : audioCueSource(project, cue),
       assetIntegrity: cue.assetId === null ? 'not-attached' : assetIntegrity[cue.assetId] ?? 'not-checked',
-      outputSafety: blockedAudio.some((entry: BlockedCue): boolean => entry.cueId === cue.id) ? 'blocked' : 'safe' }))),
+      outputSafety: blockedAudio.some((entry: BlockedStoryboardAudio): boolean => entry.cueId === cue.id) ? 'blocked' : 'safe' }))),
     JSON.stringify(text.map((cue: TextCue) => {
       const blocked = blockedText.find((entry): boolean => entry.cue.id === cue.id);
       return blocked === undefined ? { ...cue, outputSafety: cue.timingStatus === 'proposed' ? 'draft' : 'safe', maturity: policy.maturity, outputLabel: reviewTextOutput(project, cue.id, policy).label } : { id: cue.id, authority: cue.authority, mappingDecisionId: cue.mappingDecisionId,
@@ -77,12 +83,15 @@ function shotRow(project: Project, shot: Shot, assetIntegrity: Readonly<Record<s
       .some((placement): boolean => placement.id === decision.placementId && placement.segmentId === shot.segmentId))),
     shot.proposalOrigin, shot.approvalStatus, JSON.stringify(shot.lockedFields),
     JSON.stringify(shot.continuityBefore), JSON.stringify(shot.continuityAfter), policy.exportLabel ?? policy.maturity.toUpperCase(),
+    JSON.stringify(audioInstructions(project).filter((instruction): boolean => instruction.segmentId === shot.segmentId)
+      .map((instruction) => ({ instructionId: instruction.id, kind: instruction.kind, text: instruction.text, sourceRefs: instruction.sourceRefs,
+        decision: (project.audioInstructionDecisions ?? []).find((decision): boolean => decision.instructionId === instruction.id) ?? null }))),
   ];
 }
 
 export function createCsvProjection(input: Project, assetIntegrity: Readonly<Record<string, string>>, policy: OutputPolicy): string[][] {
   const project: Project = parseProject(input);
-  const header: string[] = ['project_id', 'title', 'shot_id', 'segment_id', 'scene_id', 'mode', 'start_ms', 'end_ms', 'duration_ms', 'visual_mode', 'start_time', 'end_time', 'story_location_id', 'visual_location_id', 'action', 'shot_size', 'camera_angle', 'camera_move', 'transition_kind', 'transition_duration_ms', 'transition_note', 'transition_incoming_exposure', 'presence', 'prop_ids', 'source_links', 'source_temporal_anchors', 'source_units', 'information_gates', 'output_safety_status', 'blocked_cue_count', 'blocked_issue_codes', 'audio_events', 'text_events', 'frames', 'placement_information_decisions', 'proposal_origin', 'approval_status', 'locked_fields', 'continuity_before', 'continuity_after', 'output_label'];
+  const header: string[] = ['project_id', 'title', 'shot_id', 'segment_id', 'scene_id', 'mode', 'start_ms', 'end_ms', 'duration_ms', 'visual_mode', 'start_time', 'end_time', 'story_location_id', 'visual_location_id', 'action', 'shot_size', 'camera_angle', 'camera_move', 'transition_kind', 'transition_duration_ms', 'transition_note', 'transition_incoming_exposure', 'presence', 'prop_ids', 'source_links', 'source_temporal_anchors', 'source_units', 'information_gates', 'output_safety_status', 'blocked_cue_count', 'blocked_issue_codes', 'audio_events', 'text_events', 'frames', 'placement_information_decisions', 'proposal_origin', 'approval_status', 'locked_fields', 'continuity_before', 'continuity_after', 'output_label', 'audio_instruction_decisions'];
   return [header, ...project.shots.map((shot: Shot): string[] => shotRow(project, shot, assetIntegrity, policy))];
 }
 

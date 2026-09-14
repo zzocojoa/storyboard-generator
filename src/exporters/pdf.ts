@@ -1,5 +1,14 @@
-import PDFDocument from 'pdfkit';
+import { storyboardAudioIssues } from '../domain/audio-storyboard.js';
+import { audioInstructions, audioInstructionStructureIssues } from '../domain/audio-instructions.js';
+import { audioInstructionContentIssues } from '../domain/audio-instruction-evidence.js';
+import { audioCueSource } from '../domain/audio-source.js';
+import type { TextTypography } from '../domain/text-typography.js';
+import type { TextFontSource } from '../rendering/text-font-source.js';
+import { audioMixValues } from '../domain/audio-mix.js';
 import sharp from 'sharp';
+import { renderStoryboardPdf } from './pdf-renderer.js';
+import { initialOutputOptions, outputSelectionLabel, selectedOutputFrames } from './output-options.js';
+import type { PdfFormat, StoryboardOutputOptions } from './output-options.js';
 import { reviewTextOutput } from '../domain/output-policy.js';
 import type { OutputPolicy } from '../domain/output-policy.js';
 import { assertFinalReadiness, reviewFinalReadiness } from '../domain/final-readiness.js';
@@ -10,21 +19,71 @@ import { frameOutputPlaceholderText, reviewFrameOutput } from '../domain/frame-o
 import type { FrameOutputDecision } from '../domain/frame-output.js';
 import { effectiveInformationGate } from '../domain/mapping.js';
 import type { EffectiveInformationGate } from '../domain/mapping.js';
-import { reviewAudioPlaybackAt } from '../domain/playback.js';
-import type { BlockedCue } from '../domain/playback.js';
-import type { Issue, Project, Shot, StoryboardFrame, TextCue } from '../domain/schema.js';
+import { reviewTextPlaybackWithPolicy } from '../domain/playback.js';
+import { withProjectTextReadiness } from '../rendering/project-text.js';
+import type { TextLayoutInput } from '../rendering/text-layout.js';
+import type { TextLayoutPreset } from '../domain/text-layout-settings.js';
+import type { AudioCue, Issue, Project, Shot, StoryboardFrame, TextCue } from '../domain/schema.js';
 import { formatAbsoluteProjectTimecode, frameDisplayAbsoluteMs, frameEvaluationAbsoluteMs } from '../domain/time.js';
 
 export type AssetLoader = (assetId: string) => Promise<Buffer>;
+export type PdfTrackEntry = { id: string; label: string; timeText: string; body: string; statusText: string };
 
 export type PdfFramePageItem = {
   image: Buffer | null; renderMode: FrameOutputDecision['renderMode'];
-  shotId: string; timeText: string; cameraText: string; action: string; frameText: string;
-  sourceText: string; gateText: string; outputText: string; placeholderText: string;
+  shotId: string; frameId: string; timeText: string; cameraText: string; action: string; frameText: string;
+  sourceText: string; gateText: string; outputText: string; placeholderText: string; description: string;
+  textEntries: PdfTrackEntry[]; audioEntries: PdfTrackEntry[];
+  overlayInputs: TextLayoutInput[];
 };
-export type PdfProjection = { title: string; outputLabel: string; aspectWidth: number; aspectHeight: number; revision: number; items: PdfFramePageItem[] };
+export type PdfProjection = { title: string; outputLabel: string; aspectWidth: number; aspectHeight: number; revision: number; textLayout: TextLayoutPreset; textTypography?: TextTypography; items: PdfFramePageItem[]; format?: PdfFormat; selectionLabel?: string };
 type PdfImageLoader = (assetId: string) => Promise<Buffer | null>;
-type FrameRect = { x: number; y: number; width: number; height: number };
+type PdfInstructionEntry = { segmentId: string; entry: PdfTrackEntry };
+
+/** 공통 원문을 보존하면서 현재 구간의 배치 결론과 미검토 상태를 함께 전달한다. */
+function audioInstructionEntries(project: Project): PdfInstructionEntry[] {
+  const structureIssues: Issue[] = audioInstructionStructureIssues(project);
+  return audioInstructions(project).map((instruction): PdfInstructionEntry => {
+    const decision = (project.audioInstructionDecisions ?? []).find((value): boolean => value.instructionId === instruction.id);
+    const issues: Issue[] = [...structureIssues.filter((value): boolean => value.entityId === instruction.id),
+      ...(decision === undefined ? [] : audioInstructionContentIssues(project, instruction, decision))];
+    const codes: string[] = [...new Set(issues.map((value): string => value.code))];
+    const conclusion: string = decision === undefined ? '미판정' : codes.length > 0 ? '적용 판정 재검토'
+      : decision.resolution === 'required' ? '음향 배치' : '추가 음향 배치 없음';
+    const status: string[] = decision === undefined ? ['DIRECTION · REVIEW REQUIRED', '현재 구간: 미판정']
+      : codes.length > 0 ? ['DIRECTION · REVIEW REQUIRED', `적용 판정 재검토: ${codes.join(', ')}`]
+      : [decision.reviewStatus === 'confirmed' ? 'REVIEWED DIRECTION' : 'DIRECTION · REVIEW REQUIRED',
+        `현재 구간: ${conclusion}`,
+        ...(decision.sharedScope === undefined || decision.sharedScope === null ? [] : [
+          `공통 지시 적용 구간: ${decision.sharedScope.requiredSegmentIds.join(', ') || '없음'}`,
+          `공통 적용 근거: ${decision.sharedScope.reason}`]),
+        `판단 근거: ${decision.reason}`];
+    return { segmentId: instruction.segmentId, entry: { id: instruction.id, label: `${instruction.kind.toUpperCase()} DIRECTION · ${conclusion}`,
+      timeText: `SEGMENT ${instruction.segmentId}`, body: instruction.text, statusText: status.join('\n') } };
+  });
+}
+
+function trackTimeText(project: Project, startMs: number, endMs: number): string {
+  return `${formatAbsoluteProjectTimecode(startMs, project.handoff.timebase)} - ${formatAbsoluteProjectTimecode(endMs, project.handoff.timebase)} (${startMs}..${endMs}ms)`;
+}
+
+export function textTrackEntry(project: Project, cue: TextCue, policy: OutputPolicy): PdfTrackEntry {
+  const output = reviewTextOutput(project, cue.id, policy);
+  return { id: cue.id, label: cue.kind.toUpperCase(), timeText: trackTimeText(project, cue.startMs, cue.endMs),
+    body: output.allowed ? cue.text : '[OUTPUT BLOCKED]',
+    statusText: output.allowed ? output.label : output.issues.map((value): string => value.code).join(', ') };
+}
+
+export function audioTrackEntry(project: Project, cue: AudioCue): PdfTrackEntry {
+  const issues: Issue[] = storyboardAudioIssues(project, cue);
+  const allowed: boolean = issues.length === 0;
+  const unit = audioCueSource(project, cue);
+  if (allowed && unit === null) throw contractError('AUDIO_SOURCE_CONTEXT_MISSING', `${cue.id}: PDF 음향 원문 ${cue.instructionId ?? cue.unitId}를 찾을 수 없습니다.`, []);
+  const mix = audioMixValues(cue);
+  return { id: cue.id, label: cue.kind.toUpperCase(), timeText: `${trackTimeText(project, cue.startMs, cue.endMs)} · ${cue.timingRelation} · ${mix.volumeDb}dB · FADE ${mix.fadeInMs}/${mix.fadeOutMs}ms`,
+    body: allowed && unit !== null ? unit.text : '[OUTPUT BLOCKED]',
+    statusText: allowed ? cue.timingStatus === 'measured' ? 'MEASURED · GUIDE AUDIO' : 'STORYBOARD TIMING · AUDIO OPTIONAL' : issues.map((value): string => value.code).join(', ') };
+}
 
 function assetErrorCode(error: unknown): string | null {
   if (!(error instanceof Error) || !('code' in error) || typeof error.code !== 'string') return null;
@@ -38,10 +97,9 @@ async function pdfRaster(bytes: Buffer): Promise<Buffer> {
     .png({ compressionLevel: 9, adaptiveFiltering: false, progressive: false, palette: false }).toBuffer();
 }
 
-async function pageItems(project: Project, loadImage: PdfImageLoader, policy: OutputPolicy): Promise<PdfFramePageItem[]> {
-  const orderedFrames: StoryboardFrame[] = project.shots.flatMap((shot: Shot): StoryboardFrame[] => project.frames
-    .filter((frame: StoryboardFrame): boolean => frame.shotId === shot.id)
-    .sort((left: StoryboardFrame, right: StoryboardFrame): number => left.offsetMs - right.offsetMs));
+async function pageItems(project: Project, loadImage: PdfImageLoader, policy: OutputPolicy, options: StoryboardOutputOptions): Promise<PdfFramePageItem[]> {
+  const orderedFrames: StoryboardFrame[] = selectedOutputFrames(project, options);
+  const instructionEntries: PdfInstructionEntry[] = audioInstructionEntries(project);
   return Promise.all(orderedFrames.map(async (frame: StoryboardFrame): Promise<PdfFramePageItem> => {
     const shot: Shot | undefined = project.shots.find((candidate: Shot): boolean => candidate.id === frame.shotId);
     if (shot === undefined) throw contractError('SHOT_NOT_FOUND', `${frame.id}: PDF 출력용 Shot을 찾을 수 없습니다.`, []);
@@ -51,8 +109,8 @@ async function pageItems(project: Project, loadImage: PdfImageLoader, policy: Ou
     const gates: EffectiveInformationGate[] = project.dataset.informationRules.filter((rule): boolean => rule.segmentId === shot.segmentId)
       .map((rule): EffectiveInformationGate => effectiveInformationGate(project, rule.id));
     const gateText: string = gates.map((gate: EffectiveInformationGate): string => `${gate.id} B${gate.baseNotBeforeMs}→E${gate.effectiveNotBeforeMs} ${gate.evidenceType}${gate.reviewRequired ? ' REVIEW' : ''}`).join(' / ');
-    const audioBlocked: BlockedCue[] = project.audioCues.filter((cue): boolean => cue.startMs < shot.endMs && cue.endMs > shot.startMs)
-      .flatMap((cue): BlockedCue[] => reviewAudioPlaybackAt(project, cue.startMs).blocked.filter((entry: BlockedCue): boolean => entry.cueId === cue.id));
+    const audioIssues: Issue[] = project.audioCues.filter((cue): boolean => cue.startMs < shot.endMs && cue.endMs > shot.startMs)
+      .flatMap((cue): Issue[] => storyboardAudioIssues(project, cue));
     const textIssues: Issue[] = project.textCues.filter((cue: TextCue): boolean => cue.startMs < shot.endMs && cue.endMs > shot.startMs)
       .flatMap((cue: TextCue): Issue[] => reviewTextOutput(project, cue.id, policy).issues);
     let image: Buffer | null = null;
@@ -65,113 +123,62 @@ async function pageItems(project: Project, loadImage: PdfImageLoader, policy: Ou
         if (integrityCode === null || policy.maturity === 'final') throw error;
       }
     }
-    const codes: string[] = [...new Set([...frameIssues, ...textIssues, ...audioBlocked.flatMap((entry: BlockedCue): Issue[] => entry.issues)].map((value: Issue): string => value.code))];
+    const codes: string[] = [...new Set([...frameIssues, ...textIssues, ...audioIssues].map((value: Issue): string => value.code))];
     if (integrityCode !== null) codes.push(integrityCode);
     const unconfirmed: boolean = project.textCues.some((cue: TextCue): boolean => cue.startMs < shot.endMs && cue.endMs > shot.startMs && cue.timingStatus === 'proposed');
     const outputText: string = codes.length === 0 ? policy.maturity === 'final' ? 'FINAL · OUTPUT SAFE' : unconfirmed ? 'DRAFT · TIMING UNCONFIRMED' : 'DRAFT' : `DRAFT · OUTPUT INTERLOCK REVIEW REQUIRED · ${codes.join(', ')}`;
     const placeholderText: string = integrityCode === null ? frameOutputPlaceholderText({ ...frameDecision, issues: frameIssues }, frame.description)
       : `Frame ID: ${frame.id}\nAsset ID: ${frameDecision.imageAssetId ?? 'NONE'}\nIssue: ${integrityCode}`;
     return { image, renderMode: integrityCode !== null || frameIssues.length > 0 || (frameDecision.imageAssetId !== null && image === null) ? 'blocked' : frameDecision.renderMode,
-      shotId: shot.id, timeText: `${formatAbsoluteProjectTimecode(shot.startMs, project.handoff.timebase)} – ${formatAbsoluteProjectTimecode(shot.endMs, project.handoff.timebase)}`,
+      shotId: shot.id, frameId: frame.id, timeText: `${formatAbsoluteProjectTimecode(shot.startMs, project.handoff.timebase)} – ${formatAbsoluteProjectTimecode(shot.endMs, project.handoff.timebase)}`,
       cameraText: `${shot.visualMode.toUpperCase()} · ${shot.camera.size} · ${shot.camera.angle} · ${shot.camera.move}\n${shot.transitionOut.kind.toUpperCase()} ${shot.transitionOut.durationMs}ms`,
-      action: shot.action, frameText: `FRAME ${frame.role.toUpperCase()} · ${frame.visualReview.toUpperCase()} · DISPLAY ${frameDisplayAbsoluteMs(shot, frame)} · EVAL ${frameEvaluationAbsoluteMs(shot, frame)}`,
-      sourceText, gateText, outputText, placeholderText };
+      action: shot.action, frameText: `${frame.id} · ${frame.role.toUpperCase()} · ${frame.visualReview.toUpperCase()} · DISPLAY ${frameDisplayAbsoluteMs(shot, frame)} · EVAL ${frameEvaluationAbsoluteMs(shot, frame)}`,
+      sourceText, gateText, outputText, placeholderText, description: frame.description,
+      textEntries: project.textCues.filter((cue): boolean => cue.startMs < shot.endMs && cue.endMs > shot.startMs).map((cue): PdfTrackEntry => textTrackEntry(project, cue, policy)),
+      overlayInputs: reviewTextPlaybackWithPolicy(project, frameEvaluationAbsoluteMs(shot, frame), policy).playable.map(({ id, kind, text, presentation }): TextLayoutInput => ({ id, kind, text, ...(presentation === undefined ? {} : { presentation }) })),
+      audioEntries: [...project.audioCues.filter((cue): boolean => cue.startMs < shot.endMs && cue.endMs > shot.startMs).map((cue): PdfTrackEntry => audioTrackEntry(project, cue)),
+        ...instructionEntries.filter((value): boolean => value.segmentId === shot.segmentId).map((value): PdfTrackEntry => value.entry)] };
   }));
 }
 
-function addHeader(document: PDFKit.PDFDocument, projection: PdfProjection, page: number, totalPages: number): void {
-  document.fillColor('#101820').fontSize(17).text(projection.title, 32, 24, { width: 610, lineBreak: false });
-  document.fillColor('#59636d').fontSize(8).text(`STORYBOARD  ·  ${projection.outputLabel}  ·  ${projection.aspectWidth}:${projection.aspectHeight}  ·  REV ${projection.revision}`, 32, 48, { width: 610, lineBreak: false });
-  document.fillColor('#101820').fontSize(9).text(`${page} / ${totalPages}`, 760, 31, { width: 50, align: 'right', lineBreak: false });
-  document.moveTo(32, 64).lineTo(810, 64).lineWidth(0.8).strokeColor('#c8cdd2').stroke();
-}
-
-function drawPlaceholder(document: PDFKit.PDFDocument, x: number, y: number, width: number, height: number, description: string): void {
-  document.rect(x, y, width, height).fill('#e7e2d9');
-  document.moveTo(x, y).lineTo(x + width, y + height).moveTo(x + width, y).lineTo(x, y + height).lineWidth(0.5).strokeColor('#c3bbae').stroke();
-  document.fillColor('#6a6257').fontSize(9).text(description || '이미지 생성 전', x + 16, y + height / 2 - 12, { width: width - 32, align: 'center', height: 30, ellipsis: true });
-}
-
-function frameRect(x: number, y: number, aspectWidth: number, aspectHeight: number): FrameRect {
-  const availableWidth: number = 210;
-  const availableHeight: number = 150;
-  const ratio: number = aspectWidth / aspectHeight;
-  const width: number = ratio >= availableWidth / availableHeight ? availableWidth : availableHeight * ratio;
-  const height: number = ratio >= availableWidth / availableHeight ? availableWidth / ratio : availableHeight;
-  return { x: x + 8 + (availableWidth - width) / 2, y: y + 8 + (availableHeight - height) / 2, width, height };
-}
-
-function drawCard(document: PDFKit.PDFDocument, item: PdfFramePageItem, index: number, aspectWidth: number, aspectHeight: number): void {
-  const column: number = index % 2;
-  const row: number = Math.floor(index / 2);
-  const x: number = 32 + column * 397;
-  const y: number = 78 + row * 246;
-  const width: number = 381;
-  const frame: FrameRect = frameRect(x, y, aspectWidth, aspectHeight);
-  document.roundedRect(x, y, width, 230, 5).lineWidth(0.8).strokeColor('#b6bcc2').stroke();
-  if (item.renderMode === 'black' || (item.renderMode === 'hold-previous' && item.image === null)) document.rect(frame.x, frame.y, frame.width, frame.height).fill('#000000');
-  else if (item.image === null) drawPlaceholder(document, frame.x, frame.y, frame.width, frame.height, item.placeholderText);
-  else document.image(item.image, frame.x, frame.y, { fit: [frame.width, frame.height], align: 'center', valign: 'center' });
-  document.fillColor('#d34b2e').fontSize(8).text(item.timeText, x + 228, y + 10, { width: 143 });
-  document.fillColor('#101820').fontSize(10).text(item.shotId, x + 228, y + 28, { width: 143, height: 27, ellipsis: true });
-  document.fillColor('#59636d').fontSize(8).text(item.cameraText, x + 228, y + 59, { width: 143, height: 31, ellipsis: true });
-  document.fillColor('#101820').fontSize(8.5).text(item.action, x + 228, y + 95, { width: 143, height: 61, ellipsis: true });
-  document.moveTo(x + 8, y + 166).lineTo(x + width - 8, y + 166).lineWidth(0.5).strokeColor('#d8dce0').stroke();
-  document.fillColor('#59636d').fontSize(7).text('SOURCE', x + 8, y + 174, { width: 50 });
-  document.fillColor('#101820').fontSize(7.5).text(item.sourceText, x + 58, y + 173, { width: width - 74, height: 16, ellipsis: true });
-  document.fillColor('#59636d').fontSize(7).text('GATE', x + 8, y + 194, { width: 50 });
-  document.fillColor('#101820').fontSize(7).text(item.gateText || '—', x + 58, y + 193, { width: width - 74, height: 13, ellipsis: true });
-  document.fillColor('#59636d').fontSize(7).text(item.frameText, x + 8, y + 208, { width: width - 16, lineBreak: false });
-  document.fillColor(item.outputText === 'FINAL · OUTPUT SAFE' ? '#2f6b4f' : '#a33a2a').fontSize(6.5).text(item.outputText, x + 8, y + 218, { width: width - 16, height: 8, ellipsis: true });
-}
-
 /** 현재 컷 순서와 프레임을 A4 가로형 제작 콘티로 렌더링한다. */
-export async function exportProjectPdf(project: Project, fontPath: string, loadAsset: AssetLoader): Promise<Buffer> {
+export async function exportProjectPdf(project: Project, fontPath: TextFontSource, loadAsset: AssetLoader): Promise<Buffer> {
   return exportProjectPdfForPolicy(project, fontPath, loadAsset, { maturity: 'draft', channel: 'pdf-export' }, {});
 }
 
-export async function exportProjectPdfForPolicy(project: Project, fontPath: string, loadAsset: AssetLoader, policy: OutputPolicy, integrity: AssetIntegrityStatuses): Promise<Buffer> {
+export async function exportProjectPdfForPolicy(project: Project, fontPath: TextFontSource, loadAsset: AssetLoader, policy: OutputPolicy, integrity: AssetIntegrityStatuses): Promise<Buffer> {
   return exportProjectPdfAt(project, fontPath, loadAsset, policy, integrity, new Date().toISOString());
 }
 
 /** 검증은 원본에서 끝내고 렌더러에는 출력용 자료만 전달한다. */
 export async function createPdfProjection(project: Project, loadAsset: AssetLoader, policy: OutputPolicy, integrity: AssetIntegrityStatuses): Promise<PdfProjection> {
+  return createSelectedPdfProjection(project, loadAsset, policy, integrity, initialOutputOptions());
+}
+
+export async function createSelectedPdfProjection(project: Project, loadAsset: AssetLoader, policy: OutputPolicy, integrity: AssetIntegrityStatuses, options: StoryboardOutputOptions): Promise<PdfProjection> {
   if (policy.maturity === 'final') assertFinalReadiness(reviewFinalReadiness(project, integrity));
-  const items: PdfFramePageItem[] = await pageItems(project, async (id: string): Promise<Buffer> => pdfRaster(await loadAsset(id)), policy);
-  return { title: project.title, outputLabel: policy.exportLabel ?? policy.maturity.toUpperCase(), aspectWidth: project.profile.aspectWidth, aspectHeight: project.profile.aspectHeight, revision: project.revision, items };
+  const items: PdfFramePageItem[] = await pageItems(project, async (id: string): Promise<Buffer> => pdfRaster(await loadAsset(id)), policy, options);
+  return { title: project.title, outputLabel: policy.exportLabel ?? policy.maturity.toUpperCase(), aspectWidth: project.profile.aspectWidth, aspectHeight: project.profile.aspectHeight, revision: project.revision, textLayout: project.textLayout, ...(project.textTypography === undefined ? {} : { textTypography: project.textTypography }), items, format: options.pdf, selectionLabel: outputSelectionLabel(project, options) };
 }
 
 /** 외부 검토는 원본의 안전 판정만 사용하고 bitmap을 로드하지 않는다. */
 export async function createPdfTextProjection(project: Project, policy: OutputPolicy, integrity: AssetIntegrityStatuses): Promise<PdfProjection> {
-  if (policy.maturity === 'final') assertFinalReadiness(reviewFinalReadiness(project, integrity));
-  const items: PdfFramePageItem[] = await pageItems(project, async (): Promise<null> => null, policy);
-  return { title: project.title, outputLabel: policy.exportLabel ?? policy.maturity.toUpperCase(), aspectWidth: project.profile.aspectWidth, aspectHeight: project.profile.aspectHeight, revision: project.revision,
-    items: items.map((item: PdfFramePageItem): PdfFramePageItem => ({ ...item, placeholderText: 'EXTERNAL REDACTED · IMAGE PLACEHOLDER' })) };
+  return createSelectedPdfTextProjection(project, policy, integrity, initialOutputOptions());
 }
 
-export async function exportProjectPdfAt(project: Project, fontPath: string, loadAsset: AssetLoader, policy: OutputPolicy, integrity: AssetIntegrityStatuses, createdAt: string): Promise<Buffer> {
+export async function createSelectedPdfTextProjection(project: Project, policy: OutputPolicy, integrity: AssetIntegrityStatuses, options: StoryboardOutputOptions): Promise<PdfProjection> {
+  if (policy.maturity === 'final') assertFinalReadiness(reviewFinalReadiness(project, integrity));
+  const items: PdfFramePageItem[] = await pageItems(project, async (): Promise<null> => null, policy, options);
+  return { title: project.title, outputLabel: policy.exportLabel ?? policy.maturity.toUpperCase(), aspectWidth: project.profile.aspectWidth, aspectHeight: project.profile.aspectHeight, revision: project.revision, textLayout: project.textLayout, ...(project.textTypography === undefined ? {} : { textTypography: project.textTypography }), format: options.pdf, selectionLabel: outputSelectionLabel(project, options),
+    items: items.map((item: PdfFramePageItem): PdfFramePageItem => ({ ...item, overlayInputs: [], placeholderText: 'EXTERNAL REDACTED · IMAGE PLACEHOLDER' })) };
+}
+
+export async function exportProjectPdfAt(project: Project, fontPath: TextFontSource, loadAsset: AssetLoader, policy: OutputPolicy, integrity: AssetIntegrityStatuses, createdAt: string): Promise<Buffer> {
+  if (policy.maturity === 'final') assertFinalReadiness(await withProjectTextReadiness(project, reviewFinalReadiness(project, integrity), fontPath));
   return renderPdfProjection(await createPdfProjection(project, loadAsset, policy, integrity), fontPath, createdAt);
 }
 
 /** 비식별화된 출력 자료를 Project로 재검증하거나 저장하지 않고 렌더링한다. */
-export async function renderPdfProjection(projection: PdfProjection, fontPath: string, createdAt: string): Promise<Buffer> {
-  const totalPages: number = Math.max(1, Math.ceil(projection.items.length / 4));
-  const document = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 0, autoFirstPage: false, info: { Title: `${projection.outputLabel} ${projection.title} Storyboard`, Author: 'Storyboard Generator', CreationDate: new Date(createdAt), ModDate: new Date(createdAt) } });
-  document.registerFont('Korean', fontPath);
-  document.font('Korean');
-  const chunks: Buffer[] = [];
-  const complete = new Promise<Buffer>((resolve, reject): void => {
-    document.on('data', (chunk: Buffer): void => { chunks.push(chunk); });
-    document.on('end', (): void => { resolve(Buffer.concat(chunks)); });
-    document.on('error', (error: Error): void => { reject(error); });
-  });
-  for (let pageIndex: number = 0; pageIndex < totalPages; pageIndex += 1) {
-    document.addPage();
-    addHeader(document, projection, pageIndex + 1, totalPages);
-    projection.items.slice(pageIndex * 4, pageIndex * 4 + 4).forEach((item: PdfFramePageItem, index: number): void => {
-      drawCard(document, item, index, projection.aspectWidth, projection.aspectHeight);
-    });
-  }
-  document.end();
-  return complete;
+export async function renderPdfProjection(projection: PdfProjection, fontPath: TextFontSource, createdAt: string): Promise<Buffer> {
+  return renderStoryboardPdf(projection, fontPath, createdAt);
 }

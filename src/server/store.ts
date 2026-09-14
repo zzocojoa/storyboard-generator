@@ -1,6 +1,8 @@
-import { reviewFinalReadiness, shotFinalVisualIssues } from '../domain/final-readiness.js';
-import type { FinalReadinessReport } from '../domain/final-readiness.js';
+import { evaluateFinalReadiness, reviewFinalReadiness } from '../domain/final-readiness.js';
+import type { FinalReadinessEvaluation, FinalReadinessReport } from '../domain/final-readiness.js';
 import { reviewVisualOutputAt } from '../domain/visual-output.js';
+import { reviewProducerTransitionAt, reviewProducerVisualAt } from '../domain/producer-playback.js';
+import type { ProducerVisualDecision } from '../domain/producer-playback.js';
 import type { VisualOutputChannel } from '../domain/visual-output.js';
 import { randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
@@ -9,6 +11,7 @@ import { stat } from 'node:fs/promises';
 import { z } from 'zod';
 import { assertAssetFreeInitialProject, assertAssetReferenceClosure, currentVisualReferenceAssets } from '../domain/asset-references.js';
 import { contractError } from '../domain/errors.js';
+import { assertStoryboardIdentityTransition } from '../domain/project-identity.js';
 import type { ContractError } from '../domain/errors.js';
 import { reviewFrameOutput } from '../domain/frame-output.js';
 import { assertGenerationRecordTransition, auditGenerationRecords } from '../domain/generation-records.js';
@@ -17,10 +20,11 @@ import { inspectAudioFileBytes, verifyStoredAsset } from '../domain/media-inspec
 import type { InspectedAudioFile } from '../domain/media-inspection.js';
 import { reviewAudioPlaybackAt, reviewTextPlaybackAt } from '../domain/playback.js';
 import { ProjectSchema } from '../domain/schema.js';
-import type { Asset, Project } from '../domain/schema.js';
+import type { Asset, GenerationRecord, Project } from '../domain/schema.js';
 import { exportProjectJson } from '../exporters/json.js';
 import { sha256Bytes, sha256Text } from '../importers/integrity.js';
-import { parseProject } from '../io/project.js';
+import { parseProject, parseProjectSnapshotEvidence } from '../io/project.js';
+import type { ProjectSnapshotEvidence } from '../io/project.js';
 import { SafeStoreFilesystem, sameFileIdentity } from './safe-filesystem.js';
 import type { SafeFileMetadata, FileIdentity, SafePathKind } from './safe-filesystem.js';
 
@@ -44,6 +48,7 @@ export type AssetCatalogTransition = {
 };
 export type StoredAsset = { content: Buffer; mimeType: string; asset: Asset };
 export type SafeFrameOutput = { content: Buffer; mimeType: string; asset: Asset | null; sourceFrameId: string | null };
+export type ProducerVisualOutput = SafeFrameOutput & { decision: ProducerVisualDecision; revision: number };
 export type AssetIntegrityIssue = {
   projectId: string; assetId: string; outputTargetIds: string[]; code: string; message: string;
 };
@@ -71,7 +76,7 @@ export type StorageFaultPoint = 'after-update-lock-acquired' | 'after-update-cur
   | 'before-create-directory-publish' | 'after-create-directory-publish' | 'before-create-cleanup'
   | 'before-lock-write' | 'after-lock-file-created' | 'after-lock-write-eexist' | 'before-lock-directory-sync'
   | 'after-lock-directory-sync' | 'after-create-lock-written' | 'before-create-journal-cleanup' | 'before-create-lock-removal'
-  | 'before-root-create-lock-removal' | 'before-audit-current-recheck';
+  | 'before-root-create-lock-removal' | 'before-audit-current-recheck' | 'after-recovery-lock-read';
 export type StorageFaultInjector = { ownerPid: number; trigger(point: StorageFaultPoint): void | Promise<void> };
 export type StorageRuntime = {
   processInstanceId?: string;
@@ -691,22 +696,34 @@ export class ProjectStore {
     await this.#fs.unlinkFile(finalPath, finalIdentity);
   }
 
-  async #versionProjects(projectId: string, excludedRevision: number | null): Promise<Project[]> {
+  async #versionSnapshots(projectId: string, excludedRevision: number | null): Promise<ProjectSnapshotEvidence[]> {
     const versionsPath: string = this.#versionsPath(projectId);
-    const projects: Project[] = [];
+    const snapshots: ProjectSnapshotEvidence[] = [];
+    // 같은 생성 지시문만 공유하고 각 revision의 객체·해시·변경 증거는 독립적으로 보존한다.
+    const prompts: Map<string, string> = new Map<string, string>();
     for (const entry of await this.#fs.entries(versionsPath)) {
       if (!entry.isFile() || !/^[0-9]{6}\.json$/.test(entry.name)) recoveryRequired(`revision 저장소에 올바르지 않은 항목이 있습니다. projectId=${projectId}, entry=${entry.name}`);
       const revision: number = Number(entry.name.slice(0, 6));
       if (revision === excludedRevision) continue;
-      let project: Project;
-      try { project = await this.#readProjectFile(join(versionsPath, entry.name)); }
+      let snapshot: ProjectSnapshotEvidence;
+      try { snapshot = parseProjectSnapshotEvidence(JSON.parse(await this.#fs.readText(join(versionsPath, entry.name))) as unknown); }
       catch (error: unknown) {
         recoveryRequired(`revision snapshot을 검증할 수 없습니다. projectId=${projectId}, entry=${entry.name}, cause=${error instanceof Error ? error.message : String(error)}`);
       }
-      if (project.projectId !== projectId || project.revision !== revision) recoveryRequired(`revision 파일 이름과 Project가 다릅니다. projectId=${projectId}, entry=${entry.name}`);
-      projects.push(project);
+      if (snapshot.project.projectId !== projectId || snapshot.project.revision !== revision) recoveryRequired(`revision 파일 이름과 Project가 다릅니다. projectId=${projectId}, entry=${entry.name}`);
+      const generationRecords: GenerationRecord[] = snapshot.project.generationRecords.map((record): GenerationRecord => {
+        const sharedPrompt: string | undefined = prompts.get(record.prompt);
+        if (sharedPrompt !== undefined) return { ...record, prompt: sharedPrompt };
+        prompts.set(record.prompt, record.prompt);
+        return record;
+      });
+      snapshots.push({ ...snapshot, project: { ...snapshot.project, generationRecords } });
     }
-    return projects;
+    return snapshots;
+  }
+
+  async #versionProjects(projectId: string, excludedRevision: number | null): Promise<Project[]> {
+    return (await this.#versionSnapshots(projectId, excludedRevision)).map((snapshot): Project => snapshot.project);
   }
 
   async #allAssetReferences(projectId: string, excludedTransactionId: string, excludedRevision: number | null,
@@ -820,7 +837,15 @@ export class ProjectStore {
       recoveryRequired(`Project lock을 해석할 수 없습니다. directory=${directoryName}, cause=${error instanceof Error ? error.message : String(error)}`);
     }
     if (projectKey(metadata.projectId) !== directoryName) recoveryRequired(`Project lock과 저장 디렉터리가 다릅니다. projectId=${metadata.projectId}`);
-    const lock: RecoveryLock = { metadata, path, identity: await this.#fs.identity(path) };
+    await this.#fault('after-recovery-lock-read');
+    let identity: FileIdentity;
+    try { identity = await this.#fs.identity(path); }
+    catch (error: unknown) {
+      // 본문 관측 뒤 정상 Writer가 잠금을 해제할 수 있다. 남아 있는 파일의 오류는 보존한다.
+      if (await this.#fs.kind(path) === 'missing') return null;
+      recoveryRequired(`Project lock identity를 확인할 수 없습니다. directory=${directoryName}, cause=${error instanceof Error ? error.message : String(error)}`);
+    }
+    const lock: RecoveryLock = { metadata, path, identity };
     if (metadata.host !== hostname()) {
       this.#rememberActiveUpdate(lock);
       recoveryRequired(`다른 Host의 Project lock은 자동 삭제할 수 없습니다. projectId=${metadata.projectId}`);
@@ -1664,7 +1689,8 @@ export class ProjectStore {
 
   async #summary(project: Project, updatedAt: string): Promise<ProjectSummary> {
     const integrity: Record<string, string> = await this.#summaryIntegrityForProject(project);
-    const safeShotIds: Set<string> = new Set(project.shots.filter((shot): boolean => shotFinalVisualIssues(project, shot, integrity).length === 0).map((shot): string => shot.id));
+    const evaluation: FinalReadinessEvaluation = evaluateFinalReadiness(project, integrity);
+    const safeShotIds: Set<string> = new Set(evaluation.safeVisualShotIds);
     let framesOutputSafe: number = 0;
     for (const frame of project.frames) {
       if (!safeShotIds.has(frame.shotId)) continue;
@@ -1682,9 +1708,9 @@ export class ProjectStore {
       if (code === 'verified' && playable) audioPlayable += 1;
       if (code.startsWith('AUDIO_ASSET_') || code.startsWith('STORED_AUDIO_')) audioRepairRequired += 1;
     }
-    const finalReport: FinalReadinessReport = reviewFinalReadiness(project, integrity);
+    const finalReport: FinalReadinessReport = evaluation.report;
     const textPlayable: number = project.textCues.filter((cue): boolean => reviewTextPlaybackAt(project, cue.startMs).playable.some((candidate): boolean => candidate.id === cue.id)).length;
-    const blockedOutputCount: number = project.frames.length - framesOutputSafe + project.audioCues.length - audioPlayable + project.textCues.length - textPlayable;
+    const blockedOutputCount: number = finalReport.issues.length;
     return { projectId: project.projectId, title: project.title, revision: project.revision,
       durationMs: project.dataset.segments.at(-1)?.endMs ?? 0, shots: project.shots.length,
       frameRateNumerator: project.handoff.timebase.fpsNumerator,
@@ -1875,14 +1901,15 @@ export class ProjectStore {
   }
 
   /** Current와 연속된 Version 전체를 같은 관측값으로 검증해 최초 생성 Commit의 근거를 제공한다. */
-  async generationHistorySnapshot(projectId: string): Promise<{ current: Project; versions: Project[] }> {
+  async generationHistorySnapshot(projectId: string): Promise<{ current: Project; versions: Project[]; versionEvidence: ProjectSnapshotEvidence[] }> {
     await this.initialize();
     await this.read(projectId);
     for (let attempt: number = 0; attempt < 2; attempt += 1) {
       const firstContent: string = await this.#fs.readText(this.#currentPath(projectId));
       const current: Project = parseProject(JSON.parse(firstContent) as unknown);
-      const versions: Project[] = (await this.#versionProjects(projectId, null))
-        .filter((version: Project): boolean => version.revision <= current.revision);
+      const versionEvidence: ProjectSnapshotEvidence[] = (await this.#versionSnapshots(projectId, null))
+        .filter((snapshot): boolean => snapshot.project.revision <= current.revision);
+      const versions: Project[] = versionEvidence.map((snapshot): Project => snapshot.project);
       await this.#fault('before-audit-current-recheck');
       const secondContent: string = await this.#fs.readText(this.#currentPath(projectId));
       const second: Project = parseProject(JSON.parse(secondContent) as unknown);
@@ -1897,7 +1924,7 @@ export class ProjectStore {
         for (let revision: number = 0; revision <= current.revision; revision += 1) if (!revisions.has(revision)) {
           recoveryRequired(`Generation Audit에 필요한 revision snapshot이 없습니다. projectId=${projectId}, revision=${revision}`);
         }
-        return { current, versions };
+        return { current, versions, versionEvidence };
       }
     }
     throw contractError('AUDIT_SNAPSHOT_CHANGED',
@@ -2024,13 +2051,17 @@ export class ProjectStore {
     try {
       await this.#fault('after-update-lock-acquired');
       const current: Project = await this.#verifyMutationReadyUnderLock(projectId, lock);
-      const previousContent: string = exportProjectJson(current);
+      // 이관한 메모리 모델을 재직렬화하면 과거 저장 파일의 바이트 증명과 rollback 원본이 바뀐다.
+      const previousContent: string = await this.#fs.readText(this.#currentPath(projectId));
+      const storedPrevious: Project = parseProject(JSON.parse(previousContent) as unknown);
+      if (JSON.stringify(storedPrevious) !== JSON.stringify(current)) throw contractError('STORE_CONCURRENT_MODIFICATION', `이전 저장본 증명 중 Current Project가 변경됐습니다. projectId=${projectId}, expectedRevision=${current.revision}, actualRevision=${storedPrevious.revision}`, []);
       const previousSha256: string = sha256Text(previousContent);
       await this.#fault('after-update-current-read');
       if (current.revision !== expectedRevision) throw contractError('REVISION_CONFLICT', `${projectId}: expected=${expectedRevision}, actual=${current.revision}`, []);
       const transformInput: Project = parseProject(structuredClone(current));
       const changed: Project = transform(transformInput);
       const shapedNext: Project = ProjectSchema.parse({ ...changed, projectId: current.projectId, revision: current.revision + 1 });
+      assertStoryboardIdentityTransition(current, shapedNext);
       const transition: AssetCatalogTransition = assertAssetCatalogTransition(current, shapedNext, assetWrites);
       assertGenerationRecordTransition(current, shapedNext);
       assertAssetReferenceClosure(shapedNext);
@@ -2173,7 +2204,7 @@ export class ProjectStore {
     catch (error: unknown) { throw mapStoredAssetIntegrityError(error, project.projectId, asset.id); }
     const metadataMatches: boolean = asset.durationMs === inspection.durationMs && asset.audioMetadata !== undefined && asset.audioMetadata !== null
       && asset.audioMetadata.sampleRate === inspection.sampleRate && asset.audioMetadata.channels === inspection.channels && asset.audioMetadata.codec === inspection.codec;
-    const timelineMatches: boolean = cue.timingStatus === 'measured' && cue.endMs - cue.startMs === inspection.durationMs;
+    const timelineMatches: boolean = cue.timingStatus === 'prepared' || cue.timingStatus === 'measured' && cue.endMs - cue.startMs === inspection.durationMs;
     const formatMatches: boolean = inspection.sampleRate === project.handoff.timebase.sampleRate && inspection.codec === 'pcm_s16le';
     if (metadataMatches && timelineMatches && formatMatches) throw contractError('AUDIO_ASSET_ALREADY_NORMALIZED', `Audio Asset이 이미 현재 Project 형식과 일치합니다. cueId=${cueId}, assetId=${asset.id}`, []);
     return { content, asset, inspection };
@@ -2200,6 +2231,29 @@ export class ProjectStore {
     if (decision.imageAssetId === null) return { content: BLACK_FRAME_PNG, mimeType: 'image/png', asset: null, sourceFrameId: decision.sourceFrameId };
     const stored: StoredAsset = await this.#assetForProject(project, decision.imageAssetId);
     return { ...stored, sourceFrameId: decision.sourceFrameId };
+  }
+
+  async producerVisual(projectId: string, revision: number, atMs: number): Promise<ProducerVisualOutput> {
+    return this.#producerVisualSnapshot(projectId, revision, atMs, reviewProducerVisualAt);
+  }
+
+  async producerTransition(projectId: string, revision: number, atMs: number): Promise<ProducerVisualOutput> {
+    return this.#producerVisualSnapshot(projectId, revision, atMs, reviewProducerTransitionAt);
+  }
+
+  /** 실제 파일을 검증한 동일 revision의 검토 그림만 반환하며 안전 출력의 승인 규칙은 변경하지 않는다. */
+  async #producerVisualSnapshot(projectId: string, revision: number, atMs: number,
+    inspect: (project: Project, atMs: number) => ProducerVisualDecision): Promise<ProducerVisualOutput> {
+    z.number().int().nonnegative().parse(revision);
+    const project: Project = await this.read(projectId);
+    if (project.revision !== revision) throw contractError('REVISION_CONFLICT', `${projectId}: 검토 화면 버전 ${revision}과 현재 ${project.revision}이 다릅니다. 결과를 다시 불러오세요.`, []);
+    const decision: ProducerVisualDecision = inspect(project, atMs);
+    if (decision.renderMode === 'blocked') throw contractError('PRODUCER_PREVIEW_BLOCKED', decision.issues.map((value): string => `${value.code}: ${value.message}`).join('\n'), decision.issues);
+    const stored: SafeFrameOutput = decision.imageAssetId === null
+      ? { content: BLACK_FRAME_PNG, mimeType: 'image/png', asset: null, sourceFrameId: decision.sourceFrameId }
+      : { ...await this.#assetForProject(project, decision.imageAssetId), sourceFrameId: decision.sourceFrameId };
+    if (JSON.stringify(project) !== JSON.stringify(await this.read(projectId))) throw contractError('AUDIT_SNAPSHOT_CHANGED', `${projectId}: 검토 그림을 읽는 중 편집됐습니다. 결과를 다시 불러오세요.`, []);
+    return { ...stored, decision, revision };
   }
 
   async safeFrame(projectId: string, frameId: string): Promise<SafeFrameOutput> {

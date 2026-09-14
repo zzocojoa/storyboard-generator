@@ -88,6 +88,10 @@ export class ReviewBundlePublisher {
     for (const directory of [...directories].sort((left: string, right: string): number => right.length - left.length)) await this.#fs.syncDirectory(directory);
   }
   async publish(files: readonly ReviewFile[], assertSourceUnchanged: () => Promise<void>): Promise<void> {
+    await this.publishWithDirectories(files, [], assertSourceUnchanged);
+  }
+  /** 복원에 필요한 빈 운영 폴더도 staging 안에서 만들고 한 번에 게시한다. */
+  async publishWithDirectories(files: readonly ReviewFile[], directories: readonly string[], assertSourceUnchanged: () => Promise<void>): Promise<void> {
     const claim: OwnedClaim = await this.#acquire();
     const staging: string = this.#fs.path(`.review-${this.#hash}-${claim.metadata.transactionId}`);
     let stagingIdentity: FileIdentity | null = null; let published: boolean = false;
@@ -95,7 +99,17 @@ export class ReviewBundlePublisher {
       if (await this.#fs.exists(this.#output)) outputExists(this.#hash);
       await mkdir(staging); stagingIdentity = await this.#directoryIdentity(staging);
       await this.#fs.syncDirectory(dirname(staging));
-      await this.#writeFiles(staging, files); await assertSourceUnchanged();
+      await this.#writeFiles(staging, files);
+      for (const directory of directories) {
+        if (directory.startsWith('/') || directory.split('/').some((component): boolean => component === '' || component === '.' || component === '..' || component.includes('\\'))) {
+          throw contractError('INVALID_OUTPUT_DIRECTORY', `출력 하위 폴더 경로를 확인하세요. directory=${directory}`, []);
+        }
+        let parent: string = staging;
+        for (const component of directory.split('/')) { parent = join(parent, component); await this.#fs.ensureDirectory(parent); await this.#fs.syncDirectory(dirname(parent)); }
+        await this.#fs.syncDirectory(parent);
+      }
+      await this.#fs.syncDirectory(staging);
+      await assertSourceUnchanged();
       await this.#verifyClaim(claim);
       if (!sameFileIdentity(stagingIdentity, await this.#directoryIdentity(staging))) recoveryRequired(`출력 staging identity가 변경됐습니다. outputHash=${this.#hash}`);
       if (await this.#fs.exists(this.#output)) outputExists(this.#hash);

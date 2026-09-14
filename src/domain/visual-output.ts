@@ -11,6 +11,7 @@ import { frameEvaluationAbsoluteMs } from './time.js';
 import { transitionVisualPolicy } from './transition.js';
 
 export type VisualOutputChannel = FrameOutputChannel;
+export type FrameBitmapReviewer = (project: Project, frame: StoryboardFrame, channel: FrameOutputChannel) => FrameOutputDecision;
 export type VisualOutputAtDecision = {
   shotId: string | null; playheadMs: number; channel: VisualOutputChannel;
   renderMode: 'bitmap' | 'black' | 'hold-previous' | 'blocked';
@@ -24,7 +25,7 @@ export function uniqueOutputIssues(issues: readonly Issue[]): Issue[] {
     && other.actual === value.actual && other.expected === value.expected) === index);
 }
 
-function resolveShotOutput(project: Project, shot: Shot, atMs: number, channel: VisualOutputChannel, visited: ReadonlySet<string>): VisualOutputAtDecision {
+function resolveShotOutput(project: Project, shot: Shot, atMs: number, channel: VisualOutputChannel, visited: ReadonlySet<string>, reviewBitmap: FrameBitmapReviewer): VisualOutputAtDecision {
   const base: VisualOutputAtDecision = { shotId: shot.id, playheadMs: atMs, channel, renderMode: 'blocked', frameId: null,
     sourceFrameId: null, imageAssetId: null, activeSourceUnitIds: [], issues: visualModeStructureIssues(project, shot) };
   if (base.issues.length > 0) return base;
@@ -34,7 +35,7 @@ function resolveShotOutput(project: Project, shot: Shot, atMs: number, channel: 
   if (shot.visualMode === 'hold-previous') {
     const index: number = project.shots.findIndex((candidate: Shot): boolean => candidate.id === shot.id);
     const previous: Shot = project.shots[index - 1] as Shot;
-    const origin: VisualOutputAtDecision = resolveShotOutput(project, previous, previous.endMs - 1, channel, new Set([...visited, shot.id]));
+    const origin: VisualOutputAtDecision = resolveShotOutput(project, previous, previous.endMs - 1, channel, new Set([...visited, shot.id]), reviewBitmap);
     if (origin.renderMode === 'blocked') return { ...base, issues: [issue('HOLD_PREVIOUS_PREDECESSOR_NOT_SAFE', 'conflict', shot.id, 'visualMode',
       '이전 컷 종료 직전의 실제 출력이 안전하지 않습니다. 이전 컷의 차단 원인을 해결하세요.', 'safe predecessor at endMs - 1', previous.id, []), ...origin.issues] };
     return { ...base, renderMode: 'hold-previous', sourceFrameId: origin.sourceFrameId, imageAssetId: origin.imageAssetId };
@@ -47,7 +48,7 @@ function resolveShotOutput(project: Project, shot: Shot, atMs: number, channel: 
     `${atMs}ms에 활성인 직접 시각 Source가 없습니다. 표시 구간을 확정하세요.`, 'active confirmed visual interval', String(atMs), []));
   if (frame === null || frameEvaluationAbsoluteMs(shot, frame) > atMs) issues.push(issue('FRAME_IMAGE_REQUIRED_FOR_OUTPUT', 'conflict', shot.id, 'frames',
     'Playhead 이전의 출력 Frame이 필요합니다.', 'frame at or before playhead', String(atMs), []));
-  const frameDecision: FrameOutputDecision | null = frame === null ? null : reviewFrameBitmap(project, frame, channel === 'transition-preview' ? 'program-monitor' : channel);
+  const frameDecision: FrameOutputDecision | null = frame === null ? null : reviewBitmap(project, frame, channel === 'transition-preview' ? 'program-monitor' : channel);
   issues.push(...(frameDecision?.issues ?? []));
   const informationIds: string[] = [...new Set(links.flatMap((link: ShotSourceLink): string[] =>
     project.dataset.units.find((unit: SourceUnit): boolean => unit.id === link.unitId)?.informationIds ?? []))];
@@ -59,6 +60,11 @@ function resolveShotOutput(project: Project, shot: Shot, atMs: number, channel: 
 
 /** 실제 Playhead의 반열린 Source 구간을 먼저 증명한 뒤 bitmap 또는 명시적인 무원문 출력을 선택한다. */
 export function reviewVisualOutputAt(project: Project, playheadMs: number, channel: VisualOutputChannel): VisualOutputAtDecision {
+  return resolveVisualPlaybackAt(project, playheadMs, channel, reviewFrameBitmap);
+}
+
+/** Frame 검토 정책을 제외한 시간·Source·Hold·전환 판정은 모든 재생 경로가 공유한다. */
+export function resolveVisualPlaybackAt(project: Project, playheadMs: number, channel: VisualOutputChannel, reviewBitmap: FrameBitmapReviewer): VisualOutputAtDecision {
   const shot: Shot | undefined = project.shots.find((candidate: Shot): boolean => candidate.startMs <= playheadMs && playheadMs < candidate.endMs);
   if (!Number.isSafeInteger(playheadMs) || playheadMs < 0 || shot === undefined) return { shotId: null, playheadMs, channel,
     renderMode: 'blocked', frameId: null, sourceFrameId: null, imageAssetId: null, activeSourceUnitIds: [], issues: [issue(
@@ -72,7 +78,7 @@ export function reviewVisualOutputAt(project: Project, playheadMs: number, chann
     if (next === undefined || policy.incomingRevealMs === null || playheadMs < policy.incomingRevealMs) return { shotId: null, playheadMs, channel,
       renderMode: 'blocked', frameId: null, sourceFrameId: null, imageAssetId: null, activeSourceUnitIds: [], issues: [issue(
         'TRANSITION_PREVIEW_INACTIVE', 'conflict', shot.id, 'transitionOut', '현재 Playhead에는 다음 컷 전환이 없습니다.', 'active adjacent transition', String(playheadMs), [])] };
-    const incoming: VisualOutputAtDecision = resolveShotOutput(project, next, next.startMs, channel, new Set<string>());
+    const incoming: VisualOutputAtDecision = resolveShotOutput(project, next, next.startMs, channel, new Set<string>(), reviewBitmap);
     const informationIds: string[] = incoming.activeSourceUnitIds.flatMap((unitId: string): string[] => project.dataset.units.find((unit: SourceUnit): boolean => unit.id === unitId)?.informationIds ?? []);
     const issues: Issue[] = uniqueOutputIssues([...incoming.issues, ...reviewTransitionInformationIssues(project, shot), ...reviewInformationEmission(project, {
       entityId: incoming.sourceFrameId ?? next.id, channel: 'image', atMs: policy.incomingRevealMs,
@@ -81,7 +87,7 @@ export function reviewVisualOutputAt(project: Project, playheadMs: number, chann
     return { ...incoming, playheadMs, issues, renderMode: issues.length > 0 ? 'blocked' : incoming.renderMode,
       imageAssetId: issues.length > 0 ? null : incoming.imageAssetId };
   }
-  return resolveShotOutput(project, shot, playheadMs, channel, new Set<string>());
+  return resolveShotOutput(project, shot, playheadMs, channel, new Set<string>(), reviewBitmap);
 }
 
 /** 안전성이 바뀔 수 있는 모든 Source·Frame 경계와 마지막 내부 시각에서 전체 컷을 검사한다. */

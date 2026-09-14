@@ -1,3 +1,4 @@
+import { legacyTextProject } from './legacy-text-helpers.js';
 import { describe, expect, it } from 'vitest';
 import { reviewFrameOutput } from '../src/domain/frame-output.js';
 import type { Asset, NativeDataset, Project, Shot, StoryboardFrame } from '../src/domain/schema.js';
@@ -93,9 +94,9 @@ describe('15차 Proposal Frame과 Visual Mode', (): void => {
 
   it('project_1_5_migrates_visual_mode_to_sourced', async (): Promise<void> => {
     const project: Project = await outline();
-    const legacy = { ...project, schemaVersion: '1.5.0', shots: project.shots.map(({ visualMode: _visualMode, ...shot }) => shot) };
+    const legacy = { ...legacyTextProject(project), schemaVersion: '1.5.0', shots: project.shots.map(({ visualMode: _visualMode, ...shot }) => shot) };
     const migrated: Project = parseProject(legacy);
-    expect(migrated.schemaVersion).toBe('1.9.0');
+    expect(migrated.schemaVersion).toBe('1.24.0');
     expect(migrated.shots.every((shot) => shot.visualMode === 'sourced')).toBe(true);
   });
 

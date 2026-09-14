@@ -1,5 +1,6 @@
+import { legacyTextProject } from './legacy-text-helpers.js';
 import { describe, expect, it } from 'vitest';
-import { auditGenerationRecords } from '../src/domain/generation-records.js';
+import { assertGenerationRecordTransition, auditGenerationRecords } from '../src/domain/generation-records.js';
 import type { GenerationRecord, Project } from '../src/domain/schema.js';
 import { applyGeneratedImage } from '../src/domain/media.js';
 import { parseProject } from '../src/io/project.js';
@@ -18,6 +19,27 @@ async function history(): Promise<Project[]> {
 }
 
 describe('Canonical Generation Audit', (): void => {
+  it('generation_record_equality_preserves_long_prompts_nested_metadata_and_json_number_semantics', async (): Promise<void> => {
+    const base: Project = await readinessOutline();
+    const original: GenerationRecord = { ...record(base), prompt: '원문 "인용"\n경로\\소품\u0000'.repeat(12000), seed: -0, referenceHashes: ['a'.repeat(64), 'b'.repeat(64)], generatorBuild: testGeneratorBuild() };
+    const current: Project = { ...base, generationRecords: [original] };
+    const equal: GenerationRecord = structuredClone(original);
+    const before: Project = structuredClone(current);
+    expect(assertGenerationRecordTransition(current, { ...current, generationRecords: [equal] }).added).toEqual([]);
+    expect(assertGenerationRecordTransition(current, { ...current, generationRecords: [{ ...equal, seed: 0 }] }).added).toEqual([]);
+    const mutations: GenerationRecord[] = [
+      { ...equal, prompt: `${equal.prompt}변경` },
+      { ...equal, referenceHashes: [...equal.referenceHashes].reverse() },
+      { ...equal, generatorBuild: { ...equal.generatorBuild!, sourceTreeSha256: 'f'.repeat(64) } },
+    ];
+    for (const changed of mutations) {
+      const next: Project = { ...current, revision: current.revision + 1, generationRecords: [changed] };
+      expect(() => assertGenerationRecordTransition(current, next)).toThrowError(expect.objectContaining({ code: 'GENERATION_RECORD_IMMUTABLE' }));
+      expect(auditGenerationRecords(next, [current, next])[0]).toMatchObject({ mutatedAtRevisions: [next.revision], recordIntegrityState: 'legacy-mutated' });
+    }
+    expect(current).toEqual(before);
+    expect(equal).toEqual(original);
+  });
   it('audit_deduplicates_current_revision_snapshot', async (): Promise<void> => {
     const versions: Project[] = await history(); expect(auditGenerationRecords(versions[5]!, [...versions, versions[5]!])[0]?.observedRevisions).toEqual([0, 2, 3, 5]);
   });
@@ -56,7 +78,7 @@ describe('Canonical Generation Audit', (): void => {
   });
   it('legacy_generation_record_migrates_build_to_null', async (): Promise<void> => {
     const project: Project = await readinessOutline(); const { generatorBuild: omitted, ...legacy } = record(project); expect(omitted).toBeNull();
-    const migrated: Project = parseProject({ ...project, schemaVersion: '1.6.0', generationRecords: [legacy] });
-    expect(migrated.generationRecords).toEqual([{ ...legacy, generatorBuild: null }]); expect(migrated.schemaVersion).toBe('1.9.0'); expect(parseProject(migrated)).toEqual(migrated);
+    const migrated: Project = parseProject({ ...legacyTextProject(project), schemaVersion: '1.6.0', generationRecords: [legacy] });
+    expect(migrated.generationRecords).toEqual([{ ...legacy, generatorBuild: null }]); expect(migrated.schemaVersion).toBe('1.24.0'); expect(parseProject(migrated)).toEqual(migrated);
   });
 });
